@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )

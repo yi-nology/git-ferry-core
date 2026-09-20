@@ -117,7 +117,7 @@ func (b *builder) blobBytes(h plumbing.Hash) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
 }
 
@@ -152,7 +152,7 @@ func (b *builder) copyBlobObject(h plumbing.Hash) error {
 	if err != nil {
 		return err
 	}
-	defer rd.Close()
+	defer func() { _ = rd.Close() }()
 	w, err := dst.Writer()
 	if err != nil {
 		return err

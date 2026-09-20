@@ -58,7 +58,7 @@ func verifyOnce(ctx context.Context, module, version string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	// require 写进 go.mod 文件而非命令行参数;-mod=mod 允许工具链补齐 go.sum
 	goMod := fmt.Sprintf("module verify\n\ngo 1.21\n\nrequire %s %s\n", module, version)

@@ -1,4 +1,4 @@
-// Package sync 是 git-sync-core 的库入口：配置加载与 Service 构造。
+// Package sync 是 git-ferry-core 的库入口：配置加载与 Service 构造。
 //
 // 本库**不提供任何 HTTP/Web 服务端**，也不依赖 hertz/gin 等 Web 框架。
 // 不包含用户登录 / API Key / SSO 等鉴权；入站 Webhook 由壳层收包后
@@ -9,8 +9,8 @@
 package sync
 
 import (
-	"github.com/yi-nology/git-sync-core/model"
-	"github.com/yi-nology/git-sync-core/service"
+	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/service"
 )
 
 type Service = service.Service

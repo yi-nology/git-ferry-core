@@ -11,7 +11,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-platform-sdk/gitbackend"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // RunManager handles sync run lifecycle operations.

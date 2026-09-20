@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
-	"github.com/yi-nology/git-sync-core/dao"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
 

@@ -15,14 +15,14 @@ import (
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-platform-sdk/gitbackend"
 	"github.com/yi-nology/git-platform-sdk/pkg/credential"
-	"github.com/yi-nology/git-sync-core/dao"
-	"github.com/yi-nology/git-sync-core/mirror"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/mirror"
+	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
 
 // MirrorService 镜像通道编排:通道 CRUD、源仓库本地克隆管理、
-// 预检/执行/验证,底层调用 git-sync-core/mirror。
+// 预检/执行/验证,底层调用 git-ferry-core/mirror。
 type MirrorService struct {
 	svc      *Service
 	channels *dao.MirrorChannelDAO

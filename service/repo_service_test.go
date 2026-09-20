@@ -7,8 +7,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-sync-core/dao"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
 	"gorm.io/gorm"
 )

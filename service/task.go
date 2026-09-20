@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/robfig/cron/v3"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // ListTasks returns a paginated list of sync tasks.

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 func (s *Service) addCronJob(task *model.SyncTask) error {

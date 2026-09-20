@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // ClassifyError categorizes an error into one of the predefined error types.

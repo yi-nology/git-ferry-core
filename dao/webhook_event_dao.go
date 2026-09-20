@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
 

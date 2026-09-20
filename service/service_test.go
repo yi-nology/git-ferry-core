@@ -8,8 +8,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-sync-core/lock"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/lock"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 func TestServiceGetTempDir(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/yi-nology/git-sync-core/dao"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // OperationLogService 处理审计日志相关操作。

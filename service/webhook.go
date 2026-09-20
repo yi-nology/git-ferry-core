@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/yi-nology/git-platform-sdk/pkg/branchfilter"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // isDuplicateKeyErr 判断错误是否为 DB 唯一约束冲突(MySQL 1062 / SQLite UNIQUE)。

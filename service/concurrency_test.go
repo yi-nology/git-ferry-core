@@ -7,7 +7,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-sync-core/lock"
+	"github.com/yi-nology/git-ferry-core/lock"
 )
 
 // TestLocalGuard_TaskMutexAndConcurrency 验证进程内 guard:同 taskKey 互斥 + 全局并发上限。

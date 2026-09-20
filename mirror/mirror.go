@@ -116,7 +116,7 @@ func validateOptions(opts Options) error {
 		return fmt.Errorf("RepoDir 不能为空")
 	}
 	if len(opts.Tags) == 0 {
-		return fmt.Errorf("Tags 至少需要一个")
+		return fmt.Errorf("tags 至少需要一个")
 	}
 	if opts.Mapping.Source == "" || opts.Mapping.Target == "" {
 		return fmt.Errorf("Mapping.Source / Mapping.Target 不能为空")
@@ -185,7 +185,7 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(p.tmpRepo)
+	defer func() { _ = os.RemoveAll(p.tmpRepo) }()
 	p.workRepo, err = git.PlainInit(p.tmpRepo, false)
 	if err != nil {
 		return nil, fmt.Errorf("初始化临时仓库失败: %w", err)
@@ -230,7 +230,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(buildDir)
+	defer func() { _ = os.RemoveAll(buildDir) }()
 	if err = materializeTree(p.workRepo.Storer, treeHash, buildDir); err != nil {
 		return nil, fmt.Errorf("物化改写后源码失败: %w", err)
 	}

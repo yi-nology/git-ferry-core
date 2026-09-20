@@ -12,8 +12,8 @@ import (
 	// 注册全部平台后端,使 NewProvider 在测试二进制中可用
 	_ "github.com/yi-nology/git-platform-sdk/backends/all"
 	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
-	"github.com/yi-nology/git-sync-core/dao"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
 

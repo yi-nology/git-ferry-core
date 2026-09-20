@@ -1,4 +1,4 @@
-module github.com/yi-nology/git-sync-core
+module github.com/yi-nology/git-ferry-core
 
 go 1.26
 

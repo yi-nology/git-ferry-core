@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/yi-nology/git-sync-core/dao"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // ListRepos returns a paginated list of repositories.

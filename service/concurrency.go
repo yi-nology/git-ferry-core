@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/yi-nology/git-sync-core/lock"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/lock"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // releaseFunc 释放 Acquire 拿到的执行权(任务互斥锁 + 全局并发槽),由调用方 defer。

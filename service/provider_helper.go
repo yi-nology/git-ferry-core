@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
-	"github.com/yi-nology/git-sync-core/model"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // providerConfig 由平台记录构建 SDK provider 配置(token 可覆盖平台默认)。
