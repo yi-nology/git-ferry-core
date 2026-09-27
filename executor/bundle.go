@@ -31,9 +31,9 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	outPath := filepath.Join(backupDir, name)
 
 	repoDir := filepath.Join(workDir, RepoDir)
-	// 打当前同步分支 + 标签
+	// 打当前同步分支 + HEAD(缺 HEAD 则 clone 后无法 checkout) + 标签
 	ref := "refs/heads/" + task.SourceBranch
-	args := []string{"bundle", "create", outPath, ref}
+	args := []string{"bundle", "create", outPath, ref, "HEAD"}
 	if task.GitTags {
 		args = append(args, "--tags")
 	}
