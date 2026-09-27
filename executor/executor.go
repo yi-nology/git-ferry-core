@@ -283,33 +283,43 @@ func (e *Executor) prefetchPlatforms(ctx context.Context, repos ...*model.Repo) 
 // authConfig 构建 git 认证配置。platform 可选(为 nil 时回退查 DB)。
 func (e *Executor) authConfig(ctx context.Context, repo *model.Repo, platform *model.Platform) gitbackend.AuthConfig {
 	var skipTLS bool
+	var fingerprint, knownHosts string
 	var platformToken string
-	if platform != nil {
-		skipTLS = platform.SkipTLSVerify
-		platformToken = platform.AccessToken
-	} else if repo.PlatformID > 0 {
+	p := platform
+	if p == nil && repo.PlatformID > 0 {
 		// 回退:platform 未预取时仍查一次(兼容直接调用)
-		if p, err := e.service.GetPlatformByID(ctx, repo.PlatformID); err == nil && p != nil {
-			skipTLS = p.SkipTLSVerify
-			platformToken = p.AccessToken
+		if got, err := e.service.GetPlatformByID(ctx, repo.PlatformID); err == nil {
+			p = got
 		}
+	}
+	if p != nil {
+		skipTLS = p.SkipTLSVerify
+		platformToken = p.AccessToken
+		fingerprint = p.SSHHostKeyFingerprint
+		knownHosts = p.SSHKnownHostsPath
 	}
 	token := repo.AccessToken
 	if token == "" {
 		token = platformToken
 	}
+
+	applySSHHostKey := func(auth gitbackend.AuthConfig) gitbackend.AuthConfig {
+		auth.InsecureSkipTLS = skipTLS
+		auth.HostKeyFingerprint = fingerprint
+		auth.KnownHostsPath = knownHosts
+		return auth
+	}
+
 	if token != "" {
 		slog.Debug("using access token", "repo", repo.Key, "fromPlatform", repo.AccessToken == "")
 		// git over HTTPS 走 HTTP Basic(占位用户名 + token 作密码)。
 		// 不能用 Bearer:xhttp.TokenAuth 发 Authorization: Bearer 头,
 		// GitLab/GitCode 等平台的 git 端点只认 Basic,Bearer 会报
 		// "HTTP Basic: Access denied"。
-		auth := gitbackend.NewTokenAuth(token)
-		auth.InsecureSkipTLS = skipTLS
-		return auth
+		return applySSHHostKey(gitbackend.NewTokenAuth(token))
 	}
 	slog.Debug("no auth configured", "repo", repo.Key)
-	return gitbackend.AuthConfig{Type: gitbackend.AuthNone, InsecureSkipTLS: skipTLS}
+	return applySSHHostKey(gitbackend.AuthConfig{Type: gitbackend.AuthNone})
 }
 
 // beginStep creates a new step record in "running" state.

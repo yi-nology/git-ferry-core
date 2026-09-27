@@ -167,7 +167,12 @@ func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event 
 
 		compiled, ok := filterCache[rule.BranchPattern]
 		if !ok {
-			compiled = branchfilter.New(rule.BranchPattern)
+			f, err := branchfilter.New(rule.BranchPattern)
+			if err != nil {
+				// 非法分支模式:跳过该规则,不拖垮整次匹配
+				continue
+			}
+			compiled = f
 			filterCache[rule.BranchPattern] = compiled
 		}
 		if !compiled.Match(event.Branch) {

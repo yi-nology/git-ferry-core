@@ -28,7 +28,11 @@ func TestMatchBranch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.pattern+"/"+tt.branch, func(t *testing.T) {
-			got := branchfilter.New(tt.pattern).Match(tt.branch)
+			f, err := branchfilter.New(tt.pattern)
+			if err != nil {
+				t.Fatalf("branchfilter.New(%q) error: %v", tt.pattern, err)
+			}
+			got := f.Match(tt.branch)
 			if got != tt.want {
 				t.Errorf("branchfilter.New(%q).Match(%q) = %v, want %v", tt.pattern, tt.branch, got, tt.want)
 			}

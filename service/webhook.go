@@ -200,5 +200,10 @@ func (s *Service) ListEvents(ctx context.Context, repoKey string, offset, limit 
 // matchEventType 事件类型匹配,复用 SDK branchfilter(逗号分隔 glob,
 // 空/ "*" 匹配全部;顺带支持 "push*" 等模式)。
 func matchEventType(pattern, actual string) bool {
-	return branchfilter.New(pattern).Match(actual)
+	f, err := branchfilter.New(pattern)
+	if err != nil {
+		// 非法模式按全匹配兜底,避免 webhook 整条链路因配置笔误失效
+		return true
+	}
+	return f.Match(actual)
 }

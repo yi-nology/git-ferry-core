@@ -19,6 +19,10 @@ type Platform struct {
 	SkipTLSVerify  bool           `json:"skip_tls_verify" gorm:"default:false"`   // 跳过 TLS 证书验证
 	CACertPath     string         `json:"ca_cert_path" gorm:"size:500"`           // 自定义 CA 证书路径
 	ProxyURL       string         `json:"proxy_url" gorm:"size:255"`              // HTTP 代理地址
+	// SSHHostKeyFingerprint SSH 主机公钥指纹钉扎("SHA256:xxx");设置后优先于 known_hosts
+	SSHHostKeyFingerprint string `json:"ssh_host_key_fingerprint" gorm:"size:128"`
+	// SSHKnownHostsPath 平台级 known_hosts 路径(空=用 ~/.ssh/known_hosts)
+	SSHKnownHostsPath string `json:"ssh_known_hosts_path" gorm:"size:500"`
 	IsDefault      bool           `json:"is_default" gorm:"default:false"`        // 是否为默认平台
 	Status         string         `json:"status" gorm:"size:20;default:active"`   // 状态: active, error
 	LastTestAt     *time.Time     `json:"last_test_at"`                           // 最后测试时间

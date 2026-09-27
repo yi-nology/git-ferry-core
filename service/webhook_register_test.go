@@ -85,6 +85,12 @@ func newFakeGitea(t *testing.T) (*httptest.Server, *[]string) {
 		case http.MethodPost:
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "url": "http://cb", "events": []string{"push"}, "active": true})
 		case http.MethodGet:
+			// 只在第 1 页返回,后续页为空:兼容 SDK 的全量分页遍历
+			page := r.URL.Query().Get("page")
+			if page != "" && page != "1" {
+				_ = json.NewEncoder(w).Encode([]map[string]any{})
+				return
+			}
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": 7, "url": "http://cb", "events": []string{"push"}, "active": true}})
 		default:
 			w.WriteHeader(http.StatusNoContent)
