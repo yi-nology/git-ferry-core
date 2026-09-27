@@ -32,6 +32,11 @@ func ClassifyError(err error) string {
 		}
 	}
 
+	// 分歧保护:非网络/鉴权类,单列便于 UI 提示"目标有独有提交"
+	if isDivergent(err) {
+		return model.ErrorDivergent
+	}
+
 	// gitbackend / git 命令错误:关键词兜底
 	msg := strings.ToLower(err.Error())
 
@@ -59,8 +64,16 @@ func ClassifyError(err error) string {
 		}
 	}
 
-	// Git operation errors: non-fast-forward, conflict, rejected
-	gitKeywords := []string{"non-fast-forward", "conflict", "rejected", "failed to push", "fetch first"}
+	// Conflict: push 被拒/非快进/分歧(提示用户检查目标分支)
+	conflictKeywords := []string{"non-fast-forward", "conflict", "rejected", "fetch first", "diverged", "already exists"}
+	for _, kw := range conflictKeywords {
+		if strings.Contains(msg, kw) {
+			return model.ErrorConflict
+		}
+	}
+
+	// 其它 git 操作错误
+	gitKeywords := []string{"failed to push", "failed to fetch", "remote hung up"}
 	for _, kw := range gitKeywords {
 		if strings.Contains(msg, kw) {
 			return model.ErrorGit

@@ -84,9 +84,17 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		Cron:          req.Cron,
 		WebhookToken:  uuid.New().String(),
 		Enabled:       true,
-		GitTags:       req.GitTags,
-		GitForce:      req.GitForce,
-		GitPrune:      req.GitPrune,
+		GitTags:        req.GitTags,
+		GitForce:       req.GitForce,
+		GitPrune:       req.GitPrune,
+		GitLFS:       req.GitLFS,
+		GitPushPrune: req.GitPushPrune,
+		KeepDivergent: func() bool {
+			if req.KeepDivergent == nil {
+				return true // 默认保护分歧
+			}
+			return *req.KeepDivergent
+		}(),
 	}
 
 	if err := ts.taskDAO.Create(task); err != nil {
@@ -139,6 +147,15 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	}
 	if req.GitPrune != nil {
 		task.GitPrune = *req.GitPrune
+	}
+	if req.GitLFS != nil {
+		task.GitLFS = *req.GitLFS
+	}
+	if req.GitPushPrune != nil {
+		task.GitPushPrune = *req.GitPushPrune
+	}
+	if req.KeepDivergent != nil {
+		task.KeepDivergent = *req.KeepDivergent
 	}
 
 	if err := ts.taskDAO.Update(task); err != nil {

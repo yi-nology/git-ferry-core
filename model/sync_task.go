@@ -21,6 +21,13 @@ type SyncTask struct {
 	GitTags       bool           `json:"git_tags" gorm:"default:false"`
 	GitForce      bool           `json:"git_force" gorm:"default:false"`
 	GitPrune      bool           `json:"git_prune" gorm:"default:false"`
+	// GitLFS 同步 Git LFS 对象(需要环境安装 git-lfs)
+	GitLFS bool `json:"git_lfs" gorm:"default:false"`
+	// GitPushPrune 推送后删除目标上源已不存在的同名分支(refspec prune)
+	GitPushPrune bool `json:"git_push_prune" gorm:"default:false"`
+	// KeepDivergent true=目标分支有源没有的提交时拒绝 force 覆盖(防丢代码);
+	// false=允许强制覆盖分歧分支。默认 true(安全)。
+	KeepDivergent bool `json:"keep_divergent" gorm:"default:true"`
 	LastRunAt     *time.Time     `json:"last_run_at"`
 	LastStatus    string         `json:"last_status" gorm:"size:20"`
 	CreatedAt     time.Time      `json:"created_at"`
@@ -40,9 +47,13 @@ type CreateTaskRequest struct {
 	TargetBranch  string `json:"target_branch"`
 	SyncMode      string `json:"sync_mode"`
 	Cron          string `json:"cron"`
-	GitTags       bool   `json:"git_tags"`
-	GitForce      bool   `json:"git_force"`
-	GitPrune      bool   `json:"git_prune"`
+	GitTags        bool `json:"git_tags"`
+	GitForce       bool `json:"git_force"`
+	GitPrune       bool `json:"git_prune"`
+	GitLFS       bool `json:"git_lfs"`
+	GitPushPrune bool `json:"git_push_prune"`
+	// KeepDivergent nil/缺省=true(安全);显式 false 才允许覆盖分歧
+	KeepDivergent *bool `json:"keep_divergent"`
 }
 
 type UpdateTaskRequest struct {
@@ -56,7 +67,10 @@ type UpdateTaskRequest struct {
 	// bool 字段用指针:nil=不修改,false=显式关闭。
 	// 替代旧 bool 零值语义——此前客户端只改 name 也会把任务静默禁用。
 	Enabled  *bool `json:"enabled"`
-	GitTags  *bool `json:"git_tags"`
-	GitForce *bool `json:"git_force"`
-	GitPrune *bool `json:"git_prune"`
+	GitTags        *bool `json:"git_tags"`
+	GitForce       *bool `json:"git_force"`
+	GitPrune       *bool `json:"git_prune"`
+	GitLFS         *bool `json:"git_lfs"`
+	GitPushPrune   *bool `json:"git_push_prune"`
+	KeepDivergent  *bool `json:"keep_divergent"`
 }

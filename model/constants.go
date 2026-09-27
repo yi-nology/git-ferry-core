@@ -73,11 +73,15 @@ const (
 	StepCheckout     = "checkout"
 	StepEnsureRemote = "ensure_remote"
 	StepPush         = "push"
+	StepLFS          = "lfs"
+	StepDivergeCheck = "diverge_check"
 )
 
 // Error type constants
 const (
-	ErrorAuth    = "auth"
+	ErrorAuth      = "auth"
+	ErrorDivergent = "divergent"
+	ErrorConflict  = "conflict"
 	ErrorNetwork = "network"
 	ErrorConfig  = "config"
 	ErrorGit     = "git"

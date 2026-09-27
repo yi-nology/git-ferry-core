@@ -173,6 +173,14 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 			return failRun(run, errors.Wrap(err, "fetch failed"))
 		}
 	}
+	if runTask.GitLFS {
+		if err := e.syncLFS(execCtx, repoDir, RemoteOrigin, true); err != nil {
+			e.failStep(step1, err)
+			fmt.Fprintf(&details, "lfs pull error: %v\n", err)
+			return failRun(run, errors.Wrap(err, "lfs fetch failed"))
+		}
+		details.WriteString("  LFS objects fetched\n")
+	}
 	e.completeStep(step1, "")
 	details.WriteString("Step 1: completed\n")
 
@@ -348,11 +356,13 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	// 首次推送到空目标会被平台拒绝(shallow update not allowed),
 	// 且 gogit 会把该拒绝误报为 already up-to-date。
 	// workdir 成功后保留,后续执行走增量 fetch,全量克隆只是一次性成本。
+	// 多分支(glob)同步不能 SingleBranch,否则只克隆匹配到的第一分支
+	multi := strings.ContainsAny(task.SourceBranch, "*?[")
 	return e.backend.Clone(ctx, gitbackend.CloneOptions{
 		URL:          repo.CloneURL,
 		Path:         dir,
 		Branch:       task.SourceBranch,
-		SingleBranch: true,
+		SingleBranch: !multi,
 		Auth:         e.authConfig(ctx, repo, platform),
 	})
 }
@@ -440,18 +450,90 @@ func defaultBranchOf(repo *model.Repo) string {
 }
 
 func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
+	// 分歧保护:force + keep_divergent 时拒绝覆盖目标独有提交
+	if err := e.checkDivergence(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, task.KeepDivergent); err != nil {
+		return err
+	}
+
+	// LFS 对象先推,避免代码分支推上去了大文件缺失
+	if task.GitLFS {
+		if err := e.syncLFS(ctx, dir, RemoteTarget, false); err != nil {
+			return err
+		}
+	}
+
 	// 必须用完整 refspec:go-git 按全名严格匹配本地 ref,不做 git CLI 的
 	// 短名展开,"main:main" 匹配不到 refs/heads/main,会静默零推送
 	// (返回 already up-to-date,被误判成功)。
-	refSpec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch)
+	multi := strings.ContainsAny(task.SourceBranch, "*?[")
+	var refSpecs []string
+	if multi {
+		branches, err := e.listLocalBranches(dir)
+		if err == nil {
+			for _, b := range branches {
+				if matchBranchGlob(task.SourceBranch, b) {
+					refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
+				}
+			}
+		}
+		if len(refSpecs) == 0 {
+			return fmt.Errorf("no local branches match %q", task.SourceBranch)
+		}
+	} else {
+		refSpecs = []string{fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch)}
+	}
 
 	_, err := e.backend.Push(ctx, gitbackend.PushOptions{
 		RepoPath: dir,
 		Remote:   RemoteTarget,
-		RefSpecs: []string{refSpec},
+		RefSpecs: refSpecs,
 		Force:    task.GitForce,
 		Auth:     e.authConfig(ctx, repo, platform),
 	})
+	if err != nil {
+		return err
+	}
+
+	// 推送侧 prune:目标上源已删除的同名分支一并删掉(仅单分支任务,语义清晰)
+	if task.GitPushPrune && !multi {
+		return e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform)
+	}
+	return nil
+}
+
+// listLocalBranches 列出本地分支短名。
+func (e *Executor) listLocalBranches(dir string) ([]string, error) {
+	ctx, cancel := withTimeout(context.Background(), 15)
+	defer cancel()
+	out, err := e.gitOutput(ctx, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
+}
+
+// pruneRemoteBranch 删除目标上指定分支(源已不存在时)。
+func (e *Executor) pruneRemoteBranch(ctx context.Context, dir, branch string, repo *model.Repo, platform *model.Platform) error {
+	if branch == "" {
+		return nil
+	}
+	spec := fmt.Sprintf(":refs/heads/%s", branch)
+	_, err := e.backend.Push(ctx, gitbackend.PushOptions{
+		RepoPath: dir,
+		Remote:   RemoteTarget,
+		RefSpecs: []string{spec},
+		Auth:     e.authConfig(ctx, repo, platform),
+	})
+	// 目标分支本就不存在时的错误可忽略
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "not found") {
+		return nil
+	}
 	return err
 }
 

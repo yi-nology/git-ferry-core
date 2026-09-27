@@ -300,11 +300,11 @@ func TestClassifyError(t *testing.T) {
 		{"config does not exist", fmt.Errorf("branch does not exist"), model.ErrorConfig},
 		{"config repository not found", fmt.Errorf("repository not found"), model.ErrorConfig},
 		{"config branch not found", fmt.Errorf("branch not found"), model.ErrorConfig},
-		{"git non-fast-forward", fmt.Errorf("non-fast-forward"), model.ErrorGit},
-		{"git conflict", fmt.Errorf("merge conflict"), model.ErrorGit},
-		{"git rejected", fmt.Errorf("push rejected"), model.ErrorGit},
+		{"conflict non-fast-forward", fmt.Errorf("non-fast-forward"), model.ErrorConflict},
+		{"conflict merge", fmt.Errorf("merge conflict"), model.ErrorConflict},
+		{"conflict rejected", fmt.Errorf("push rejected"), model.ErrorConflict},
 		{"git failed to push", fmt.Errorf("failed to push"), model.ErrorGit},
-		{"git fetch first", fmt.Errorf("fetch first"), model.ErrorGit},
+		{"conflict fetch first", fmt.Errorf("fetch first"), model.ErrorConflict},
 		{"unknown error", fmt.Errorf("some random error"), model.ErrorUnknown},
 	}
 
