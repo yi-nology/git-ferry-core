@@ -136,10 +136,10 @@ func TestPlatformDAO_Delete(t *testing.T) {
 
 	// Create a platform
 	platform := &model.Platform{
-		Key:         "github",
-		Name:        "GitHub",
-		Type:        "github",
-		Status:      "active",
+		Key:    "github",
+		Name:   "GitHub",
+		Type:   "github",
+		Status: "active",
 	}
 
 	err := d.Create(platform)
@@ -336,7 +336,7 @@ func TestPlatformDAO_UpdateFields(t *testing.T) {
 
 	// Update specific fields
 	fields := map[string]interface{}{
-		"name":        "GitHub Enterprise",
+		"name":         "GitHub Enterprise",
 		"instance_url": "https://github.example.com",
 	}
 

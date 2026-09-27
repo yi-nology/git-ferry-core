@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -36,9 +36,9 @@ func setupTaskTestService(t *testing.T) (*Service, *gorm.DB) {
 	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, nil)
 
 	svc := &Service{
-		tasks:          taskService,
-		cron:           cron.New(),
-		cronEntryIDs:   make(map[string]cron.EntryID),
+		tasks:        taskService,
+		cron:         cron.New(),
+		cronEntryIDs: make(map[string]cron.EntryID),
 		config: &model.Config{
 			Sync: model.SyncConfig{
 				DefaultTimeout: 300,
@@ -399,9 +399,9 @@ func TestPreviewSync_WithRepoDAO(t *testing.T) {
 	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
 
 	svc := &Service{
-		tasks:         taskService,
-		cron:          cron.New(),
-		cronEntryIDs:  make(map[string]cron.EntryID),
+		tasks:        taskService,
+		cron:         cron.New(),
+		cronEntryIDs: make(map[string]cron.EntryID),
 	}
 
 	ctx := context.Background()
@@ -463,9 +463,9 @@ func TestPreviewSync_MissingRepo(t *testing.T) {
 	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
 
 	svc := &Service{
-		tasks:         taskService,
-		cron:          cron.New(),
-		cronEntryIDs:  make(map[string]cron.EntryID),
+		tasks:        taskService,
+		cron:         cron.New(),
+		cronEntryIDs: make(map[string]cron.EntryID),
 	}
 
 	ctx := context.Background()

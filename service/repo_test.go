@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/yi-nology/go-git-platform/pkg/credential"
-	"github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/pkg/credential"
+	"github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 )
 

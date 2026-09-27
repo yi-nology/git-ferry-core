@@ -17,17 +17,17 @@ func TestSyncRunStep_TableName(t *testing.T) {
 func TestSyncRunStep_Fields(t *testing.T) {
 	now := time.Now()
 	s := SyncRunStep{
-		ID:          1,
-		RunID:       1,
-		StepName:    "fetch",
-		Status:      "success",
-		StartTime:   now,
-		EndTime:     &now,
-		DurationMs:  500,
-		ErrorMsg:    "",
-		ErrorType:   "",
-		RetryCount:  0,
-		CreatedAt:   now,
+		ID:         1,
+		RunID:      1,
+		StepName:   "fetch",
+		Status:     "success",
+		StartTime:  now,
+		EndTime:    &now,
+		DurationMs: 500,
+		ErrorMsg:   "",
+		ErrorType:  "",
+		RetryCount: 0,
+		CreatedAt:  now,
 	}
 
 	if s.ID != 1 {

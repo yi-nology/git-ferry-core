@@ -4,8 +4,8 @@ import (
 	"errors"
 	"strings"
 
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
 // ClassifyError categorizes an error into one of the predefined error types.

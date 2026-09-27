@@ -55,7 +55,6 @@ func sanitizeFileToken(s string) string {
 	return s
 }
 
-
 // rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。
 // 借鉴 gickup zip keep N:防冷备目录无限膨胀。
 func rotateBundles(backupDir, taskKey string, keep int) (removed int) {

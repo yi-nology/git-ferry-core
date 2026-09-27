@@ -25,14 +25,14 @@ var _ executor.Service = (*Service)(nil)
 type Config = model.Config
 
 type Service struct {
-	config    *Config
-	db        *gorm.DB
-	sqlDB     *sql.DB
-	repos     *RepoService
-	tasks     *TaskService
-	webhooks  *WebhookService
-	platforms *PlatformService
-	opLogs    *OperationLogService
+	config          *Config
+	db              *gorm.DB
+	sqlDB           *sql.DB
+	repos           *RepoService
+	tasks           *TaskService
+	webhooks        *WebhookService
+	platforms       *PlatformService
+	opLogs          *OperationLogService
 	cron            *cron.Cron
 	cronEntryIDs    map[string]cron.EntryID
 	cronMu          sync.RWMutex
@@ -40,12 +40,12 @@ type Service struct {
 	mirror          *MirrorService
 	lastTriggerTime sync.Map
 	// guard 统一封装”同 taskKey 互斥 + 全局并发上限”;配 redis 时为分布式,否则进程内。
-	guard concurrencyGuard
+	guard       concurrencyGuard
 	cleanupDone chan struct{}
 	stopOnce    sync.Once
-	bgCtx           context.Context
-	bgCancel        context.CancelFunc
-	wg              sync.WaitGroup
+	bgCtx       context.Context
+	bgCancel    context.CancelFunc
+	wg          sync.WaitGroup
 }
 
 func NewService(cfg *Config) (*Service, error) {
@@ -96,14 +96,14 @@ func NewService(cfg *Config) (*Service, error) {
 	providerMgr.StartJanitor(bgCtx, 10*time.Minute)
 
 	svc := &Service{
-		config:       cfg,
-		db:           db,
-		sqlDB:        sqlDB,
-		repos:        repoService,
-		tasks:        taskService,
-		webhooks:     webhookService,
-		platforms:    platformService,
-		opLogs:       opLogService,
+		config:    cfg,
+		db:        db,
+		sqlDB:     sqlDB,
+		repos:     repoService,
+		tasks:     taskService,
+		webhooks:  webhookService,
+		platforms: platformService,
+		opLogs:    opLogService,
 		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设/用户习惯一致。
 		// 此前用 WithSeconds() 的 6 字段解析,导致 "* * * * *" 这类标准表达式
 		// 报 "expected exactly 6 fields, found 5",任务创建与定时注册全失败。

@@ -41,10 +41,10 @@ type RedisConfig struct {
 	Addr            string `yaml:"addr" env:"GIT_SYNC_REDIS_ADDR"`
 	Password        string `yaml:"password" env:"GIT_SYNC_REDIS_PASSWORD"`
 	DB              int    `yaml:"db" env:"GIT_SYNC_REDIS_DB"`
-	PoolSize        int    `yaml:"pool_size" env:"GIT_SYNC_REDIS_POOL_SIZE"`           // 连接池大小,0 用 go-redis 默认(10*GOMAXPROCS)
-	MinIdleConns    int    `yaml:"min_idle_conns" env:"GIT_SYNC_REDIS_MIN_IDLE_CONNS"` // 最小空闲连接数,0 不预热
-	DialTimeoutSec  int    `yaml:"dial_timeout_sec" env:"GIT_SYNC_REDIS_DIAL_TIMEOUT_SEC"`  // 建连超时秒数,0 不设超时
-	ReadTimeoutSec  int    `yaml:"read_timeout_sec" env:"GIT_SYNC_REDIS_READ_TIMEOUT_SEC"`  // 读超时秒数,0 不设超时
+	PoolSize        int    `yaml:"pool_size" env:"GIT_SYNC_REDIS_POOL_SIZE"`                 // 连接池大小,0 用 go-redis 默认(10*GOMAXPROCS)
+	MinIdleConns    int    `yaml:"min_idle_conns" env:"GIT_SYNC_REDIS_MIN_IDLE_CONNS"`       // 最小空闲连接数,0 不预热
+	DialTimeoutSec  int    `yaml:"dial_timeout_sec" env:"GIT_SYNC_REDIS_DIAL_TIMEOUT_SEC"`   // 建连超时秒数,0 不设超时
+	ReadTimeoutSec  int    `yaml:"read_timeout_sec" env:"GIT_SYNC_REDIS_READ_TIMEOUT_SEC"`   // 读超时秒数,0 不设超时
 	WriteTimeoutSec int    `yaml:"write_timeout_sec" env:"GIT_SYNC_REDIS_WRITE_TIMEOUT_SEC"` // 写超时秒数,0 不设超时
 }
 
@@ -69,10 +69,10 @@ type SyncConfig struct {
 		PathStyle bool   `yaml:"path_style"`
 	} `yaml:"backup_s3"`
 	// PartialClone 部分克隆 filter(blob:none / tree:0),空=全量
-	PartialClone string `yaml:"partial_clone" env:"GIT_SYNC_PARTIAL_CLONE"`
-	MaxConcurrent  int `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`
-	DefaultTimeout int `yaml:"default_timeout" env:"GIT_SYNC_DEFAULT_TIMEOUT"`
-	RetryCount     int `yaml:"retry_count" env:"GIT_SYNC_RETRY_COUNT"`
+	PartialClone   string `yaml:"partial_clone" env:"GIT_SYNC_PARTIAL_CLONE"`
+	MaxConcurrent  int    `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`
+	DefaultTimeout int    `yaml:"default_timeout" env:"GIT_SYNC_DEFAULT_TIMEOUT"`
+	RetryCount     int    `yaml:"retry_count" env:"GIT_SYNC_RETRY_COUNT"`
 }
 
 type WebhookConfig struct {

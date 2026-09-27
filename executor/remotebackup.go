@@ -15,10 +15,10 @@ import (
 
 // S3Config S3 兼容对象存储(阿里云 OSS/MinIO/AWS)。
 type S3Config struct {
-	Endpoint  string `yaml:"endpoint"`   // https://s3.amazonaws.com 或 https://oss-cn-hangzhou.aliyuncs.com
-	Region    string `yaml:"region"`     // us-east-1 等
+	Endpoint  string `yaml:"endpoint"` // https://s3.amazonaws.com 或 https://oss-cn-hangzhou.aliyuncs.com
+	Region    string `yaml:"region"`   // us-east-1 等
 	Bucket    string `yaml:"bucket"`
-	Prefix    string `yaml:"prefix"`     // 对象 key 前缀
+	Prefix    string `yaml:"prefix"` // 对象 key 前缀
 	AccessKey string `yaml:"access_key"`
 	SecretKey string `yaml:"secret_key"`
 	// PathStyle true=MinIO/部分兼容端点

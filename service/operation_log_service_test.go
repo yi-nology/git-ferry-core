@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 

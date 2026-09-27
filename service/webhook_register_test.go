@@ -10,10 +10,10 @@ import (
 
 	"github.com/glebarez/sqlite"
 	// 注册全部平台后端,使 NewProvider 在测试二进制中可用
-	_ "github.com/yi-nology/go-git-platform/backends/all"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	_ "github.com/yi-nology/go-git-platform/backends/all"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 )
 
@@ -40,9 +40,9 @@ func setupRegisterTestService(t *testing.T, platformAPIURL string) (*Service, *g
 
 	// 平台记录指向 fake gitea 服务器
 	platform := &model.Platform{
-		Key:  "gitea-test",
-		Name: "Gitea Test",
-		Type: string(sdkprov.PlatformGitea),
+		Key:    "gitea-test",
+		Name:   "Gitea Test",
+		Type:   string(sdkprov.PlatformGitea),
 		APIURL: platformAPIURL,
 	}
 	if err := db.Create(platform).Error; err != nil {

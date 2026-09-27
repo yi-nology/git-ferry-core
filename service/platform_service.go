@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	errors "github.com/cockroachdb/errors"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
 // PlatformService 平台服务

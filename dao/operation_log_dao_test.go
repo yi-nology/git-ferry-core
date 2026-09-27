@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/glebarez/sqlite"
+	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
 

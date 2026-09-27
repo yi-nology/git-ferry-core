@@ -7,8 +7,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/go-git-platform/pkg/credential"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/pkg/credential"
 	"gorm.io/gorm"
 )
 
@@ -87,9 +87,9 @@ func TestCryptoManager_NewCryptoManagerFromKey(t *testing.T) {
 
 func TestDefaultPagination(t *testing.T) {
 	tests := []struct {
-		name                        string
-		offset, limit               int
-		wantOff, wantLim            int
+		name             string
+		offset, limit    int
+		wantOff, wantLim int
 	}{
 		{"normal values", 10, 50, 10, 50},
 		{"zero limit defaults to 50", 0, 0, 0, 50},

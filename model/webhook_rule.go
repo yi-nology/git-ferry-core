@@ -7,19 +7,19 @@ import (
 )
 
 type WebhookRule struct {
-	ID            uint               `json:"id" gorm:"primaryKey"`
-	Name          string             `json:"name" gorm:"size:100;not null"`
-	RepoKey       string             `json:"repoKey" gorm:"size:255;not null;index"`
-	EventType     string             `json:"eventType" gorm:"size:100;default:push"`
-	BranchPattern string             `json:"branchPattern" gorm:"size:255"`
-	Action        string             `json:"action" gorm:"size:50;default:sync"`
-	MinInterval   int                `json:"minInterval" gorm:"default:60"`
-	Enabled       bool               `json:"enabled" gorm:"default:true;index"`
-	Description   string             `json:"description" gorm:"type:text"`
-	Tasks         []WebhookRuleTask  `json:"tasks,omitempty" gorm:"foreignKey:RuleID"`
-	CreatedAt     time.Time          `json:"createdAt"`
-	UpdatedAt     time.Time          `json:"updatedAt"`
-	DeletedAt     gorm.DeletedAt     `json:"-" gorm:"index"`
+	ID            uint              `json:"id" gorm:"primaryKey"`
+	Name          string            `json:"name" gorm:"size:100;not null"`
+	RepoKey       string            `json:"repoKey" gorm:"size:255;not null;index"`
+	EventType     string            `json:"eventType" gorm:"size:100;default:push"`
+	BranchPattern string            `json:"branchPattern" gorm:"size:255"`
+	Action        string            `json:"action" gorm:"size:50;default:sync"`
+	MinInterval   int               `json:"minInterval" gorm:"default:60"`
+	Enabled       bool              `json:"enabled" gorm:"default:true;index"`
+	Description   string            `json:"description" gorm:"type:text"`
+	Tasks         []WebhookRuleTask `json:"tasks,omitempty" gorm:"foreignKey:RuleID"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+	DeletedAt     gorm.DeletedAt    `json:"-" gorm:"index"`
 }
 
 func (WebhookRule) TableName() string {
@@ -27,10 +27,10 @@ func (WebhookRule) TableName() string {
 }
 
 type WebhookRuleTask struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	RuleID     uint      `json:"ruleId" gorm:"not null;index;uniqueIndex:idx_rule_task"`
-	TaskKey    string    `json:"taskKey" gorm:"size:36;not null;uniqueIndex:idx_rule_task"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	RuleID    uint      `json:"ruleId" gorm:"not null;index;uniqueIndex:idx_rule_task"`
+	TaskKey   string    `json:"taskKey" gorm:"size:36;not null;uniqueIndex:idx_rule_task"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 func (WebhookRuleTask) TableName() string {

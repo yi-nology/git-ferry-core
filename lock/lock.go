@@ -141,7 +141,6 @@ func (l *RedisLock) TryLockWithTTL(ctx context.Context, key string, ttl time.Dur
 	return ok, nil
 }
 
-
 func (l *RedisLock) LockWithTTL(ctx context.Context, key string, ttl time.Duration) (bool, string, error) {
 	lockKey := "git-sync:lock:" + key
 	value := generateLockValue()

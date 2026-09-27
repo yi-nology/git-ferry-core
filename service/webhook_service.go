@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 )
 
 // WebhookService handles webhook-related operations.

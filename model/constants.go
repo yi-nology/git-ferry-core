@@ -48,18 +48,18 @@ const (
 	DefaultRetryCount    = 3
 	DefaultTempDir       = "/tmp/git-sync"
 
-	DefaultConnMaxLifeSec = 300 // 5 分钟
-	DefaultConnMaxIdleSec = 120 // 2 分钟
-	DefaultWebhookRateLimit = 10
-	DefaultMaxBodySize    = 10 << 20 // 10MB
-	DefaultRedisDialTimeout = 5
-	DefaultRedisReadTimeout = 3
+	DefaultConnMaxLifeSec    = 300 // 5 分钟
+	DefaultConnMaxIdleSec    = 120 // 2 分钟
+	DefaultWebhookRateLimit  = 10
+	DefaultMaxBodySize       = 10 << 20 // 10MB
+	DefaultRedisDialTimeout  = 5
+	DefaultRedisReadTimeout  = 3
 	DefaultRedisWriteTimeout = 3
 
 	// 上限值
-	MaxConcurrent     = 100
-	MaxDBOpenConns    = 200
-	MaxWebhookBodySize = 100 << 20 // 100MB
+	MaxConcurrent       = 100
+	MaxDBOpenConns      = 200
+	MaxWebhookBodySize  = 100 << 20 // 100MB
 	MaxWebhookRateLimit = 10000
 
 	// Push retry 退避因子
@@ -83,10 +83,10 @@ const (
 	ErrorAuth      = "auth"
 	ErrorDivergent = "divergent"
 	ErrorConflict  = "conflict"
-	ErrorNetwork = "network"
-	ErrorConfig  = "config"
-	ErrorGit     = "git"
-	ErrorUnknown = "unknown"
+	ErrorNetwork   = "network"
+	ErrorConfig    = "config"
+	ErrorGit       = "git"
+	ErrorUnknown   = "unknown"
 )
 
 // Table name constants
@@ -103,9 +103,9 @@ const (
 
 // Model default value constants
 const (
-	DefaultBranch   = "main"
-	DefaultPlatform = "unknown"
-	DefaultSyncMode = "single"
+	DefaultBranch    = "main"
+	DefaultPlatform  = "unknown"
+	DefaultSyncMode  = "single"
 	DefaultEventType = "push"
-	DefaultAction   = "sync"
+	DefaultAction    = "sync"
 )

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
-	"github.com/yi-nology/go-git-platform/gitbackend"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
 // RunManager handles sync run lifecycle operations.

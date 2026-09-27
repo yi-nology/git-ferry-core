@@ -1,14 +1,14 @@
 package service
 
 import (
-	"path/filepath"
-	"strings"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
+	"strings"
 
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
 // providerConfig 由平台记录构建 SDK provider 配置(token 可覆盖平台默认)。

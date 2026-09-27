@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/glebarez/sqlite"
+	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
 
@@ -141,7 +141,7 @@ func TestSyncRunStepDAO_CleanupOlderThan(t *testing.T) {
 	}
 
 	// Cleanup older than 24 hours
-	count, err := d.CleanupOlderThan(context.Background(), 24 * time.Hour)
+	count, err := d.CleanupOlderThan(context.Background(), 24*time.Hour)
 	if err != nil {
 		t.Fatalf("cleanup failed: %v", err)
 	}
@@ -168,17 +168,17 @@ func TestSyncRunStepDAO_CleanupOlderThan(t *testing.T) {
 func TestSyncRunStepDAO_Fields(t *testing.T) {
 	now := time.Now()
 	step := model.SyncRunStep{
-		ID:          1,
-		RunID:       1,
-		StepName:    "fetch",
-		Status:      "success",
-		StartTime:   now,
-		EndTime:     &now,
-		DurationMs:  500,
-		ErrorMsg:    "",
-		ErrorType:   "",
-		RetryCount:  0,
-		CreatedAt:   now,
+		ID:         1,
+		RunID:      1,
+		StepName:   "fetch",
+		Status:     "success",
+		StartTime:  now,
+		EndTime:    &now,
+		DurationMs: 500,
+		ErrorMsg:   "",
+		ErrorType:  "",
+		RetryCount: 0,
+		CreatedAt:  now,
 	}
 
 	if step.ID != 1 {

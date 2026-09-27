@@ -84,14 +84,14 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		Cron:          req.Cron,
 		WebhookToken:  uuid.New().String(),
 		Enabled:       true,
-		GitTags:        req.GitTags,
-		GitForce:       req.GitForce,
-		GitPrune:       req.GitPrune,
-		GitLFS:       req.GitLFS,
-		SyncWiki:     req.SyncWiki,
-		GitBundle:    req.GitBundle,
-		Submodules:   req.Submodules,
-		GitPushPrune: req.GitPushPrune,
+		GitTags:       req.GitTags,
+		GitForce:      req.GitForce,
+		GitPrune:      req.GitPrune,
+		GitLFS:        req.GitLFS,
+		SyncWiki:      req.SyncWiki,
+		GitBundle:     req.GitBundle,
+		Submodules:    req.Submodules,
+		GitPushPrune:  req.GitPushPrune,
 		KeepDivergent: func() bool {
 			if req.KeepDivergent == nil {
 				return true // 默认保护分歧

@@ -168,8 +168,8 @@ func (d *PlatformDAO) UpdateRepoCount(platformID uint) error {
 // UpdateStatus 更新平台状态
 func (d *PlatformDAO) UpdateStatus(key, status, testResult string) error {
 	return d.db.Model(&model.Platform{}).Where("key = ?", key).Updates(map[string]interface{}{
-		"status":          status,
-		"last_test_at":    gorm.Expr("CURRENT_TIMESTAMP"),
+		"status":           status,
+		"last_test_at":     gorm.Expr("CURRENT_TIMESTAMP"),
 		"last_test_result": testResult,
 	}).Error
 }
