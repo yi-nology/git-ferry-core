@@ -262,6 +262,27 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 		}
 	}
 
+	// Step 5: git bundle 冷备(可选)
+	if runTask.GitBundle {
+		backupDir := ""
+		if cfg := e.service.GetConfig(); cfg != nil {
+			backupDir = cfg.Sync.BackupDir
+		}
+		if backupDir == "" {
+			details.WriteString("  bundle: skipped (sync.backup_dir not set)\n")
+		} else {
+			step5 := e.beginStep(run.ID, "bundle")
+			details.WriteString("\nStep 5: Create cold backup bundle...\n")
+			if path, err := e.writeBundle(execCtx, workDir, backupDir, &runTask, &details); err != nil {
+				e.failStep(step5, err)
+				fmt.Fprintf(&details, "bundle error: %v\n", err)
+			} else {
+				e.completeStep(step5, path)
+				details.WriteString("Step 5: completed\n")
+			}
+		}
+	}
+
 	run.Status = model.StatusSuccess
 	details.WriteString("\n=== Sync completed successfully ===")
 	return run, nil

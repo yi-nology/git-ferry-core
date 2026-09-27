@@ -1,6 +1,10 @@
 package executor
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestWikiURL(t *testing.T) {
 	cases := []struct{ in, want string }{
@@ -17,4 +21,11 @@ func TestWikiURL(t *testing.T) {
 			t.Errorf("wikiURL(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
+
+func TestSanitizeFileToken(t *testing.T) {
+	assert.Equal(t, "my_task", sanitizeFileToken("my/task"))
+	assert.Equal(t, "a_b", sanitizeFileToken(`a\b`))
+	assert.Equal(t, "_", sanitizeFileToken(".."))
+	assert.Equal(t, "unnamed", sanitizeFileToken(""))
 }

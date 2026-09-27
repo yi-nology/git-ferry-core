@@ -54,6 +54,8 @@ type GitConfig struct {
 }
 
 type SyncConfig struct {
+	// BackupDir git bundle 冷备输出目录(空=禁用)
+	BackupDir string `yaml:"backup_dir" env:"GIT_SYNC_BACKUP_DIR"`
 	MaxConcurrent  int `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`
 	DefaultTimeout int `yaml:"default_timeout" env:"GIT_SYNC_DEFAULT_TIMEOUT"`
 	RetryCount     int `yaml:"retry_count" env:"GIT_SYNC_RETRY_COUNT"`
