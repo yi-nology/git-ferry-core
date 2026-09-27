@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 )
 

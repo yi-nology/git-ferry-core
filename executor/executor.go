@@ -10,7 +10,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
-	"github.com/yi-nology/git-platform-sdk/gitbackend"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -405,11 +405,17 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	// workdir 成功后保留,后续执行走增量 fetch,全量克隆只是一次性成本。
 	// 多分支(glob)同步不能 SingleBranch,否则只克隆匹配到的第一分支
 	multi := strings.ContainsAny(task.SourceBranch, "*?[")
+	var partial string
+	if cfg := e.service.GetConfig(); cfg != nil {
+		partial = cfg.Sync.PartialClone
+	}
 	return e.backend.Clone(ctx, gitbackend.CloneOptions{
 		URL:          repo.CloneURL,
 		Path:         dir,
 		Branch:       task.SourceBranch,
 		SingleBranch: !multi,
+		Filter:       partial,
+		Submodules:   task.Submodules,
 		Auth:         e.authConfig(ctx, repo, platform),
 	})
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	errors "github.com/cockroachdb/errors"
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -118,7 +118,13 @@ func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perP
 }
 
 // SyncPlatformRepos 同步平台仓库到本地
+// SyncPlatformRepos 同步平台仓库(不过滤)。
 func (s *PlatformService) SyncPlatformRepos(ctx context.Context, key string) (int, error) {
+	return s.SyncPlatformReposFiltered(ctx, key, nil)
+}
+
+// SyncPlatformReposFiltered 按过滤器同步平台仓库(排除 archived/fork 等)。
+func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key string, filter *RepoImportFilter) (int, error) {
 	platform, err := s.platformDAO.FindByKey(key)
 	if err != nil {
 		return 0, errors.Wrap(err, "query platform failed")
@@ -155,6 +161,9 @@ func (s *PlatformService) SyncPlatformRepos(ctx context.Context, key string) (in
 	var toCreate []*model.Repo
 	var toUpdate []*model.Repo
 	for _, repo := range repos {
+		if !filter.Allow(repo) {
+			continue
+		}
 		// 私有部署实例的 API 可能返回公网 clone 地址(如 gitcode.kylinos.cn
 		// 返回 gitcode.com),内网执行器不可达;按平台实例地址重写 host。
 		cloneURL := rewriteCloneHost(repo.CloneURL, platform)

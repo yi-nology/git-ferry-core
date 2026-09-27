@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/yi-nology/git-platform-sdk/pkg/branchfilter"
+	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 )
 
 func TestMatchBranch(t *testing.T) {

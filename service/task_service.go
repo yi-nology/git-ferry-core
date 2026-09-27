@@ -90,6 +90,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		GitLFS:       req.GitLFS,
 		SyncWiki:     req.SyncWiki,
 		GitBundle:    req.GitBundle,
+		Submodules:   req.Submodules,
 		GitPushPrune: req.GitPushPrune,
 		KeepDivergent: func() bool {
 			if req.KeepDivergent == nil {
@@ -158,6 +159,9 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	}
 	if req.GitBundle != nil {
 		task.GitBundle = *req.GitBundle
+	}
+	if req.Submodules != nil {
+		task.Submodules = *req.Submodules
 	}
 	if req.GitPushPrune != nil {
 		task.GitPushPrune = *req.GitPushPrune

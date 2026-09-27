@@ -9,7 +9,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-platform-sdk/gitbackend"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
 // wikiURL 从仓库 clone URL 推导 wiki 仓库地址。

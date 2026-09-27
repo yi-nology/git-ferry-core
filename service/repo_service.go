@@ -8,7 +8,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/google/uuid"
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 )

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
 // RegisterPlatformWebhook 在平台侧为仓库注册 Webhook,回调指向本服务的接收端点

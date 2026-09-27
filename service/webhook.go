@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/yi-nology/git-platform-sdk/pkg/branchfilter"
+	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 

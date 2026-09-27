@@ -13,8 +13,8 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
-	"github.com/yi-nology/git-platform-sdk/gitbackend"
-	"github.com/yi-nology/git-platform-sdk/pkg/credential"
+	"github.com/yi-nology/go-git-platform/gitbackend"
+	"github.com/yi-nology/go-git-platform/pkg/credential"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/model"

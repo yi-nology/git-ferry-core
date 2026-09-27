@@ -8,7 +8,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
-	"github.com/yi-nology/git-platform-sdk/gitbackend"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
 // expandBranchSpec 解析 SourceBranch:

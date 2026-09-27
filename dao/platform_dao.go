@@ -1,7 +1,7 @@
 package dao
 
 import (
-	"github.com/yi-nology/git-platform-sdk/pkg/credential"
+	"github.com/yi-nology/go-git-platform/pkg/credential"
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"

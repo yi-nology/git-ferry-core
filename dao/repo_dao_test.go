@@ -7,7 +7,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-platform-sdk/pkg/credential"
+	"github.com/yi-nology/go-git-platform/pkg/credential"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )

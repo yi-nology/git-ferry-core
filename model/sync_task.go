@@ -27,6 +27,8 @@ type SyncTask struct {
 	SyncWiki bool `json:"sync_wiki" gorm:"default:false"`
 	// GitBundle 同步成功后生成 git bundle 冷备(需配置 Sync.BackupDir)
 	GitBundle bool `json:"git_bundle" gorm:"default:false"`
+	// Submodules 递归同步 git 子模块
+	Submodules bool `json:"submodules" gorm:"default:false"`
 	// GitPushPrune 推送后删除目标上源已不存在的同名分支(refspec prune)
 	GitPushPrune bool `json:"git_push_prune" gorm:"default:false"`
 	// KeepDivergent true=目标分支有源没有的提交时拒绝 force 覆盖(防丢代码);
@@ -57,6 +59,7 @@ type CreateTaskRequest struct {
 	GitLFS       bool `json:"git_lfs"`
 	SyncWiki     bool `json:"sync_wiki"`
 	GitBundle    bool `json:"git_bundle"`
+	Submodules   bool `json:"submodules"`
 	GitPushPrune bool `json:"git_push_prune"`
 	// KeepDivergent nil/缺省=true(安全);显式 false 才允许覆盖分歧
 	KeepDivergent *bool `json:"keep_divergent"`
@@ -79,6 +82,7 @@ type UpdateTaskRequest struct {
 	GitLFS         *bool `json:"git_lfs"`
 	SyncWiki       *bool `json:"sync_wiki"`
 	GitBundle      *bool `json:"git_bundle"`
+	Submodules     *bool `json:"submodules"`
 	GitPushPrune   *bool `json:"git_push_prune"`
 	KeepDivergent  *bool `json:"keep_divergent"`
 }

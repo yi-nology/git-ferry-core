@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 

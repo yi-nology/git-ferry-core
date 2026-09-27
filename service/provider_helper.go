@@ -1,11 +1,13 @@
 package service
 
 import (
+	"path/filepath"
+	"strings"
 	"context"
 	"fmt"
 	"strconv"
 
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -34,6 +36,64 @@ func parsePageOpts(page, perPage string) (int, int) {
 	p, _ := strconv.Atoi(page)
 	pp, _ := strconv.Atoi(perPage)
 	return sdkprov.NormalizePageOpts(p, pp)
+}
+
+// RepoImportFilter 平台仓库导入过滤(借鉴 gickup filter.*)。
+type RepoImportFilter struct {
+	ExcludeArchived bool
+	ExcludeForks    bool
+	MinStars        int
+	// IncludeLanguage 只导入该语言(空=不过滤)
+	IncludeLanguage string
+	// IncludeGlobs / ExcludeGlobs 按 FullName 匹配
+	IncludeGlobs []string
+	ExcludeGlobs []string
+}
+
+// Allow 判断仓库是否应导入。
+func (f *RepoImportFilter) Allow(r *sdkprov.PlatformRepo) bool {
+	if f == nil {
+		return true
+	}
+	if f.ExcludeArchived && r.Archived {
+		return false
+	}
+	if f.ExcludeForks && r.Fork {
+		return false
+	}
+	if f.MinStars > 0 && r.Stars < f.MinStars {
+		return false
+	}
+	if f.IncludeLanguage != "" && !strings.EqualFold(r.Language, f.IncludeLanguage) {
+		return false
+	}
+	name := r.FullName
+	if name == "" {
+		name = r.Name
+	}
+	for _, g := range f.ExcludeGlobs {
+		if globMatchName(g, name) {
+			return false
+		}
+	}
+	if len(f.IncludeGlobs) > 0 {
+		ok := false
+		for _, g := range f.IncludeGlobs {
+			if globMatchName(g, name) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func globMatchName(pattern, s string) bool {
+	ok, _ := filepath.Match(pattern, s)
+	return ok
 }
 
 // fetchAllPlatformRepos 按最大页大小循环翻页,拉取平台全部仓库。

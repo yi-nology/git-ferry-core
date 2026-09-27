@@ -15,7 +15,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/git-platform-sdk/provider"
+	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 )
 
@@ -345,6 +345,11 @@ func (s *Service) ListPlatformRepos(ctx context.Context, key, page, perPage stri
 // SyncPlatformRepos 同步平台仓库到本地
 func (s *Service) SyncPlatformRepos(ctx context.Context, key string) (int, error) {
 	return s.platforms.SyncPlatformRepos(ctx, key)
+}
+
+// SyncPlatformReposFiltered 按过滤条件导入平台仓库。
+func (s *Service) SyncPlatformReposFiltered(ctx context.Context, key string, filter *RepoImportFilter) (int, error) {
+	return s.platforms.SyncPlatformReposFiltered(ctx, key, filter)
 }
 
 // ListReposByPlatform 列出平台下的仓库

@@ -58,6 +58,18 @@ type SyncConfig struct {
 	BackupDir string `yaml:"backup_dir" env:"GIT_SYNC_BACKUP_DIR"`
 	// BackupKeep 每任务保留最近 N 份 bundle(0=不轮转,全部保留)
 	BackupKeep int `yaml:"backup_keep" env:"GIT_SYNC_BACKUP_KEEP"`
+	// BackupS3 bundle 异地冷备(S3 兼容);空配置=只存本地
+	BackupS3 struct {
+		Endpoint  string `yaml:"endpoint"`
+		Region    string `yaml:"region"`
+		Bucket    string `yaml:"bucket"`
+		Prefix    string `yaml:"prefix"`
+		AccessKey string `yaml:"access_key"`
+		SecretKey string `yaml:"secret_key"`
+		PathStyle bool   `yaml:"path_style"`
+	} `yaml:"backup_s3"`
+	// PartialClone 部分克隆 filter(blob:none / tree:0),空=全量
+	PartialClone string `yaml:"partial_clone" env:"GIT_SYNC_PARTIAL_CLONE"`
 	MaxConcurrent  int `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`
 	DefaultTimeout int `yaml:"default_timeout" env:"GIT_SYNC_DEFAULT_TIMEOUT"`
 	RetryCount     int `yaml:"retry_count" env:"GIT_SYNC_RETRY_COUNT"`
