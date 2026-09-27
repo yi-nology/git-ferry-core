@@ -88,6 +88,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		GitForce:       req.GitForce,
 		GitPrune:       req.GitPrune,
 		GitLFS:       req.GitLFS,
+		SyncWiki:     req.SyncWiki,
 		GitPushPrune: req.GitPushPrune,
 		KeepDivergent: func() bool {
 			if req.KeepDivergent == nil {
@@ -150,6 +151,9 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	}
 	if req.GitLFS != nil {
 		task.GitLFS = *req.GitLFS
+	}
+	if req.SyncWiki != nil {
+		task.SyncWiki = *req.SyncWiki
 	}
 	if req.GitPushPrune != nil {
 		task.GitPushPrune = *req.GitPushPrune

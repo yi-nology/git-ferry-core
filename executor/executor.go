@@ -246,6 +246,22 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	e.completeStep(step3, "")
 	details.WriteString("Step 3: completed\n")
 
+	// Step 4: Wiki(可选;wiki 不存在时跳过,不算失败)
+	if runTask.SyncWiki {
+		step4 := e.beginStep(run.ID, model.StepWiki)
+		details.WriteString("\nStep 4: Sync wiki...\n")
+		if err := e.syncWiki(execCtx, workDir, &runTask, sourceRepo, targetRepo,
+			platforms[sourceRepo.PlatformID], platforms[targetRepo.PlatformID], &details); err != nil {
+			// wiki 失败不阻断代码同步成功(可单独排查)
+			e.failStep(step4, err)
+			fmt.Fprintf(&details, "wiki sync error: %v\n", err)
+			details.WriteString("  (code sync succeeded; wiki sync failed)\n")
+		} else {
+			e.completeStep(step4, "")
+			details.WriteString("Step 4: completed\n")
+		}
+	}
+
 	run.Status = model.StatusSuccess
 	details.WriteString("\n=== Sync completed successfully ===")
 	return run, nil

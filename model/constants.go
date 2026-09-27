@@ -74,6 +74,7 @@ const (
 	StepEnsureRemote = "ensure_remote"
 	StepPush         = "push"
 	StepLFS          = "lfs"
+	StepWiki         = "wiki"
 	StepDivergeCheck = "diverge_check"
 )
 

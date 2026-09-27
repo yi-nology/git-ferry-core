@@ -23,6 +23,8 @@ type SyncTask struct {
 	GitPrune      bool           `json:"git_prune" gorm:"default:false"`
 	// GitLFS 同步 Git LFS 对象(需要环境安装 git-lfs)
 	GitLFS bool `json:"git_lfs" gorm:"default:false"`
+	// SyncWiki 同步 wiki 仓库(源/目标 URL 按 .wiki.git 规则推导)
+	SyncWiki bool `json:"sync_wiki" gorm:"default:false"`
 	// GitPushPrune 推送后删除目标上源已不存在的同名分支(refspec prune)
 	GitPushPrune bool `json:"git_push_prune" gorm:"default:false"`
 	// KeepDivergent true=目标分支有源没有的提交时拒绝 force 覆盖(防丢代码);
@@ -51,6 +53,7 @@ type CreateTaskRequest struct {
 	GitForce       bool `json:"git_force"`
 	GitPrune       bool `json:"git_prune"`
 	GitLFS       bool `json:"git_lfs"`
+	SyncWiki     bool `json:"sync_wiki"`
 	GitPushPrune bool `json:"git_push_prune"`
 	// KeepDivergent nil/缺省=true(安全);显式 false 才允许覆盖分歧
 	KeepDivergent *bool `json:"keep_divergent"`
@@ -71,6 +74,7 @@ type UpdateTaskRequest struct {
 	GitForce       *bool `json:"git_force"`
 	GitPrune       *bool `json:"git_prune"`
 	GitLFS         *bool `json:"git_lfs"`
+	SyncWiki       *bool `json:"sync_wiki"`
 	GitPushPrune   *bool `json:"git_push_prune"`
 	KeepDivergent  *bool `json:"keep_divergent"`
 }
