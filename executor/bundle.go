@@ -40,7 +40,7 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	if _, err := e.gitOutput(ctx, repoDir, args...); err != nil {
 		return "", errors.Wrap(err, "git bundle create")
 	}
-	details.WriteString(fmt.Sprintf("  bundle: %s\n", outPath))
+	fmt.Fprintf(details, "  bundle: %s\n", outPath)
 	return outPath, nil
 }
 
