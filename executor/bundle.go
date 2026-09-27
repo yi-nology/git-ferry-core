@@ -54,3 +54,42 @@ func sanitizeFileToken(s string) string {
 	}
 	return s
 }
+
+
+// rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。
+// 借鉴 gickup zip keep N:防冷备目录无限膨胀。
+func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
+	if keep <= 0 {
+		return 0
+	}
+	prefix := sanitizeFileToken(taskKey) + "-"
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		return 0
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ".bundle") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	// 文件名含时间戳 yyyyMMdd-HHmmss,字典序即时间序
+	if len(names) <= keep {
+		return 0
+	}
+	// 升序:最早在前
+	for i := 0; i < len(names); i++ {
+		for j := i + 1; j < len(names); j++ {
+			if names[j] < names[i] {
+				names[i], names[j] = names[j], names[i]
+			}
+		}
+	}
+	for _, name := range names[:len(names)-keep] {
+		if os.Remove(filepath.Join(backupDir, name)) == nil {
+			removed++
+		}
+	}
+	return removed
+}
