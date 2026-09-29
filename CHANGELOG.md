@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-29
+
+### Added
+
+- **`ExportDrillHistory`**: 演练历史导出 JSON/CSV(含哈希链 hash)。
+- **生命周期后台**: `sync.auto_discover_interval_minutes` 自动发现 + 冷备 retention 清理。
+- **GitHub App 全链路联调测试**: JWT → installation token → 缓存 → provider。
+
 ## [0.6.0] - 2026-09-29
 
 ### Added
