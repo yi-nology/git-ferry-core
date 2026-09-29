@@ -29,6 +29,26 @@ func (d *OperationLogDAO) Create(log *model.OperationLog) error {
 	return d.db.Create(log).Error
 }
 
+// Latest 返回最新一条审计(用于哈希链续接);无记录时返回 nil,nil。
+func (d *OperationLogDAO) Latest() (*model.OperationLog, error) {
+	var log model.OperationLog
+	err := d.db.Order("id DESC").First(&log).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &log, nil
+}
+
+// ListAscending 按 id 升序返回全部审计(哈希链校验用)。
+func (d *OperationLogDAO) ListAscending() ([]*model.OperationLog, error) {
+	var logs []*model.OperationLog
+	err := d.db.Order("id ASC").Find(&logs).Error
+	return logs, err
+}
+
 // List 按过滤条件分页查询审计日志，返回列表与总数。
 func (d *OperationLogDAO) List(page Pagination, filter *OperationLogFilter) ([]*model.OperationLog, int64, error) {
 	var logs []*model.OperationLog

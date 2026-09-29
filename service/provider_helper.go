@@ -23,8 +23,13 @@ func providerConfig(p *model.Platform, token string) sdkprov.Config {
 
 // platformProvider 返回平台对应的 provider,统一经 Manager 缓存,
 // 替代散落各处的 Config+NewProvider 样板。
+// Token 优先取 GitHub App installation token(若配置),否则用 AccessToken。
 func platformProvider(mgr *sdkprov.Manager, p *model.Platform) (sdkprov.Provider, error) {
-	prov, err := mgr.Get(providerConfig(p, p.AccessToken))
+	token, err := ResolvePlatformToken(p)
+	if err != nil {
+		return nil, fmt.Errorf("resolve platform token: %w", err)
+	}
+	prov, err := mgr.Get(providerConfig(p, token))
 	if err != nil {
 		return nil, fmt.Errorf("create provider failed: %w", err)
 	}

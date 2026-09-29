@@ -9,16 +9,20 @@ import (
 
 // Platform 存储 Git 平台配置
 type Platform struct {
-	ID            uint   `json:"id" gorm:"primaryKey"`
-	Key           string `json:"key" gorm:"uniqueIndex;size:255;not null"`
-	Name          string `json:"name" gorm:"size:100;not null"`
-	Type          string `json:"type" gorm:"size:50;not null"`         // github, gitlab, gitea, gitee, gitcode, atomgit, tencent_code, custom
-	InstanceURL   string `json:"instance_url" gorm:"size:255"`         // 实例地址，如 github.com, gitlab.company.com
-	APIURL        string `json:"api_url" gorm:"size:255;not null"`     // API 地址，如 https://api.github.com
-	AccessToken   string `json:"-" gorm:"type:text"`                   // 访问令牌（加密存储）
-	SkipTLSVerify bool   `json:"skip_tls_verify" gorm:"default:false"` // 跳过 TLS 证书验证
-	CACertPath    string `json:"ca_cert_path" gorm:"size:500"`         // 自定义 CA 证书路径
-	ProxyURL      string `json:"proxy_url" gorm:"size:255"`            // HTTP 代理地址
+	ID          uint   `json:"id" gorm:"primaryKey"`
+	Key         string `json:"key" gorm:"uniqueIndex;size:255;not null"`
+	Name        string `json:"name" gorm:"size:100;not null"`
+	Type        string `json:"type" gorm:"size:50;not null"`     // github, gitlab, gitea, gitee, gitcode, atomgit, tencent_code, custom
+	InstanceURL string `json:"instance_url" gorm:"size:255"`     // 实例地址，如 github.com, gitlab.company.com
+	APIURL      string `json:"api_url" gorm:"size:255;not null"` // API 地址，如 https://api.github.com
+	AccessToken string `json:"-" gorm:"type:text"`               // 访问令牌（加密存储）
+	// GitHub App 认证(优先于 PAT):安装级、可轮换、细粒度(借鉴 gickup/ghorg)
+	GitHubAppID          int64  `json:"github_app_id" gorm:"default:0"`
+	GitHubInstallationID int64  `json:"github_installation_id" gorm:"default:0"`
+	GitHubPrivateKey     string `json:"-" gorm:"type:text"`                   // PEM 私钥(加密存储)
+	SkipTLSVerify        bool   `json:"skip_tls_verify" gorm:"default:false"` // 跳过 TLS 证书验证
+	CACertPath           string `json:"ca_cert_path" gorm:"size:500"`         // 自定义 CA 证书路径
+	ProxyURL             string `json:"proxy_url" gorm:"size:255"`            // HTTP 代理地址
 	// SSHHostKeyFingerprint SSH 主机公钥指纹钉扎("SHA256:xxx");设置后优先于 known_hosts
 	SSHHostKeyFingerprint string `json:"ssh_host_key_fingerprint" gorm:"size:128"`
 	// SSHKnownHostsPath 平台级 known_hosts 路径(空=用 ~/.ssh/known_hosts)

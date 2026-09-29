@@ -378,3 +378,8 @@ func (s *Service) ListOperations(ctx context.Context, offset, limit int, filter 
 func (s *Service) OperationStats(ctx context.Context) (today, week, total int64, err error) {
 	return s.opLogs.Stats(ctx)
 }
+
+// VerifyAuditChain 校验审计哈希链。
+func (s *Service) VerifyAuditChain() (*AuditChainResult, error) {
+	return s.opLogs.VerifyAuditChain()
+}

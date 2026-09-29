@@ -25,11 +25,19 @@ func NewPlatformDAO(db *gorm.DB) (*PlatformDAO, error) {
 	return &PlatformDAO{db: db, cm: cm}, nil
 }
 
-// decrypt 就地解密平台 AccessToken(解密失败保留原文,兼容存量明文)
+// decrypt 就地解密平台 AccessToken 与 GitHub App 私钥(解密失败保留原文,兼容存量明文)
 func (d *PlatformDAO) decrypt(p *model.Platform) {
-	if p != nil && p.AccessToken != "" {
+	if p == nil {
+		return
+	}
+	if p.AccessToken != "" {
 		if decrypted, err := d.cm.Decrypt(p.AccessToken); err == nil {
 			p.AccessToken = decrypted
+		}
+	}
+	if p.GitHubPrivateKey != "" {
+		if decrypted, err := d.cm.Decrypt(p.GitHubPrivateKey); err == nil {
+			p.GitHubPrivateKey = decrypted
 		}
 	}
 }
@@ -41,16 +49,25 @@ func (d *PlatformDAO) decryptAll(platforms []*model.Platform) {
 	}
 }
 
-// encrypt 就地加密平台 AccessToken(空 token 跳过)
+// encrypt 就地加密平台 AccessToken 与 GitHub App 私钥(空值跳过)
 func (d *PlatformDAO) encrypt(p *model.Platform) error {
-	if p.AccessToken == "" {
+	if p == nil {
 		return nil
 	}
-	encrypted, err := d.cm.Encrypt(p.AccessToken)
-	if err != nil {
-		return errors.Wrap(err, "failed to encrypt access token")
+	if p.AccessToken != "" {
+		encrypted, err := d.cm.Encrypt(p.AccessToken)
+		if err != nil {
+			return errors.Wrap(err, "failed to encrypt access token")
+		}
+		p.AccessToken = encrypted
 	}
-	p.AccessToken = encrypted
+	if p.GitHubPrivateKey != "" {
+		encrypted, err := d.cm.Encrypt(p.GitHubPrivateKey)
+		if err != nil {
+			return errors.Wrap(err, "failed to encrypt github app private key")
+		}
+		p.GitHubPrivateKey = encrypted
+	}
 	return nil
 }
 

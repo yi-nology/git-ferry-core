@@ -33,12 +33,15 @@ type SyncTask struct {
 	GitPushPrune bool `json:"git_push_prune" gorm:"default:false"`
 	// KeepDivergent true=目标分支有源没有的提交时拒绝 force 覆盖(防丢代码);
 	// false=允许强制覆盖分歧分支。默认 true(安全)。
-	KeepDivergent bool           `json:"keep_divergent" gorm:"default:true"`
-	LastRunAt     *time.Time     `json:"last_run_at"`
-	LastStatus    string         `json:"last_status" gorm:"size:20"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
+	KeepDivergent bool `json:"keep_divergent" gorm:"default:true"`
+	// ForcePushPolicy 强制推送保护策略:allow | block | backup_on_demand。
+	// 空值按 KeepDivergent 兼容映射(keep_divergent=true → block)。
+	ForcePushPolicy string         `json:"force_push_policy" gorm:"size:32"`
+	LastRunAt       *time.Time     `json:"last_run_at"`
+	LastStatus      string         `json:"last_status" gorm:"size:20"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (SyncTask) TableName() string {
@@ -63,6 +66,8 @@ type CreateTaskRequest struct {
 	GitPushPrune  bool   `json:"git_push_prune"`
 	// KeepDivergent nil/缺省=true(安全);显式 false 才允许覆盖分歧
 	KeepDivergent *bool `json:"keep_divergent"`
+	// ForcePushPolicy allow|block|backup_on_demand;空=按 KeepDivergent 映射
+	ForcePushPolicy string `json:"force_push_policy"`
 }
 
 type UpdateTaskRequest struct {
@@ -85,4 +90,6 @@ type UpdateTaskRequest struct {
 	Submodules    *bool `json:"submodules"`
 	GitPushPrune  *bool `json:"git_push_prune"`
 	KeepDivergent *bool `json:"keep_divergent"`
+	// ForcePushPolicy 空=不修改
+	ForcePushPolicy string `json:"force_push_policy"`
 }

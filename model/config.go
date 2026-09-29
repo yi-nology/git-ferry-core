@@ -53,6 +53,29 @@ type GitConfig struct {
 	TempDir string `yaml:"temp_dir" env:"GIT_SYNC_GIT_TEMP_DIR"`
 }
 
+// BackupDestinationConfig 冷备多目的地之一(s3/webdav/azure/local)。
+type BackupDestinationConfig struct {
+	Type string `yaml:"type" json:"type"` // s3 | webdav | azure | local
+	Name string `yaml:"name" json:"name"`
+	// S3/OSS/MinIO
+	Endpoint  string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	Region    string `yaml:"region,omitempty" json:"region,omitempty"`
+	Bucket    string `yaml:"bucket,omitempty" json:"bucket,omitempty"`
+	Prefix    string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	AccessKey string `yaml:"access_key,omitempty" json:"access_key,omitempty"`
+	SecretKey string `yaml:"secret_key,omitempty" json:"secret_key,omitempty"`
+	PathStyle bool   `yaml:"path_style,omitempty" json:"path_style,omitempty"`
+	// WebDAV / local dir(用 url 字段)
+	URL      string `yaml:"url,omitempty" json:"url,omitempty"`
+	Username string `yaml:"username,omitempty" json:"username,omitempty"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	// Azure Blob
+	AccountName string `yaml:"account_name,omitempty" json:"account_name,omitempty"`
+	AccountKey  string `yaml:"account_key,omitempty" json:"account_key,omitempty"`
+	Container   string `yaml:"container,omitempty" json:"container,omitempty"`
+	Enabled     *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
 type SyncConfig struct {
 	// BackupDir git bundle 冷备输出目录(空=禁用)
 	BackupDir string `yaml:"backup_dir" env:"GIT_SYNC_BACKUP_DIR"`
@@ -68,6 +91,16 @@ type SyncConfig struct {
 		SecretKey string `yaml:"secret_key"`
 		PathStyle bool   `yaml:"path_style"`
 	} `yaml:"backup_s3"`
+	// BackupDestinations 多目的地扇出(s3/webdav/azure/local),与 BackupS3 并存;
+	// 两者都配置时全部尝试,逐目的地独立成功/失败。
+	BackupDestinations []BackupDestinationConfig `yaml:"backup_destinations"`
+	// BackupEncryptKey 冷备加密密钥(base64 32 字节 AES-256-GCM);空=不加密。
+	// 加密文件后缀 .bundle.enc,恢复时需同一密钥。
+	BackupEncryptKey string `yaml:"backup_encrypt_key" env:"GIT_SYNC_BACKUP_ENCRYPT_KEY"`
+	// BackupRetentionDays 冷备保留天数(0=不按天清理);与 BackupKeep 取更严者。
+	BackupRetentionDays int `yaml:"backup_retention_days" env:"GIT_SYNC_BACKUP_RETENTION_DAYS"`
+	// LegalHold 冻结清理(合规保留),true 时禁止自动轮转/过期删除。
+	LegalHold bool `yaml:"legal_hold" env:"GIT_SYNC_LEGAL_HOLD"`
 	// PartialClone 部分克隆 filter(blob:none / tree:0),空=全量
 	PartialClone   string `yaml:"partial_clone" env:"GIT_SYNC_PARTIAL_CLONE"`
 	MaxConcurrent  int    `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`

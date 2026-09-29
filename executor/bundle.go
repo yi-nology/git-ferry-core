@@ -92,3 +92,71 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
 	}
 	return removed
 }
+
+// fanoutBundle 冷备完成后:可选 AES-GCM 加密 + 多目的地扇出上传。
+// 失败只记 details,不影响同步主流程成功状态(冷备是附加能力)。
+func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *model.Config, details *strings.Builder) {
+	// 1) 可选加密
+	uploadPath := bundlePath
+	if cfg.Sync.BackupEncryptKey != "" {
+		encPath, err := EncryptFile(bundlePath, cfg.Sync.BackupEncryptKey)
+		if err != nil {
+			fmt.Fprintf(details, "  bundle encrypt error: %v\n", err)
+		} else {
+			uploadPath = encPath
+			fmt.Fprintf(details, "  bundle encrypted: %s\n", filepath.Base(encPath))
+		}
+	}
+
+	// 2) 组装目的地列表(legacy BackupS3 + BackupDestinations)
+	var dests []Destination
+	if cfg.Sync.BackupS3.Bucket != "" {
+		dests = append(dests, Destination{
+			Type:      DestS3,
+			Name:      "s3",
+			Endpoint:  cfg.Sync.BackupS3.Endpoint,
+			Region:    cfg.Sync.BackupS3.Region,
+			Bucket:    cfg.Sync.BackupS3.Bucket,
+			Prefix:    cfg.Sync.BackupS3.Prefix,
+			AccessKey: cfg.Sync.BackupS3.AccessKey,
+			SecretKey: cfg.Sync.BackupS3.SecretKey,
+			PathStyle: cfg.Sync.BackupS3.PathStyle,
+		})
+	}
+	for _, d := range cfg.Sync.BackupDestinations {
+		dests = append(dests, Destination{
+			Type:        DestinationType(d.Type),
+			Name:        d.Name,
+			Endpoint:    d.Endpoint,
+			Region:      d.Region,
+			Bucket:      d.Bucket,
+			Prefix:      d.Prefix,
+			AccessKey:   d.AccessKey,
+			SecretKey:   d.SecretKey,
+			PathStyle:   d.PathStyle,
+			URL:         d.URL,
+			Username:    d.Username,
+			Password:    d.Password,
+			AccountName: d.AccountName,
+			AccountKey:  d.AccountKey,
+			Container:   d.Container,
+			Enabled:     d.Enabled,
+		})
+	}
+	if len(dests) == 0 {
+		return
+	}
+
+	results := FanoutUpload(ctx, uploadPath, dests)
+	okN, failN := 0, 0
+	for _, r := range results {
+		if r.OK {
+			okN++
+			fmt.Fprintf(details, "  upload %s (%s): ok (%d bytes)\n", r.Destination, r.Type, r.Bytes)
+		} else {
+			failN++
+			fmt.Fprintf(details, "  upload %s (%s): FAILED: %s\n", r.Destination, r.Type, r.Error)
+		}
+	}
+	fmt.Fprintf(details, "  fanout: %d ok, %d failed\n", okN, failN)
+}

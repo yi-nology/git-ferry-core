@@ -18,12 +18,60 @@ func NewOperationLogService(opLogDAO *dao.OperationLogDAO) *OperationLogService 
 	return &OperationLogService{opLogDAO: opLogDAO}
 }
 
-// Record 记录一条审计日志（best-effort，由调用方决定如何处理错误）。
+// Record 记录一条审计日志(best-effort,由调用方决定如何处理错误)。
+// 自动续接哈希链:EntryHash = SHA256(PrevHash || payload)。
 func (s *OperationLogService) Record(ctx context.Context, entry *model.OperationLog) error {
 	if entry.Status == "" {
 		entry.Status = model.StatusSuccess
 	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now()
+	}
+	if entry.PrevHash == "" && entry.EntryHash == "" {
+		prev, err := s.opLogDAO.Latest()
+		if err == nil && prev != nil {
+			entry.PrevHash = prev.EntryHash
+		}
+		entry.EntryHash = model.ComputeEntryHash(entry.PrevHash, entry)
+	}
 	return s.opLogDAO.Create(entry)
+}
+
+// AuditChainResult 审计哈希链校验结果。
+type AuditChainResult struct {
+	OK       bool   `json:"ok"`
+	Checked  int    `json:"checked"`
+	BrokenAt uint   `json:"broken_at,omitempty"`
+	Message  string `json:"message"`
+}
+
+// VerifyAuditChain 全量校验审计哈希链完整性。
+func (s *OperationLogService) VerifyAuditChain() (*AuditChainResult, error) {
+	logs, err := s.opLogDAO.ListAscending()
+	if err != nil {
+		return nil, err
+	}
+	res := &AuditChainResult{OK: true}
+	prev := ""
+	for _, e := range logs {
+		if e.PrevHash != prev {
+			res.OK = false
+			res.BrokenAt = e.ID
+			res.Message = "prev_hash mismatch"
+			return res, nil
+		}
+		expect := model.ComputeEntryHash(e.PrevHash, e)
+		if e.EntryHash != expect {
+			res.OK = false
+			res.BrokenAt = e.ID
+			res.Message = "entry_hash mismatch (tampered?)"
+			return res, nil
+		}
+		prev = e.EntryHash
+		res.Checked++
+	}
+	res.Message = "audit chain intact"
+	return res, nil
 }
 
 // List 按过滤条件分页返回审计日志。

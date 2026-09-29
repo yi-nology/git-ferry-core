@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -97,13 +98,22 @@ func isDivergent(err error) bool {
 	return errors.As(err, &d)
 }
 
-// checkDivergence 分支分歧保护(借鉴 GitLab "Keep divergent refs"):
-// 目标分支存在源没有的提交时,拒绝 force 覆盖,防止静默丢代码。
-// 返回 nil 表示安全可推。
-func (e *Executor) checkDivergence(ctx context.Context, dir, sourceBranch, targetBranch string, force, keepDivergent bool) error {
+// checkDivergencePolicy 按显式策略做分歧保护。
+// backupDir 非空且 policy=backup_on_demand 时,覆盖前写入回滚快照。
+// 策略: allow=放行 | block=拒绝覆盖 | backup_on_demand=先快照再覆盖。
+func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir string) error {
 	// 未 force 时 git 自己会拒绝非快进,无需额外检查
-	if !force || !keepDivergent {
+	if !force {
 		return nil
+	}
+	switch policy {
+	case "allow":
+		return nil
+	case "block", "backup_on_demand", "":
+		// 继续检测分歧
+	default:
+		// 未知策略按最安全处理
+		policy = "block"
 	}
 	// 本地 source 与 target 远端跟踪比对:target 有而 source 没有的提交
 	targetRef := "refs/remotes/" + RemoteTarget + "/" + targetBranch
@@ -132,6 +142,15 @@ func (e *Executor) checkDivergence(ctx context.Context, dir, sourceBranch, targe
 		if line != "" {
 			extra = append(extra, line)
 		}
+	}
+	if policy == "backup_on_demand" && backupDir != "" {
+		// 覆盖前对目标分支打快照,可回滚
+		snap := filepath.Join(backupDir,
+			fmt.Sprintf("predemote-%s-%s.bundle", sanitizeFileToken(targetBranch), time.Now().Format("20060102-150405")))
+		if _, berr := e.gitOutput(ctx, dir, "bundle", "create", snap, targetRef); berr != nil {
+			return errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
+		}
+		return nil
 	}
 	return &divergentError{Branch: targetBranch, Extra: extra}
 }

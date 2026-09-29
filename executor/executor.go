@@ -265,18 +265,24 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	// Step 5: git bundle 冷备(可选)
 	if runTask.GitBundle {
 		backupDir := ""
-		if cfg := e.service.GetConfig(); cfg != nil {
-			backupDir = cfg.Sync.BackupDir
+		var cfgFull = e.service.GetConfig()
+		if cfgFull != nil {
+			backupDir = cfgFull.Sync.BackupDir
 		}
 		if backupDir == "" {
 			details.WriteString("  bundle: skipped (sync.backup_dir not set)\n")
 		} else {
 			step5 := e.beginStep(run.ID, "bundle")
 			details.WriteString("\nStep 5: Create cold backup bundle...\n")
-			if path, err := e.writeBundle(execCtx, workDir, backupDir, &runTask, &details); err != nil {
+			path, err := e.writeBundle(execCtx, workDir, backupDir, &runTask, &details)
+			if err != nil {
 				e.failStep(step5, err)
 				fmt.Fprintf(&details, "bundle error: %v\n", err)
 			} else {
+				// 多目的地扇出 + 可选加密(异地冷备)
+				if cfgFull != nil {
+					e.fanoutBundle(execCtx, path, cfgFull, &details)
+				}
 				e.completeStep(step5, path)
 				details.WriteString("Step 5: completed\n")
 			}
@@ -503,8 +509,20 @@ func defaultBranchOf(repo *model.Repo) string {
 }
 
 func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
-	// 分歧保护:force + keep_divergent 时拒绝覆盖目标独有提交
-	if err := e.checkDivergence(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, task.KeepDivergent); err != nil {
+	// 分歧保护:按 ForcePushPolicy(block/backup_on_demand/allow)处理
+	policy := task.ForcePushPolicy
+	if policy == "" {
+		if task.KeepDivergent {
+			policy = "block"
+		} else {
+			policy = "allow"
+		}
+	}
+	backupDir := ""
+	if cfg := e.service.GetConfig(); cfg != nil {
+		backupDir = cfg.Sync.BackupDir
+	}
+	if err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir); err != nil {
 		return err
 	}
 

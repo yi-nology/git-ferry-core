@@ -23,4 +23,13 @@ var (
 
 	// ErrEventNotFound is returned when a webhook event is not found.
 	ErrEventNotFound = errors.New("event not found")
+
+	// errBackupDisabled 冷备目录未配置。
+	errBackupDisabled = errors.New("backup dir not configured (sync.backup_dir)")
+
+	// errInvalidName 文件名非法(含路径分隔符)。
+	errInvalidName = errors.New("invalid file name")
+
+	// errLegalHold 合规冻结期间禁止清理冷备。
+	errLegalHold = errors.New("legal hold is active: cleanup refused")
 )
