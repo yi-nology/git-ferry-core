@@ -101,6 +101,10 @@ type SyncConfig struct {
 	BackupRetentionDays int `yaml:"backup_retention_days" env:"GIT_SYNC_BACKUP_RETENTION_DAYS"`
 	// LegalHold 冻结清理(合规保留),true 时禁止自动轮转/过期删除。
 	LegalHold bool `yaml:"legal_hold" env:"GIT_SYNC_LEGAL_HOLD"`
+	// AutoDiscoverIntervalMinutes 平台自动发现周期(分钟);0=关闭。
+	AutoDiscoverIntervalMinutes int `yaml:"auto_discover_interval_minutes" env:"GIT_SYNC_AUTO_DISCOVER_INTERVAL"`
+	// AutoDiscoverImport 发现到新仓库时是否自动导入(否则仅报告)。
+	AutoDiscoverImport bool `yaml:"auto_discover_import" env:"GIT_SYNC_AUTO_DISCOVER_IMPORT"`
 	// PartialClone 部分克隆 filter(blob:none / tree:0),空=全量
 	PartialClone   string `yaml:"partial_clone" env:"GIT_SYNC_PARTIAL_CLONE"`
 	MaxConcurrent  int    `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`

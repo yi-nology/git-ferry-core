@@ -150,6 +150,9 @@ func NewService(cfg *Config) (*Service, error) {
 		svc.cleanupTriggerTimes()
 	}()
 
+	// 生命周期后台:冷备过期清理 + 平台自动发现
+	svc.startLifecycleJobs()
+
 	return svc, nil
 }
 
