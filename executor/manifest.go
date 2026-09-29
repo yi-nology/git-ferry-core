@@ -4,10 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -203,7 +203,7 @@ func fileSHA256(path string) (string, error) {
 }
 
 func leafHash(name string, size int64, contentSHA string) string {
-	h := sha256.Sum256([]byte(name + "|" + itoa(size) + "|" + contentSHA))
+	h := sha256.Sum256([]byte(name + "|" + strutil.Itoa64(size) + "|" + contentSHA))
 	return hex.EncodeToString(h[:])
 }
 
@@ -240,5 +240,3 @@ func inferTaskKey(bundleName string) string {
 	}
 	return ""
 }
-
-func itoa(n int64) string { return strconv.FormatInt(n, 10) }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -271,17 +272,17 @@ func (s *Service) ExportDrillHistory(format string, limit int) (contentType stri
 			}
 			miss := strings.Join(r.MissingRefs, "|")
 			errs := strings.Join(r.Errors, "|")
-			b.WriteString(csvField(r.BundleName) + "," +
-				csvField(r.StartedAt.Format(time.RFC3339)) + "," +
+			b.WriteString(strutil.CSVEscape(r.BundleName) + "," +
+				strutil.CSVEscape(r.StartedAt.Format(time.RFC3339)) + "," +
 				strconv.FormatInt(r.DurationMS, 10) + "," +
 				strconv.FormatBool(r.Success) + "," +
 				strconv.FormatBool(r.FsckOK) + "," +
 				strconv.Itoa(r.CommitCount) + "," +
-				csvField(r.EstRTO) + "," +
+				strutil.CSVEscape(r.EstRTO) + "," +
 				strconv.FormatInt(r.BundleSize, 10) + "," +
-				csvField(miss) + "," +
-				csvField(errs) + "," +
-				csvField(e.Hash) + "\n")
+				strutil.CSVEscape(miss) + "," +
+				strutil.CSVEscape(errs) + "," +
+				strutil.CSVEscape(e.Hash) + "\n")
 		}
 		return "text/csv; charset=utf-8", []byte(b.String()), nil
 	}
@@ -294,11 +295,4 @@ func (s *Service) ExportDrillHistory(format string, limit int) (contentType stri
 		return "", nil, err
 	}
 	return "application/json; charset=utf-8", out, nil
-}
-
-func csvField(s string) string {
-	if strings.ContainsAny(s, ",\"\n") {
-		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-	}
-	return s
 }

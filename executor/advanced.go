@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -146,7 +147,7 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	if policy == "backup_on_demand" && backupDir != "" {
 		// 覆盖前对目标分支打快照,可回滚
 		snap := filepath.Join(backupDir,
-			fmt.Sprintf("predemote-%s-%s.bundle", sanitizeFileToken(targetBranch), time.Now().Format("20060102-150405")))
+			fmt.Sprintf("predemote-%s-%s.bundle", strutil.SanitizeFileToken(targetBranch), time.Now().Format("20060102-150405")))
 		if _, berr := e.gitOutput(ctx, dir, "bundle", "create", snap, targetRef); berr != nil {
 			return errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
 		}

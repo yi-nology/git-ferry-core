@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,7 @@ func ListBundles(backupDir, taskKey string) ([]BundleInfo, error) {
 	}
 	prefix := ""
 	if taskKey != "" {
-		prefix = sanitizeFileToken(taskKey) + "-"
+		prefix = strutil.SanitizeFileToken(taskKey) + "-"
 	}
 	out := []BundleInfo{}
 	for _, e := range entries {

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,8 +26,8 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 		return "", errors.Wrap(err, "create backup dir")
 	}
 	name := fmt.Sprintf("%s-%s-%s.bundle",
-		sanitizeFileToken(task.Key),
-		sanitizeFileToken(task.TargetBranch),
+		strutil.SanitizeFileToken(task.Key),
+		strutil.SanitizeFileToken(task.TargetBranch),
 		time.Now().Format("20060102-150405"))
 	outPath := filepath.Join(backupDir, name)
 
@@ -44,24 +45,13 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	return outPath, nil
 }
 
-// sanitizeFileToken 文件名安全化(防路径穿越)。
-func sanitizeFileToken(s string) string {
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, "\\", "_")
-	s = strings.ReplaceAll(s, "..", "_")
-	if s == "" {
-		return "unnamed"
-	}
-	return s
-}
-
 // rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。
 // 借鉴 gickup zip keep N:防冷备目录无限膨胀。
 func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
 	if keep <= 0 {
 		return 0
 	}
-	prefix := sanitizeFileToken(taskKey) + "-"
+	prefix := strutil.SanitizeFileToken(taskKey) + "-"
 	entries, err := os.ReadDir(backupDir)
 	if err != nil {
 		return 0

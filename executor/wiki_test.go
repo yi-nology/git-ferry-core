@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,8 +25,8 @@ func TestWikiURL(t *testing.T) {
 }
 
 func TestSanitizeFileToken(t *testing.T) {
-	assert.Equal(t, "my_task", sanitizeFileToken("my/task"))
-	assert.Equal(t, "a_b", sanitizeFileToken(`a\b`))
-	assert.Equal(t, "_", sanitizeFileToken(".."))
-	assert.Equal(t, "unnamed", sanitizeFileToken(""))
+	assert.Equal(t, "my_task", strutil.SanitizeFileToken("my/task"))
+	assert.Equal(t, "a_b", strutil.SanitizeFileToken(`a\b`))
+	assert.Equal(t, "_", strutil.SanitizeFileToken(".."))
+	assert.Equal(t, "unnamed", strutil.SanitizeFileToken(""))
 }

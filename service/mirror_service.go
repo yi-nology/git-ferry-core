@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -523,8 +524,8 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 			} else {
 				failed++
 				steps[idx].Status = "failed"
-				steps[idx].Detail = truncate(tagErr.Error(), 512)
-				statuses[tag] = &model.TagStatus{Tag: tag, Status: model.MirrorRunFailed, Detail: truncate(tagErr.Error(), 512)}
+				steps[idx].Detail = strutil.Truncate(tagErr.Error(), 512)
+				statuses[tag] = &model.TagStatus{Tag: tag, Status: model.MirrorRunFailed, Detail: strutil.Truncate(tagErr.Error(), 512)}
 			}
 		} else {
 			steps[idx].Status = "success"
@@ -815,11 +816,4 @@ func formatTime(t *time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

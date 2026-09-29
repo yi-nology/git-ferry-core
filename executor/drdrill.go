@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,7 +95,7 @@ func RunDRDrill(ctx context.Context, bundlePath string) (*DrillReport, error) {
 
 	// 3) fsck
 	fsckOut, fsckErr := runGitRead(ctx, dest, "fsck", "--strict", "--no-progress")
-	rep.FsckOutput = truncate(fsckOut, 4000)
+	rep.FsckOutput = strutil.Truncate(fsckOut, 4000)
 	rep.FsckOK = fsckErr == nil
 	if fsckErr != nil {
 		rep.Errors = append(rep.Errors, "fsck: "+fsckErr.Error())
@@ -228,13 +229,6 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }
 
 func formatDuration(d time.Duration) string {
