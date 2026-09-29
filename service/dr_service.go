@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -252,4 +253,52 @@ func estimateRTO(size int64) string {
 	// fsck 固定开销约 2s
 	sec += 2
 	return humanSeconds(sec)
+}
+
+// ExportDrillHistory 导出演练历史为 JSON 或 CSV(供审计/上报)。
+func (s *Service) ExportDrillHistory(format string, limit int) (contentType string, data []byte, err error) {
+	entries, err := s.DrillHistory(limit)
+	if err != nil {
+		return "", nil, err
+	}
+	if format == "csv" {
+		var b strings.Builder
+		b.WriteString("bundle_name,started_at,duration_ms,success,fsck_ok,commit_count,est_rto,bundle_size,missing_refs,errors,hash\n")
+		for _, e := range entries {
+			r := e.Report
+			if r == nil {
+				continue
+			}
+			miss := strings.Join(r.MissingRefs, "|")
+			errs := strings.Join(r.Errors, "|")
+			b.WriteString(csvField(r.BundleName) + "," +
+				csvField(r.StartedAt.Format(time.RFC3339)) + "," +
+				strconv.FormatInt(r.DurationMS, 10) + "," +
+				strconv.FormatBool(r.Success) + "," +
+				strconv.FormatBool(r.FsckOK) + "," +
+				strconv.Itoa(r.CommitCount) + "," +
+				csvField(r.EstRTO) + "," +
+				strconv.FormatInt(r.BundleSize, 10) + "," +
+				csvField(miss) + "," +
+				csvField(errs) + "," +
+				csvField(e.Hash) + "\n")
+		}
+		return "text/csv; charset=utf-8", []byte(b.String()), nil
+	}
+	out, err := json.MarshalIndent(map[string]any{
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"total":       len(entries),
+		"items":       entries,
+	}, "", "  ")
+	if err != nil {
+		return "", nil, err
+	}
+	return "application/json; charset=utf-8", out, nil
+}
+
+func csvField(s string) string {
+	if strings.ContainsAny(s, ",\"\n") {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return s
 }
