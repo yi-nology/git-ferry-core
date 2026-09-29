@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **架构**: `Execute` 改为 Stage 流水线(`Pipeline`/`RunContext`/`defaultPipeline`),
+  阶段单一职责、可单测、可扩展;`FanoutUpload` 改为 Uploader 策略注册表。
+
 ## [0.6.1] - 2026-09-29
 
 ### Added

@@ -8,8 +8,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"os"
-	"path"
 	"strings"
 	"time"
 )
@@ -60,123 +58,6 @@ type UploadResult struct {
 	Error       string `json:"error,omitempty"`
 	ObjectKey   string `json:"object_key,omitempty"`
 	Bytes       int64  `json:"bytes,omitempty"`
-}
-
-// FanoutUpload 把本地文件扇出到多个目的地(本地目的地=复制到 dir)。
-// 逐个独立尝试,失败不阻断其它目的地;返回逐目的地结果。
-func FanoutUpload(ctx context.Context, localPath string, dests []Destination) []UploadResult {
-	data, err := os.ReadFile(localPath) //nolint:gosec // 本地冷备路径由部署方配置
-	if err != nil {
-		return []UploadResult{{
-			Destination: "source",
-			Type:        string(DestLocal),
-			OK:          false,
-			Error:       "read local: " + err.Error(),
-		}}
-	}
-	base := path.Base(localPath)
-	out := make([]UploadResult, 0, len(dests))
-	for _, d := range dests {
-		if !d.enabled() {
-			continue
-		}
-		res := UploadResult{Destination: d.Name, Type: string(d.Type)}
-		if res.Destination == "" {
-			res.Destination = string(d.Type)
-		}
-		switch d.Type {
-		case DestS3, "":
-			if d.Bucket == "" {
-				res.Error = "s3: bucket required"
-			} else {
-				cfg := &S3Config{
-					Endpoint:  d.Endpoint,
-					Region:    d.Region,
-					Bucket:    d.Bucket,
-					Prefix:    d.Prefix,
-					AccessKey: d.AccessKey,
-					SecretKey: d.SecretKey,
-					PathStyle: d.PathStyle,
-				}
-				key := base
-				if err := s3PutObject(ctx, cfg, key, data); err != nil {
-					res.Error = err.Error()
-				} else {
-					res.OK = true
-					res.ObjectKey = key
-					res.Bytes = int64(len(data))
-				}
-			}
-		case DestWebDAV:
-			if d.URL == "" {
-				res.Error = "webdav: url required"
-			} else {
-				key := strings.TrimRight(d.URL, "/") + "/" + base
-				if err := webdavPut(ctx, key, d.Username, d.Password, data); err != nil {
-					res.Error = err.Error()
-				} else {
-					res.OK = true
-					res.ObjectKey = key
-					res.Bytes = int64(len(data))
-				}
-			}
-		case DestAzure:
-			if d.AccountName == "" || d.Container == "" {
-				res.Error = "azure: account_name and container required"
-			} else {
-				key := base
-				if d.Prefix != "" {
-					key = strings.Trim(d.Prefix, "/") + "/" + base
-				}
-				if err := azureBlobPut(ctx, d.AccountName, d.AccountKey, d.Container, key, data); err != nil {
-					res.Error = err.Error()
-				} else {
-					res.OK = true
-					res.ObjectKey = key
-					res.Bytes = int64(len(data))
-				}
-			}
-		case DestLocal:
-			if d.URL == "" {
-				res.Error = "local: dir (url field) required"
-			} else {
-				dst := strings.TrimRight(d.URL, "/") + "/" + base
-				if err := os.WriteFile(dst, data, 0o640); err != nil {
-					res.Error = err.Error()
-				} else {
-					res.OK = true
-					res.ObjectKey = dst
-					res.Bytes = int64(len(data))
-				}
-			}
-		default:
-			res.Error = "unknown destination type: " + string(d.Type)
-		}
-		out = append(out, res)
-	}
-	return out
-}
-
-// webdavPut WebDAV PUT(Basic Auth)。
-func webdavPut(ctx context.Context, url, user, pass string, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.ContentLength = int64(len(body))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	if user != "" {
-		req.SetBasicAuth(user, pass)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("webdav put %s: status %d", url, resp.StatusCode)
-	}
-	return nil
 }
 
 // azureBlobPut Azure Blob PUT(Shared Key 授权)。

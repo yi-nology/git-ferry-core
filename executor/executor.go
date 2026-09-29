@@ -70,15 +70,13 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	if err != nil {
 		return nil, err
 	}
-
 	startTime := time.Now()
 
-	// Build a summary details string for backward compatibility
 	var details strings.Builder
-	const maxDetailsSize = 64 * 1024 // 64KB 上限,防止超长任务撑爆 DB
+	const maxDetailsSize = 64 * 1024
 	fmt.Fprintf(&details, "=== Sync Task: %s ===\n", task.Name)
 	fmt.Fprintf(&details, "Trigger: %s\n", trigger)
-	fmt.Fprintf(&details, "Time: %s\n\n", startTime.Format(time.RFC3339))
+	fmt.Fprintf(&details, "Time: %s\n", startTime.Format(time.RFC3339))
 
 	defer func() {
 		run.EndTime = timePtr(time.Now())
@@ -88,59 +86,25 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 			detailStr = detailStr[:maxDetailsSize] + "\n... (truncated)"
 		}
 		run.Details = detailStr
-		// 事务化:run 完成 + task 状态更新在同一事务中,避免中间崩溃导致不一致
 		if err := e.service.CompleteRunWithTaskUpdate(run, task); err != nil {
 			slog.Error("failed to complete sync run and update task", "error", err)
 		}
 	}()
 
-	sourceRepo, err := e.service.GetRepoByKey(task.SourceRepoKey)
+	// 解析仓库/平台并组装运行态(阶段只读 RunContext,不各自查库)
+	rc, err := e.prepareRunContext(ctx, task, run, &details)
 	if err != nil {
-		return failRun(run, errors.Wrap(err, "query source repo failed"))
-	}
-	if sourceRepo == nil {
-		return failRun(run, errors.Newf("source repo not found: %s", task.SourceRepoKey))
+		return failRun(run, err)
 	}
 
-	targetRepo, err := e.service.GetRepoByKey(task.TargetRepoKey)
-	if err != nil {
-		return failRun(run, errors.Wrap(err, "query target repo failed"))
-	}
-	if targetRepo == nil {
-		return failRun(run, errors.Newf("target repo not found: %s", task.TargetRepoKey))
-	}
-
-	// 空分支回退到仓库默认分支,再回退 "main":否则 clone/fetch/push 会拼出
-	// "refs/heads/:refs/heads/" 这类坏 refspec,表现为静默零推送或直接失败。
-	// 注意:只用本地副本做 git 操作,不回写原 task(CompleteRun 会 Save 整行)。
-	runTask := *task
-	if runTask.SourceBranch == "" {
-		runTask.SourceBranch = defaultBranchOf(sourceRepo)
-	}
-	if runTask.TargetBranch == "" {
-		runTask.TargetBranch = defaultBranchOf(targetRepo)
-	}
-
-	// 预取 source/target 的 platform 记录,避免后续每次 git 操作都查 DB。
-	platforms := e.prefetchPlatforms(ctx, sourceRepo, targetRepo)
-
-	workDir := e.service.GetTempDir(task.Key)
-	if err := os.MkdirAll(workDir, 0o750); err != nil {
-		return failRun(run, errors.Wrap(err, "create work dir failed"))
-	}
-
+	workDir := rc.WorkDir
 	defer func() {
-		// 成功:保留 workdir,下次走增量 fetch(避免每次全量 clone);
-		// 非成功(失败/panic):清理,避免损坏的 .git / index.lock 影响下次执行。
-		// 注:同 taskKey 的并发执行已由 Service.runningTasks 互斥,不存在并发写同一 workdir。
 		if run.Status != model.StatusSuccess {
 			if rmErr := os.RemoveAll(workDir); rmErr != nil {
 				slog.Error("failed to cleanup temp dir", "error", rmErr, "dir", workDir)
 			}
 		}
 	}()
-
-	repoDir := filepath.Join(workDir, RepoDir)
 
 	timeout := e.service.GetConfig().Sync.DefaultTimeout
 	if timeout <= 0 {
@@ -149,149 +113,58 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	execCtx, execCancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer execCancel()
 
-	// Step 1: Clone or Fetch
-	var step1Name string
-	if _, err := os.Stat(filepath.Join(repoDir, ".git")); os.IsNotExist(err) {
-		step1Name = model.StepClone
-	} else {
-		step1Name = model.StepFetch
-	}
-
-	step1 := e.beginStep(run.ID, step1Name)
-	if step1Name == model.StepClone {
-		details.WriteString("Step 1: Initial clone of source repo...\n")
-		if err := e.cloneRepo(execCtx, repoDir, sourceRepo, &runTask, platforms[sourceRepo.PlatformID]); err != nil {
-			e.failStep(step1, err)
-			fmt.Fprintf(&details, "clone error: %v\n", err)
-			return failRun(run, errors.Wrap(err, "clone failed"))
-		}
-	} else {
-		details.WriteString("Step 1: Fetch updates from source repo...\n")
-		if err := e.fetchRepo(execCtx, repoDir, &runTask, sourceRepo, platforms[sourceRepo.PlatformID]); err != nil {
-			e.failStep(step1, err)
-			fmt.Fprintf(&details, "fetch error: %v\n", err)
-			return failRun(run, errors.Wrap(err, "fetch failed"))
-		}
-	}
-	if runTask.GitLFS {
-		if err := e.syncLFS(execCtx, repoDir, RemoteOrigin, true); err != nil {
-			e.failStep(step1, err)
-			fmt.Fprintf(&details, "lfs pull error: %v\n", err)
-			return failRun(run, errors.Wrap(err, "lfs fetch failed"))
-		}
-		details.WriteString("  LFS objects fetched\n")
-	}
-	e.completeStep(step1, "")
-	details.WriteString("Step 1: completed\n")
-
-	// Step 2: Ensure target remote
-	step2 := e.beginStep(run.ID, model.StepEnsureRemote)
-	details.WriteString("\nStep 2: Ensure target remote exists...\n")
-	if err := e.ensureRemote(execCtx, repoDir, targetRepo); err != nil {
-		e.failStep(step2, err)
-		fmt.Fprintf(&details, "add remote error: %v\n", err)
-		return failRun(run, errors.Wrap(err, "add remote failed"))
-	}
-	e.completeStep(step2, "")
-	details.WriteString("Step 2: completed\n")
-
-	// Step 3: Push with retry
-	step3 := e.beginStep(run.ID, model.StepPush)
-	details.WriteString("\nStep 3: Push to target...\n")
-	maxRetries := e.service.GetConfig().Sync.RetryCount
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
-
-	var pushErr error
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			step3.RetryCount = attempt - 1
-			fmt.Fprintf(&details, "\nRetry attempt %d/%d...\n", attempt, maxRetries)
-			// 退避期间监听 context,超时/取消时立即中止,不再干等
-			backoff := time.Duration(attempt*model.RetryBackoffMs) * time.Millisecond
-			timer := time.NewTimer(backoff)
-			select {
-			case <-execCtx.Done():
-				timer.Stop()
-				pushErr = execCtx.Err()
-				fmt.Fprintf(&details, "retry aborted (context done): %v\n", pushErr)
-			case <-timer.C:
-			}
-			if pushErr != nil {
-				break
-			}
-		}
-
-		pushErr = e.push(execCtx, repoDir, &runTask, targetRepo, platforms[targetRepo.PlatformID])
-		if pushErr == nil {
-			break
-		}
-
-		if attempt < maxRetries {
-			details.WriteString("Push failed, retrying fetch...\n")
-			if err := e.fetchRepo(execCtx, repoDir, &runTask, sourceRepo, platforms[sourceRepo.PlatformID]); err != nil {
-				fmt.Fprintf(&details, "Retry fetch failed: %v\n", err)
-			}
-		}
-	}
-
-	run.RetryTotal = max(0, step3.RetryCount)
-
-	if pushErr != nil {
-		e.failStep(step3, pushErr)
-		fmt.Fprintf(&details, "push error: %v\n", pushErr)
-		return failRun(run, errors.Wrapf(pushErr, "push failed after %d attempts", maxRetries))
-	}
-	e.completeStep(step3, "")
-	details.WriteString("Step 3: completed\n")
-
-	// Step 4: Wiki(可选;wiki 不存在时跳过,不算失败)
-	if runTask.SyncWiki {
-		step4 := e.beginStep(run.ID, model.StepWiki)
-		details.WriteString("\nStep 4: Sync wiki...\n")
-		if err := e.syncWiki(execCtx, workDir, &runTask, sourceRepo, targetRepo,
-			platforms[sourceRepo.PlatformID], platforms[targetRepo.PlatformID], &details); err != nil {
-			// wiki 失败不阻断代码同步成功(可单独排查)
-			e.failStep(step4, err)
-			fmt.Fprintf(&details, "wiki sync error: %v\n", err)
-			details.WriteString("  (code sync succeeded; wiki sync failed)\n")
-		} else {
-			e.completeStep(step4, "")
-			details.WriteString("Step 4: completed\n")
-		}
-	}
-
-	// Step 5: git bundle 冷备(可选)
-	if runTask.GitBundle {
-		backupDir := ""
-		var cfgFull = e.service.GetConfig()
-		if cfgFull != nil {
-			backupDir = cfgFull.Sync.BackupDir
-		}
-		if backupDir == "" {
-			details.WriteString("  bundle: skipped (sync.backup_dir not set)\n")
-		} else {
-			step5 := e.beginStep(run.ID, "bundle")
-			details.WriteString("\nStep 5: Create cold backup bundle...\n")
-			path, err := e.writeBundle(execCtx, workDir, backupDir, &runTask, &details)
-			if err != nil {
-				e.failStep(step5, err)
-				fmt.Fprintf(&details, "bundle error: %v\n", err)
-			} else {
-				// 多目的地扇出 + 可选加密(异地冷备)
-				if cfgFull != nil {
-					e.fanoutBundle(execCtx, path, cfgFull, &details)
-				}
-				e.completeStep(step5, path)
-				details.WriteString("Step 5: completed\n")
-			}
-		}
+	if err := defaultPipeline().Run(execCtx, rc); err != nil {
+		return failRun(run, err)
 	}
 
 	run.Status = model.StatusSuccess
 	details.WriteString("\n=== Sync completed successfully ===")
 	return run, nil
+}
+
+// prepareRunContext 解析仓库/平台、准备工作目录,构造流水线共享运行态。
+func (e *Executor) prepareRunContext(ctx context.Context, task *model.SyncTask, run *model.SyncRun, details *strings.Builder) (*RunContext, error) {
+	sourceRepo, err := e.service.GetRepoByKey(task.SourceRepoKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "query source repo failed")
+	}
+	if sourceRepo == nil {
+		return nil, errors.Newf("source repo not found: %s", task.SourceRepoKey)
+	}
+	targetRepo, err := e.service.GetRepoByKey(task.TargetRepoKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "query target repo failed")
+	}
+	if targetRepo == nil {
+		return nil, errors.Newf("target repo not found: %s", task.TargetRepoKey)
+	}
+
+	// 空分支回退默认分支:避免坏 refspec 静默零推送
+	runTask := *task
+	if runTask.SourceBranch == "" {
+		runTask.SourceBranch = defaultBranchOf(sourceRepo)
+	}
+	if runTask.TargetBranch == "" {
+		runTask.TargetBranch = defaultBranchOf(targetRepo)
+	}
+
+	platforms := e.prefetchPlatforms(ctx, sourceRepo, targetRepo)
+	workDir := e.service.GetTempDir(task.Key)
+	if err := os.MkdirAll(workDir, 0o750); err != nil {
+		return nil, errors.Wrap(err, "create work dir failed")
+	}
+
+	return &RunContext{
+		Task:       &runTask,
+		SourceRepo: sourceRepo,
+		TargetRepo: targetRepo,
+		Platforms:  platforms,
+		WorkDir:    workDir,
+		RepoDir:    filepath.Join(workDir, RepoDir),
+		Details:    details,
+		Run:        run,
+		Exec:       e,
+	}, nil
 }
 
 // failRun 标记 run 失败并按错误分类填充字段,统一 Execute 的失败出口。
