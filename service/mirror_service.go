@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -646,112 +645,6 @@ type MirrorVersionsResult struct {
 }
 
 // GetMirrorVersions 源仓库 tag 列表 ∪ 执行历史,合并出版本矩阵。
-func (m *MirrorService) GetMirrorVersions(ctx context.Context, channelID uint) (*MirrorVersionsResult, error) {
-	ch, err := m.channels.FindByID(channelID)
-	if err != nil {
-		return nil, fmt.Errorf("通道不存在: %d", channelID)
-	}
-	targets, err := m.channels.FindTargets(channelID)
-	if err != nil {
-		return nil, err
-	}
-
-	// tag → commit(取自本地克隆)
-	tagCommits := map[string]string{}
-	dir, cleanup, err := m.ensureRepo(ctx, ch)
-	if err == nil {
-		_ = cleanup
-		if infos, listErr := m.backend.GetTagList(ctx, dir); listErr == nil {
-			for _, ti := range infos {
-				tagCommits[ti.Name] = ti.Hash
-			}
-		} else {
-			slog.Warn("mirror: 列出 tag 失败", "channel", channelID, "error", listErr)
-		}
-	} else {
-		slog.Warn("mirror: 源仓库不可用,仅展示历史记录", "channel", channelID, "error", err)
-	}
-
-	// 执行历史:最近一次 (tag,target) 的结果 + 验证状态
-	type cell struct {
-		state, executedAt, commit, tree, verify string
-	}
-	cells := map[string]map[uint]*cell{} // tag -> targetID -> cell
-	runs, err := m.runs.FindAllByChannel(channelID)
-	if err != nil {
-		return nil, err
-	}
-	// runs 按 id 倒序,首个即最新
-	for _, run := range runs {
-		var sts map[string]*model.TagStatus
-		_ = json.Unmarshal([]byte(run.TagStatuses), &sts)
-		for tag, st := range sts {
-			if cells[tag] == nil {
-				cells[tag] = map[uint]*cell{}
-			}
-			c := cells[tag][run.TargetID]
-			if c == nil {
-				c = &cell{state: "unpublished", verify: "unverified"}
-				cells[tag][run.TargetID] = c
-			}
-			switch run.Kind {
-			case model.MirrorKindVerify:
-				if c.verify == "unverified" {
-					if st.Status == model.MirrorRunSuccess {
-						c.verify = "passed"
-					} else {
-						c.verify = "failed"
-					}
-				}
-			default:
-				c.state = st.Status
-				c.executedAt = formatTime(run.StartedAt)
-				c.commit, c.tree = st.Commit, st.Tree
-			}
-		}
-	}
-
-	// 组装:历史 tag ∪ 远端 tag
-	seen := map[string]bool{}
-	var versions []MirrorVersion
-	appendVersion := func(tag string) {
-		if seen[tag] {
-			return
-		}
-		seen[tag] = true
-		v := MirrorVersion{Tag: tag, Commit: tagCommits[tag]}
-		for _, t := range targets {
-			c := cells[tag][t.ID]
-			mvt := MirrorVersionTarget{
-				TargetID: t.ID,
-				Target:   t.TargetModule,
-				State:    "unpublished",
-				Verify:   "unverified",
-			}
-			if ch.Mode == model.MirrorModeBackup {
-				mvt.State = "unbackedup"
-			}
-			if c != nil {
-				mvt.State, mvt.ExecutedAt, mvt.Commit, mvt.Tree, mvt.Verify =
-					c.state, c.executedAt, c.commit, c.tree, c.verify
-			}
-			v.Targets = append(v.Targets, mvt)
-		}
-		versions = append(versions, v)
-	}
-	for tag := range cells {
-		appendVersion(tag)
-	}
-	for tag := range tagCommits {
-		appendVersion(tag)
-	}
-	// 新版本在前(按 tag 名倒序的简单近似)
-	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].Tag > versions[j].Tag
-	})
-	return &MirrorVersionsResult{Mode: ch.Mode, Module: ch.Module, Versions: versions}, nil
-}
-
 // ---------- 辅助 ----------
 
 func (m *MirrorService) loadChannelAndTarget(channelID, targetID uint) (*model.MirrorChannel, *model.MirrorTarget, error) {

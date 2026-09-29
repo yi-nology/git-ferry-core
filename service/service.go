@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -49,72 +48,47 @@ type Service struct {
 }
 
 func NewService(cfg *Config) (*Service, error) {
-	db, err := model.InitDB(cfg.Database.Driver, cfg.Database.DSN)
-	if err != nil {
-		return nil, errors.Wrap(err, "init db failed")
-	}
-
-	sqlDB, err := db.DB()
+	db, err := initDB(cfg)
 	if err != nil {
 		return nil, err
 	}
-	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
-	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifeSec) * time.Second)
-	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.Database.ConnMaxIdleSec) * time.Second)
-
-	if err := os.MkdirAll(cfg.Git.TempDir, 0o750); err != nil {
-		return nil, errors.Wrap(err, "create temp dir failed")
+	if err := ensureTempDir(cfg.Git.TempDir); err != nil {
+		return nil, err
 	}
-
-	repoDAO, err := dao.NewRepoDAO(db)
+	daos, err := initDAOs(db)
 	if err != nil {
-		return nil, errors.Wrap(err, "init repo DAO failed")
+		return nil, err
 	}
 
-	providerMgr := sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64))
-	taskDAO := dao.NewSyncTaskDAO(db)
-	runDAO := dao.NewSyncRunDAO(db)
-	runStepDAO := dao.NewSyncRunStepDAO(db)
-	ruleDAO := dao.NewWebhookRuleDAO(db)
-	eventDAO := dao.NewWebhookEventDAO(db)
-	platformDAO, err := dao.NewPlatformDAO(db)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create PlatformDAO")
-	}
-	opLogDAO := dao.NewOperationLogDAO(db)
-
-	repoService := NewRepoService(repoDAO, platformDAO, providerMgr)
-	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
-	webhookService := NewWebhookService(ruleDAO, eventDAO, repoDAO)
-	platformService := NewPlatformService(platformDAO, repoDAO, providerMgr)
-	opLogService := NewOperationLogService(opLogDAO)
+	repoService := NewRepoService(daos.repo, daos.platform, daos.provider)
+	taskService := NewTaskService(daos.task, daos.run, daos.runStep, daos.repo)
+	webhookService := NewWebhookService(daos.rule, daos.event, daos.repo)
+	platformService := NewPlatformService(daos.platform, daos.repo, daos.provider)
+	opLogService := NewOperationLogService(daos.opLog)
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-
-	// 启动 provider 缓存清理 janitor,定期淘汰过期条目
-	providerMgr.StartJanitor(bgCtx, 10*time.Minute)
+	daos.provider.StartJanitor(bgCtx, 10*time.Minute)
 
 	svc := &Service{
 		config:    cfg,
 		db:        db,
-		sqlDB:     sqlDB,
 		repos:     repoService,
 		tasks:     taskService,
 		webhooks:  webhookService,
 		platforms: platformService,
 		opLogs:    opLogService,
-		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设/用户习惯一致。
-		// 此前用 WithSeconds() 的 6 字段解析,导致 "* * * * *" 这类标准表达式
-		// 报 "expected exactly 6 fields, found 5",任务创建与定时注册全失败。
+		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
 		cron:         cron.New(),
 		cronEntryIDs: make(map[string]cron.EntryID),
 		cleanupDone:  make(chan struct{}),
 		bgCtx:        bgCtx,
 		bgCancel:     bgCancel,
 	}
+	// sqlDB 仅在 Close 时用到
+	if sqlDB, err := db.DB(); err == nil {
+		svc.sqlDB = sqlDB
+	}
 
-	// 并发控制:配了 redis 用分布式(多实例安全),否则进程内(单实例)
 	guard, err := newGuard(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.Sync.MaxConcurrent, lock.RedisPoolOptions{
 		PoolSize:        cfg.Redis.PoolSize,
 		MinIdleConns:    cfg.Redis.MinIdleConns,
@@ -149,8 +123,6 @@ func NewService(cfg *Config) (*Service, error) {
 		}()
 		svc.cleanupTriggerTimes()
 	}()
-
-	// 生命周期后台:冷备过期清理 + 平台自动发现
 	svc.startLifecycleJobs()
 
 	return svc, nil

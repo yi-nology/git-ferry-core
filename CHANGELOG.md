@@ -6,8 +6,11 @@
 
 ### Changed
 
-- **架构**: `Execute` 改为 Stage 流水线(`Pipeline`/`RunContext`/`defaultPipeline`),
-  阶段单一职责、可单测、可扩展;`FanoutUpload` 改为 Uploader 策略注册表。
+- **内聚重构**:
+  - `GetMirrorVersions` 拆为 `loadTagCommits` / `buildVersionCells` / `assembleVersionMatrix`(纯函数可单测)。
+  - `SyncPlatformReposFiltered` 拆为 `planRepoUpsert` + `persistRepoPlan` + `indexExistingByKey`。
+  - `NewService` 经 `initDB`/`initDAOs`/`appDAOs` 装配,压缩样板。
+  - `Execute` 改为 Stage 流水线;`FanoutUpload` 为 Uploader 策略注册表。
 
 ## [0.6.1] - 2026-09-29
 
