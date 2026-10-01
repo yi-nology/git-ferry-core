@@ -110,6 +110,11 @@ type SyncConfig struct {
 	MaxConcurrent  int    `yaml:"max_concurrent" env:"GIT_SYNC_MAX_CONCURRENT"`
 	DefaultTimeout int    `yaml:"default_timeout" env:"GIT_SYNC_DEFAULT_TIMEOUT"`
 	RetryCount     int    `yaml:"retry_count" env:"GIT_SYNC_RETRY_COUNT"`
+	// PostExecScript 同步结束（成功或失败）后执行的脚本；
+	// 注入 GITFERRY_TASK / GITFERRY_RESULT / GITFERRY_RUN_ID / GITFERRY_TRIGGER。
+	PostExecScript string `yaml:"post_exec_script" env:"GIT_SYNC_POST_EXEC_SCRIPT"`
+	// BackupFormat 冷备形态:bundle(默认,git 语义) | zip(人工取件友好)
+	BackupFormat string `yaml:"backup_format" env:"GIT_SYNC_BACKUP_FORMAT"`
 }
 
 type WebhookConfig struct {

@@ -1,9 +1,9 @@
 package executor
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
-	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +11,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 )
 
 // writeBundle 冷备:把同步后的分支打成 git bundle(单文件、可校验、可异地存储)。
@@ -18,6 +19,7 @@ import (
 // 不引入新的存储格式,恢复时 `git clone bundle` 即可。
 //
 // 命名: <taskKey>-<branch>-<yyyyMMdd-HHmmss>.bundle
+// BackupFormat=zip 时改为打包 workdir 为 .zip(gickup 风格,便于人工取件)。
 func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, task *model.SyncTask, details *strings.Builder) (string, error) {
 	if backupDir == "" {
 		return "", errors.New("backup dir not configured")
@@ -32,6 +34,20 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	outPath := filepath.Join(backupDir, name)
 
 	repoDir := filepath.Join(workDir, RepoDir)
+	format := ""
+	if cfg := e.service.GetConfig(); cfg != nil {
+		format = cfg.Sync.BackupFormat
+	}
+	if strings.EqualFold(format, "zip") {
+		zipName := strings.TrimSuffix(name, ".bundle") + ".zip"
+		zipPath := filepath.Join(backupDir, zipName)
+		if err := zipDir(repoDir, zipPath); err != nil {
+			return "", errors.Wrap(err, "zip archive")
+		}
+		fmt.Fprintf(details, "  archive: %s\n", zipPath)
+		return zipPath, nil
+	}
+
 	// 打当前同步分支 + HEAD(缺 HEAD 则 clone 后无法 checkout) + 标签
 	ref := "refs/heads/" + task.SourceBranch
 	args := []string{"bundle", "create", outPath, ref, "HEAD"}
@@ -43,6 +59,39 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	}
 	fmt.Fprintf(details, "  bundle: %s\n", outPath)
 	return outPath, nil
+}
+
+// zipDir 将目录打包为 zip(相对路径,便于解压还原)。
+func zipDir(srcDir, dest string) error {
+	f, err := os.Create(dest) //nolint:gosec // dest 由 backupDir+任务 key 构造
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	zw := zip.NewWriter(f)
+	defer func() { _ = zw.Close() }()
+	return filepath.Walk(srcDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(srcDir, p)
+		if rerr != nil {
+			return rerr
+		}
+		w, cerr := zw.Create(rel)
+		if cerr != nil {
+			return cerr
+		}
+		data, rerr := os.ReadFile(p) //nolint:gosec // workdir 内文件
+		if rerr != nil {
+			return rerr
+		}
+		_, werr := w.Write(data)
+		return werr
+	})
 }
 
 // rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。
@@ -58,7 +107,11 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) || !strings.HasSuffix(e.Name(), ".bundle") {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".bundle") && !strings.HasSuffix(e.Name(), ".zip") &&
+			!strings.HasSuffix(e.Name(), ".bundle.enc") && !strings.HasSuffix(e.Name(), ".zip.enc") {
 			continue
 		}
 		names = append(names, e.Name())

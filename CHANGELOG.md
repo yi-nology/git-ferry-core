@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.7.0] - 2026-10-01
+
+### Added
+
+- **分支过滤**：`SyncTask.include_branches`（glob 白名单）与
+  `exclude_ref_patterns`（默认忽略 refs/pull/* 等）；执行前过滤 refs。
+- **post-exec 钩子** `sync.post_exec_script`：注入 GITFERRY_TASK/RESULT/RUN_ID/TRIGGER。
+- **冷备 zip** `sync.backup_format: bundle|zip`（keep 轮转）。
+- **org 映射辅助** `service/orgmap.go`。
+
 ## [Unreleased]
 
 ### Changed

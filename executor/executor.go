@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -86,6 +87,12 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 			detailStr = detailStr[:maxDetailsSize] + "\n... (truncated)"
 		}
 		run.Details = detailStr
+		e.runPostExec(task, run, &details)
+		// post-exec 可能追加 details，重新截断
+		run.Details = details.String()
+		if len(run.Details) > maxDetailsSize {
+			run.Details = run.Details[:maxDetailsSize] + "\n... (truncated)"
+		}
 		if err := e.service.CompleteRunWithTaskUpdate(run, task); err != nil {
 			slog.Error("failed to complete sync run and update task", "error", err)
 		}
@@ -120,6 +127,32 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	run.Status = model.StatusSuccess
 	details.WriteString("\n=== Sync completed successfully ===")
 	return run, nil
+}
+
+// runPostExec 执行 sync.post_exec_script（ghorg post_exec_script 模式）。
+// 失败只记 details，不影响同步结果。
+func (e *Executor) runPostExec(task *model.SyncTask, run *model.SyncRun, details *strings.Builder) {
+	cfg := e.service.GetConfig()
+	if cfg == nil || cfg.Sync.PostExecScript == "" {
+		return
+	}
+	result := "failed"
+	if run.Status == model.StatusSuccess {
+		result = "success"
+	}
+	cmd := exec.Command(cfg.Sync.PostExecScript) //nolint:gosec // 路径由部署方配置
+	cmd.Env = append(os.Environ(),
+		"GITFERRY_TASK="+task.Key,
+		"GITFERRY_RESULT="+result,
+		"GITFERRY_RUN_ID="+fmt.Sprint(run.ID),
+		"GITFERRY_TRIGGER="+run.TriggerSource,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(details, "\n=== post_exec_script error: %v ===\n%s\n", err, out)
+		return
+	}
+	fmt.Fprintf(details, "\n=== post_exec_script ok ===\n%s\n", out)
 }
 
 // prepareRunContext 解析仓库/平台、准备工作目录,构造流水线共享运行态。
@@ -288,7 +321,7 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	if cfg := e.service.GetConfig(); cfg != nil {
 		partial = cfg.Sync.PartialClone
 	}
-	return e.backend.Clone(ctx, gitbackend.CloneOptions{
+	err := e.backend.Clone(ctx, gitbackend.CloneOptions{
 		URL:          repo.CloneURL,
 		Path:         dir,
 		Branch:       task.SourceBranch,
@@ -297,6 +330,74 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 		Submodules:   task.Submodules,
 		Auth:         e.authConfig(ctx, repo, platform),
 	})
+	if err != nil {
+		return err
+	}
+	e.excludeRefs(ctx, dir, task)
+	return nil
+}
+
+// defaultExcludeRefs 忽略 PR/MR 引用,避免污染目标仓。
+var defaultExcludeRefs = []string{"refs/pull/*", "refs/merge-requests/*"}
+
+// excludeRefs 按 task.ExcludeRefPatterns(空=默认)删除本地匹配 ref。
+func (e *Executor) excludeRefs(ctx context.Context, dir string, task *model.SyncTask) {
+	patterns := splitCSVNonEmpty(task.ExcludeRefPatterns)
+	if len(patterns) == 0 {
+		patterns = defaultExcludeRefs
+	}
+	out, err := e.gitOutput(ctx, dir, "for-each-ref", "--format=%(refname)")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		ref := strings.TrimSpace(line)
+		if ref == "" {
+			continue
+		}
+		for _, p := range patterns {
+			if matchRefGlob(p, ref) {
+				_, _ = e.gitOutput(ctx, dir, "update-ref", "-d", ref)
+				break
+			}
+		}
+	}
+}
+
+func splitCSVNonEmpty(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// matchRefGlob 用统一 globMatch（`*` 跨 `/`），匹配完整 ref 名。
+func matchRefGlob(pattern, ref string) bool {
+	return globMatch(pattern, ref)
+}
+
+// matchesInclude 是否在 include_branches 白名单内(空=全部)。
+func matchesInclude(include, branch string) bool {
+	list := splitCSVNonEmpty(include)
+	if len(list) == 0 {
+		return true
+	}
+	for _, p := range list {
+		if p == branch {
+			return true
+		}
+		if globMatch(p, branch) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
@@ -317,6 +418,7 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 	if err != nil {
 		return err
 	}
+	e.excludeRefs(ctx, dir, task)
 
 	// 增量同步时分支已在正确位置,仅当分支不同时才 checkout
 	cur, curErr := e.backend.GetCurrentBranch(ctx, dir)
@@ -415,15 +517,22 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		branches, err := e.listLocalBranches(dir)
 		if err == nil {
 			for _, b := range branches {
-				if matchBranchGlob(task.SourceBranch, b) {
-					refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
+				if !matchBranchGlob(task.SourceBranch, b) {
+					continue
 				}
+				if !matchesInclude(task.IncludeBranches, b) {
+					continue
+				}
+				refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 			}
 		}
 		if len(refSpecs) == 0 {
 			return fmt.Errorf("no local branches match %q", task.SourceBranch)
 		}
 	} else {
+		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
+			return fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+		}
 		refSpecs = []string{fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch)}
 	}
 

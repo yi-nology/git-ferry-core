@@ -36,12 +36,18 @@ type SyncTask struct {
 	KeepDivergent bool `json:"keep_divergent" gorm:"default:true"`
 	// ForcePushPolicy 强制推送保护策略:allow | block | backup_on_demand。
 	// 空值按 KeepDivergent 兼容映射(keep_divergent=true → block)。
-	ForcePushPolicy string         `json:"force_push_policy" gorm:"size:32"`
-	LastRunAt       *time.Time     `json:"last_run_at"`
-	LastStatus      string         `json:"last_status" gorm:"size:20"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+	ForcePushPolicy string `json:"force_push_policy" gorm:"size:32"`
+	// IncludeBranches 逗号分隔分支 glob 白名单(如 "main,release/*")。
+	// 空=不过滤；非空时推送侧仅同步匹配分支(在 SourceBranch 基础上再收窄)。
+	IncludeBranches string `json:"include_branches" gorm:"size:512"`
+	// ExcludeRefPatterns 逗号分隔 ref glob 黑名单(如 "refs/pull/*,refs/merge-requests/*")。
+	// fetch/clone 后删除匹配 ref,避免 PR 引用污染目标。空=默认排除 refs/pull/* 与 refs/merge-requests/*。
+	ExcludeRefPatterns string         `json:"exclude_ref_patterns" gorm:"size:512"`
+	LastRunAt          *time.Time     `json:"last_run_at"`
+	LastStatus         string         `json:"last_status" gorm:"size:20"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (SyncTask) TableName() string {
@@ -68,6 +74,10 @@ type CreateTaskRequest struct {
 	KeepDivergent *bool `json:"keep_divergent"`
 	// ForcePushPolicy allow|block|backup_on_demand;空=按 KeepDivergent 映射
 	ForcePushPolicy string `json:"force_push_policy"`
+	// IncludeBranches 逗号分隔 glob 白名单;空=全部
+	IncludeBranches string `json:"include_branches"`
+	// ExcludeRefPatterns 逗号分隔 ref glob 黑名单;空=使用默认 PR refs 排除
+	ExcludeRefPatterns string `json:"exclude_ref_patterns"`
 }
 
 type UpdateTaskRequest struct {
@@ -92,4 +102,7 @@ type UpdateTaskRequest struct {
 	KeepDivergent *bool `json:"keep_divergent"`
 	// ForcePushPolicy 空=不修改
 	ForcePushPolicy string `json:"force_push_policy"`
+	// IncludeBranches/ExcludeRefPatterns:空字符串=不修改
+	IncludeBranches    string `json:"include_branches"`
+	ExcludeRefPatterns string `json:"exclude_ref_patterns"`
 }

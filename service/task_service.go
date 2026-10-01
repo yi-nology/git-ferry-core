@@ -98,7 +98,9 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 			}
 			return *req.KeepDivergent
 		}(),
-		ForcePushPolicy: req.ForcePushPolicy,
+		ForcePushPolicy:    req.ForcePushPolicy,
+		IncludeBranches:    req.IncludeBranches,
+		ExcludeRefPatterns: req.ExcludeRefPatterns,
 	}
 
 	if err := ts.taskDAO.Create(task); err != nil {
@@ -172,6 +174,12 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	}
 	if req.ForcePushPolicy != "" {
 		task.ForcePushPolicy = req.ForcePushPolicy
+	}
+	if req.IncludeBranches != "" {
+		task.IncludeBranches = req.IncludeBranches
+	}
+	if req.ExcludeRefPatterns != "" {
+		task.ExcludeRefPatterns = req.ExcludeRefPatterns
 	}
 
 	if err := ts.taskDAO.Update(task); err != nil {
