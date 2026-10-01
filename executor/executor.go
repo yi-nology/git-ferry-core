@@ -324,6 +324,7 @@ func (e *Executor) excludeRefs(ctx context.Context, dir string, task *model.Sync
 		}
 		for _, p := range patterns {
 			if matchRefGlob(p, ref) {
+				// update-ref 不在平台 RunRaw 白名单内,gitOutput 内回落裸 git。
 				_, _ = e.gitOutput(ctx, dir, "update-ref", "-d", ref)
 				break
 			}
@@ -522,20 +523,12 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 }
 
 // listLocalBranches 列出本地分支短名。
+// 走 backend.ListLocalBranches(等价于原 for-each-ref --format=%(refname:short)
+// refs/heads/),include/exclude 过滤留在调用方的 Go 侧。
 func (e *Executor) listLocalBranches(dir string) ([]string, error) {
 	ctx, cancel := withTimeout(context.Background(), 15)
 	defer cancel()
-	out, err := e.gitOutput(ctx, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			names = append(names, line)
-		}
-	}
-	return names, nil
+	return e.backend.ListLocalBranches(ctx, dir)
 }
 
 // pruneRemoteBranch 删除目标上指定分支(源已不存在时)。

@@ -127,23 +127,22 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		// 目标分支可能不存在(首次推送),无分歧风险
 		return nil
 	}
-	out, err := e.gitOutput(ctx, dir, "rev-list", "--right-only", "--count", sourceBranch+"..."+targetRef)
+	// 原实现:git rev-list --right-only --count source...targetRef,
+	// 取的是右端(target)独有提交数 —— 即相对 source 的 behind。
+	// GetBranchSyncInfo(branch, upstream) 返回 (ahead, behind),
+	// upstream 侧前缀 refs/remotes/,故 upstream 传 RemoteTarget/targetBranch。
+	_, behind, err := e.backend.GetBranchSyncInfo(ctx, dir, sourceBranch, RemoteTarget+"/"+targetBranch)
 	if err != nil {
 		// ref 不存在等:保守放行,交给 push 决定
 		return nil
 	}
-	count := strings.TrimSpace(out)
-	if count == "" || count == "0" {
+	if behind == 0 {
 		return nil
 	}
-	// 列出目标独有提交(最多 5 条,便于日志)
-	logOut, _ := e.gitOutput(ctx, dir, "log", "--oneline", "-5", sourceBranch+".."+targetRef)
-	var extra []string
-	for _, line := range strings.Split(strings.TrimSpace(logOut), "\n") {
-		if line != "" {
-			extra = append(extra, line)
-		}
-	}
+	count := fmt.Sprintf("%d", behind)
+	// 列出目标独有提交(最多 5 条,便于日志)。
+	// 原实现:git log --oneline -5 source..targetRef → "hash subject"。
+	extra := targetOnlyCommits(ctx, e.backend, dir, sourceBranch, targetRef)
 	if policy == "backup_on_demand" && backupDir != "" {
 		// 覆盖前对目标分支打快照,可回滚
 		snap := filepath.Join(backupDir,
@@ -164,19 +163,75 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	return &divergentError{Branch: targetBranch, Extra: extra}
 }
 
-// gitOutput 执行只读 git 命令(分歧检测/LFS 用)。
+// maxDivergentLog 与原 `log --oneline -5` 的条数上限一致。
+const maxDivergentLog = 5
+
+// targetOnlyCommits 列出 target 独有(不在 source 上)的提交,形如
+// `git log --oneline` 的 "<hash> <subject>"(hash 为完整 SHA),最多 5 条。
+// 只用于错误详情的条数与列表,解析失败按“无附加信息”处理(原实现同样忽略
+// log 的错误)。
+func targetOnlyCommits(ctx context.Context, backend gitbackend.GitBackend, dir, sourceBranch, targetRef string) []string {
+	commits, err := backend.GetCommitsBetween(ctx, dir, sourceBranch, targetRef)
+	if err != nil {
+		return nil
+	}
+	var extra []string
+	for i, c := range commits {
+		if i >= maxDivergentLog {
+			break
+		}
+		subject := c.Message
+		if idx := strings.IndexByte(subject, '\n'); idx >= 0 {
+			subject = subject[:idx]
+		}
+		extra = append(extra, c.Hash+" "+subject)
+	}
+	return extra
+}
+
+// gitOutput 执行只读/幂等 git 命令,统一收口到 gitbackend:
+// native 后端的 RunRaw 覆盖到的子命令走 RunRaw(bundle/fsck/update-ref/lfs
+// 等平台白名单之外的命令,以及非 native 后端,回落裸 git 保持行为不变)。
 func (e *Executor) gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitThroughBackend(ctx, e.backend, dir, args...)
+}
+
+// runGitThroughBackend 把 git 命令交给 backend 执行,backend 跑不了的回落裸 git。
+//
+// 回落只发生在平台的参数预校验阶段(ErrInvalidGitArg,exec 之前)或 backend
+// 非 native(gogit 不 shell out)时,不存在“平台跑过一次又跑一次”的重复执行。
+func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, dir string, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", errors.New("empty git args")
+	}
+	if native, ok := backend.(*gitbackend.NativeGitBackend); ok && native != nil {
+		stdout, stderr, err := native.RunRaw(ctx, dir, args)
+		switch {
+		case err == nil:
+			return stdout, nil
+		case errors.Is(err, gitbackend.ErrInvalidGitArg):
+			// 平台白名单之外(bundle/fsck/update-ref/lfs/...)→ 回落裸 git
+		default:
+			return "", gitCmdError(args, stderr, err)
+		}
+	}
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // 参数由内部构造
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", errors.Wrapf(err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+		return "", gitCmdError(args, string(out), err)
 	}
 	return string(out), nil
 }
 
+// gitCmdError 保持历史错误文案:`git <argv>: <输出>`。
+func gitCmdError(args []string, out string, err error) error {
+	return errors.Wrapf(err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(out))
+}
+
 // syncLFS 同步 LFS 对象(git-lfs 命令行;未安装时返回可识别错误)。
 // clone/fetch 后 pull LFS,push 前 push LFS。
+// `git lfs` 不在平台 RunRaw 白名单内,实际仍走裸 git(gitOutput 内回落)。
 func (e *Executor) syncLFS(ctx context.Context, dir, remote string, pull bool) error {
 	if _, err := exec.LookPath("git-lfs"); err != nil {
 		return errors.New("git-lfs not installed in PATH (install git-lfs to sync LFS objects)")
@@ -187,11 +242,8 @@ func (e *Executor) syncLFS(ctx context.Context, dir, remote string, pull bool) e
 	} else {
 		args = []string{"lfs", "push", remote}
 	}
-	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // 参数固定
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return errors.Wrapf(err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+	if _, err := e.gitOutput(ctx, dir, args...); err != nil {
+		return err
 	}
 	return nil
 }

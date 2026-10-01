@@ -54,15 +54,24 @@ func TestMintGitHubAppJWT_BadKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestParseRSAPrivateKey_PKCS8(t *testing.T) {
+// TestMintGitHubAppJWT_PKCS8 PKCS#8 PEM(GitHub App 下载的 .pem 格式)同样可签发。
+func TestMintGitHubAppJWT_PKCS8(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	require.NoError(t, err)
 	pemStr := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
-	parsed, err := parseRSAPrivateKey(pemStr)
+
+	token, err := MintGitHubAppJWT(12345, pemStr)
 	require.NoError(t, err)
-	assert.Equal(t, key.N, parsed.N)
+	parts := strings.Split(token, ".")
+	require.Len(t, parts, 3)
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err)
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(payload, &claims))
+	assert.Equal(t, "12345", claims["iss"])
 }
 
 func TestResolvePlatformToken_PrefersAccessTokenWithoutApp(t *testing.T) {

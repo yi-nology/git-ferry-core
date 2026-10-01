@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
 // pushBackupRemotes 把当前同步结果推到配置的备份远端（GitHub/GitLab 等）。
@@ -26,10 +27,9 @@ func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *mode
 		}
 		url := expandBackupURL(r.URL, task, repo)
 		remoteName := "backup-" + name
-		// 更新/添加 remote
-		_, _ = e.gitOutput(ctx, dir, "remote", "remove", remoteName)
-		args := []string{"remote", "add", remoteName, url}
-		if _, err := e.gitOutput(ctx, dir, args...); err != nil {
+		// 更新/添加 remote(与原 `git remote remove/add` 一致:remove 失败忽略)
+		_ = e.backend.RemoveRemote(ctx, dir, remoteName)
+		if err := e.backend.AddRemote(ctx, dir, remoteName, url); err != nil {
 			fmt.Fprintf(details, "  backup remote %s: add failed: %v\n", name, err)
 			continue
 		}
@@ -37,15 +37,19 @@ func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *mode
 		refSpecs := []string{
 			fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch),
 		}
-		pushArgs := []string{"push", remoteName}
-		if r.Force && task.GitForce {
-			pushArgs = append(pushArgs, "--force")
-		}
-		pushArgs = append(pushArgs, refSpecs...)
 		if task.GitTags {
-			pushArgs = append(pushArgs, "--tags")
+			// 原实现是 `git push --tags`(全量推 tag、不强制覆盖);
+			// Push 无 --tags 选项,用等价 refspec,行为一致。
+			refSpecs = append(refSpecs, "refs/tags/*:refs/tags/*")
 		}
-		if _, err := e.gitOutput(ctx, dir, pushArgs...); err != nil {
+		// 走 backend 推送才能带上仓库凭证(原裸 git 只能靠本机 credential helper)。
+		if _, err := e.backend.Push(ctx, gitbackend.PushOptions{
+			RepoPath: dir,
+			Remote:   remoteName,
+			RefSpecs: refSpecs,
+			Force:    r.Force && task.GitForce,
+			Auth:     e.authConfig(ctx, repo, nil),
+		}); err != nil {
 			fmt.Fprintf(details, "  backup remote %s: push failed: %v\n", name, err)
 			continue
 		}

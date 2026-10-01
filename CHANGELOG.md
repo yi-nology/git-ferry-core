@@ -38,7 +38,39 @@
 - 依赖 go-git-platform v0.64.0 → **v0.68.2**（credential helper 落地）。
   不升此依赖则认证路径仍走旧的 argv 传参。
 
-## [Unreleased]
+## [0.8.0] - 2026-10-02
+
+### Added
+
+- **`Service.PushTaskBackup`**：把任务 mirror 工作区推到任意备份远端（临时 remote
+  `backup-manual` + `gitbackend.Push`，凭证经 `executor.BuildRepoAuth`，取不到源仓库退
+  AuthNone）。壳层 `POST /ops/push-backup` 改走此 API，https 私有仓可带 token 推送
+  （原裸 `exec git push` 无凭证必败），并接入平台 transport 的 429/5xx 重试。
+- **provider 收口导出**：`Service.ProviderForPlatform(p, tokenOverride)`
+  （Manager 缓存 + GitHub App token 解析 + repo token 覆盖，壳层不再手拼
+  `Config+NewProvider`）；`service.SetProviderHooks` 供壳层装限流指标 hook。
+- **`executor.BuildRepoAuth(repo, p)`**：repo/platform token → AuthConfig 的
+  唯一实现（原 executor.authConfig 与 MirrorService.repoAuth 两份平行逻辑合一，
+  mirror 路径自此获得 SSH 指纹钉扎/knownHosts 校验）。
+
+### Changed
+
+- **裸 git 收口到 go-git-platform**：分歧检测改 `GetBranchSyncInfo` /
+  `GetCommitsBetween`（rev-list/log 方向与格式已核对等价）；分支列举改
+  `ListLocalBranches`；rev-parse 改 `RevParse`；ls-remote / for-each-ref /
+  bundle clone 等改 `RunRaw`（白名单外如 bundle/fsck/update-ref/lfs 经
+  `runGitThroughBackend` 回落裸 exec）；`backup_remote` 整块改
+  `AddRemote/RemoveRemote/Push` 并带凭证。
+- **GitHub App 下沉**：`MintGitHubAppJWT` / `FetchGitHubInstallationToken` 变
+  平台 `githubapp` 包薄封装（导出签名不变，缓存/ResolvePlatformToken 保留）。
+- **mirror 的 go-git auth 转换下沉**：删本地 `goGitAuth`，改用平台
+  `gitbackend.TransportAuth`（同构逻辑 + SSH hostkey 回调）；远端 tag 枚举
+  仍走 go-git 直调（平台无对应能力）。
+- `providerConfig` 默认开启 `RetryConfig=DefaultRetryConfig()`（429/5xx）；
+  `fetchAllPlatformRepos` 改 `provider.ListAllPages`（保留 CloneURL/FullName 去重）。
+- `MirrorService.targetAuth` 改用平台构造器 `NewHTTPBasicAuth` / `NewSSHKeyContentAuth`。
+- 依赖 go-git-platform v0.68.2 → **v0.72.0**（githubapp/四能力/分页/403 重试，
+  连带 v0.69 传递依赖保鲜：gitea.dev/sdk v1.3.0、gitlab client-go v3.15.0 等）。
 
 ## [0.6.1] - 2026-09-29
 

@@ -8,7 +8,8 @@ import (
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
-// authConfig 从仓库/平台构建 git 凭证。
+// BuildRepoAuth 从仓库/平台构建 git 凭证,是 executor 与 service(镜像源仓库
+// 读取)共用的唯一规则实现,避免两份平行逻辑漂移。
 //
 // 安全约定（认证路径重构）：
 //   - 令牌只在内存中传给 gitbackend.AuthConfig
@@ -18,24 +19,24 @@ import (
 //   - 仓库 token 优先于平台 token；均空则 AuthNone
 //
 // SSH 密钥内容同样经临时 0600 文件注入 GIT_SSH_COMMAND，命令结束后删除。
-func (e *Executor) authConfig(ctx context.Context, repo *model.Repo, platform *model.Platform) gitbackend.AuthConfig {
+//
+// p 可为 nil:此时不带平台侧的 skipTLS / SSH 指纹 / knownHosts 信息。
+// platform 预取回退(repo.PlatformID → 查询)属于调用方语义,留在
+// Executor.authConfig 里。
+func BuildRepoAuth(repo *model.Repo, p *model.Platform) gitbackend.AuthConfig {
 	var skipTLS bool
 	var fingerprint, knownHosts string
 	var platformToken string
-	p := platform
-	if p == nil && repo.PlatformID > 0 {
-		// 回退:platform 未预取时仍查一次(兼容直接调用)
-		if got, err := e.service.GetPlatformByID(ctx, repo.PlatformID); err == nil {
-			p = got
-		}
-	}
 	if p != nil {
 		skipTLS = p.SkipTLSVerify
 		platformToken = p.AccessToken
 		fingerprint = p.SSHHostKeyFingerprint
 		knownHosts = p.SSHKnownHostsPath
 	}
-	token := repo.AccessToken
+	var token string
+	if repo != nil {
+		token = repo.AccessToken
+	}
 	if token == "" {
 		token = platformToken
 	}
@@ -48,12 +49,33 @@ func (e *Executor) authConfig(ctx context.Context, repo *model.Repo, platform *m
 	}
 
 	if token != "" {
-		slog.Debug("using access token", "repo", repo.Key, "fromPlatform", repo.AccessToken == "")
 		// git over HTTPS 走 HTTP Basic(占位用户名 + token 作密码)。
 		// 不能用 Bearer: git 端点只认 Basic（GitLab/GitCode 等）。
 		// 令牌由 backend 的 credential helper 会话注入，不进 argv。
 		return applySSHHostKey(gitbackend.NewTokenAuth(token))
 	}
-	slog.Debug("no auth configured", "repo", repo.Key)
 	return applySSHHostKey(gitbackend.AuthConfig{Type: gitbackend.AuthNone})
+}
+
+// authConfig 从仓库/平台构建 git 凭证。
+// 在 BuildRepoAuth 之上补一层 platform 预取回退:platform 未预取时按
+// repo.PlatformID 查一次(兼容直接调用)。
+func (e *Executor) authConfig(ctx context.Context, repo *model.Repo, platform *model.Platform) gitbackend.AuthConfig {
+	p := platform
+	if p == nil && repo != nil && repo.PlatformID > 0 {
+		// 回退:platform 未预取时仍查一次(兼容直接调用)
+		if got, err := e.service.GetPlatformByID(ctx, repo.PlatformID); err == nil {
+			p = got
+		}
+	}
+	if repo == nil {
+		return BuildRepoAuth(nil, p)
+	}
+	auth := BuildRepoAuth(repo, p)
+	if auth.Type == gitbackend.AuthNone {
+		slog.Debug("no auth configured", "repo", repo.Key)
+	} else {
+		slog.Debug("using access token", "repo", repo.Key, "fromPlatform", repo.AccessToken == "")
+	}
+	return auth
 }

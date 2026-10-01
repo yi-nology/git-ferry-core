@@ -14,6 +14,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -311,27 +312,17 @@ func (m *MirrorService) ensureTargetRemote(ctx context.Context, dir string, t *m
 	return nil
 }
 
-// repoAuth 源仓库读取凭据(与 executor.authConfig 同规则:repo token 优先,
-// 回退平台 token;git HTTPS 只认 Basic 不认 Bearer)。
+// repoAuth 源仓库读取凭据。规则统一收敛到 executor.BuildRepoAuth
+// (repo token 优先,回退平台 token;skipTLS 与 SSH host key 指纹/knownHosts
+// 一并回填,git HTTPS 只认 Basic 不认 Bearer)。
 func (m *MirrorService) repoAuth(repo *model.Repo) gitbackend.AuthConfig {
-	var skipTLS bool
-	var platformToken string
-	if repo.PlatformID > 0 {
-		if p, err := m.svc.GetPlatformByID(context.Background(), repo.PlatformID); err == nil && p != nil {
-			skipTLS = p.SkipTLSVerify
-			platformToken = p.AccessToken
+	var p *model.Platform
+	if repo != nil && repo.PlatformID > 0 {
+		if got, err := m.svc.GetPlatformByID(context.Background(), repo.PlatformID); err == nil && got != nil {
+			p = got
 		}
 	}
-	token := repo.AccessToken
-	if token == "" {
-		token = platformToken
-	}
-	if token != "" {
-		auth := gitbackend.NewTokenAuth(token)
-		auth.InsecureSkipTLS = skipTLS
-		return auth
-	}
-	return gitbackend.AuthConfig{Type: gitbackend.AuthNone, InsecureSkipTLS: skipTLS}
+	return executor.BuildRepoAuth(repo, p)
 }
 
 // targetAuth 目标仓库凭据(解密 Credential)。
@@ -348,13 +339,18 @@ func (m *MirrorService) targetAuth(t *model.MirrorTarget) (gitbackend.AuthConfig
 		if user == "" {
 			user = "oauth2"
 		}
-		return gitbackend.AuthConfig{Type: gitbackend.AuthHTTPBasic, Username: user, Password: plain}, nil
+		return gitbackend.NewHTTPBasicAuth(user, plain), nil
 	case model.MirrorCredSSHKey:
 		plain, err := m.cm.Decrypt(t.Credential)
 		if err != nil {
 			return gitbackend.AuthConfig{}, errors.Wrap(err, "decrypt credential failed")
 		}
-		return gitbackend.AuthConfig{Type: gitbackend.AuthSSH, SSHKeyContent: plain}, nil
+		if plain == "" {
+			// 构造器把空 key 折叠成 AuthNone;这里保持原语义(空 key 是坏配置,
+			// 走 SSH 认证失败而不是悄悄降级成匿名)。
+			return gitbackend.AuthConfig{Type: gitbackend.AuthSSH}, nil
+		}
+		return gitbackend.NewSSHKeyContentAuth(plain, ""), nil
 	default:
 		return gitbackend.AuthConfig{}, fmt.Errorf("不支持的凭据类型: %s", t.CredType)
 	}

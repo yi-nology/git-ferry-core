@@ -7,33 +7,71 @@ import (
 	"strconv"
 	"strings"
 
+	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
+// providerHooks 由壳层注入(限流指标等),providerConfig 每次构造都带上。
+var providerHooks *sdkprov.Hooks
+
+// SetProviderHooks 注入 provider 请求/响应生命周期钩子(壳层启动时调用一次)。
+func SetProviderHooks(h *sdkprov.Hooks) {
+	providerHooks = h
+}
+
 // providerConfig 由平台记录构建 SDK provider 配置(token 可覆盖平台默认)。
+// RetryConfig 给默认重试(429/5xx 退避),避免下游自己再包一层;nil=不重试。
 func providerConfig(p *model.Platform, token string) sdkprov.Config {
+	rc := sdkprov.DefaultRetryConfig()
 	return sdkprov.Config{
-		Platform: sdkprov.Platform(p.Type),
-		BaseURL:  p.APIURL,
-		Token:    token,
-		SkipTLS:  p.SkipTLSVerify,
+		Platform:    sdkprov.Platform(p.Type),
+		BaseURL:     p.APIURL,
+		Token:       token,
+		SkipTLS:     p.SkipTLSVerify,
+		RetryConfig: &rc,
+		Hooks:       providerHooks,
 	}
 }
 
-// platformProvider 返回平台对应的 provider,统一经 Manager 缓存,
-// 替代散落各处的 Config+NewProvider 样板。
-// Token 优先取 GitHub App installation token(若配置),否则用 AccessToken。
-func platformProvider(mgr *sdkprov.Manager, p *model.Platform) (sdkprov.Provider, error) {
-	token, err := ResolvePlatformToken(p)
-	if err != nil {
-		return nil, fmt.Errorf("resolve platform token: %w", err)
+// providerFromManager 按 token 取 provider(统一走 Manager 缓存)。
+// tokenOverride 非空时优先;否则按平台解析(GitHub App installation token 感知)。
+func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride string) (sdkprov.Provider, error) {
+	if mgr == nil {
+		return nil, errors.New("provider manager is nil")
+	}
+	token := tokenOverride
+	if token == "" {
+		resolved, err := ResolvePlatformToken(p)
+		if err != nil {
+			return nil, fmt.Errorf("resolve platform token: %w", err)
+		}
+		token = resolved
 	}
 	prov, err := mgr.Get(providerConfig(p, token))
 	if err != nil {
 		return nil, fmt.Errorf("create provider failed: %w", err)
 	}
 	return prov, nil
+}
+
+// platformProvider 返回平台对应的 provider,统一经 Manager 缓存,
+// 替代散落各处的 Config+NewProvider 样板。
+// Token 优先取 GitHub App installation token(若配置),否则用 AccessToken。
+func platformProvider(mgr *sdkprov.Manager, p *model.Platform) (sdkprov.Provider, error) {
+	return providerFromManager(mgr, p, "")
+}
+
+// ProviderForPlatform 按平台取 provider,供壳层复用:
+// tokenOverride 非空优先,否则 ResolvePlatformToken(GitHub App 感知)。
+func (s *Service) ProviderForPlatform(p *model.Platform, tokenOverride string) (sdkprov.Provider, error) {
+	if p == nil {
+		return nil, errors.New("platform is nil")
+	}
+	if s.platforms == nil {
+		return nil, errors.New("provider manager is nil")
+	}
+	return providerFromManager(s.platforms.providerMgr, p, tokenOverride)
 }
 
 // parsePageOpts 解析分页参数字符串并归一化(空/非法回落 SDK 默认值)。
@@ -103,31 +141,31 @@ func globMatchName(pattern, s string) bool {
 
 // fetchAllPlatformRepos 按最大页大小循环翻页,拉取平台全部仓库。
 // 返回条数不足一页时认为已到末页;maxPages 作为安全上限防止异常平台无限翻页。
+// 翻页骨架复用平台 provider.ListAllPages,这里只保留按 CloneURL/FullName 的去重。
 func fetchAllPlatformRepos(ctx context.Context, provider sdkprov.Provider) ([]*sdkprov.PlatformRepo, error) {
 	const maxPages = 100
 	perPage := sdkprov.MaxPerPage
 
-	all := make([]*sdkprov.PlatformRepo, 0, perPage)
-	seen := make(map[string]struct{}, perPage)
-	for page := 1; page <= maxPages; page++ {
-		repos, err := provider.ListRepos(ctx, sdkprov.ListRepoOptions{Page: page, PerPage: perPage})
-		if err != nil {
-			return nil, err
+	repos, err := sdkprov.ListAllPages(ctx, perPage, maxPages,
+		func(ctx context.Context, page, perPage int) ([]*sdkprov.PlatformRepo, error) {
+			return provider.ListRepos(ctx, sdkprov.ListRepoOptions{Page: page, PerPage: perPage})
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{}, len(repos))
+	all := make([]*sdkprov.PlatformRepo, 0, len(repos))
+	for _, r := range repos {
+		id := r.CloneURL
+		if id == "" {
+			id = r.FullName
 		}
-		for _, r := range repos {
-			id := r.CloneURL
-			if id == "" {
-				id = r.FullName
-			}
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			all = append(all, r)
+		if _, dup := seen[id]; dup {
+			continue
 		}
-		if len(repos) < perPage {
-			break
-		}
+		seen[id] = struct{}{}
+		all = append(all, r)
 	}
 	return all, nil
 }

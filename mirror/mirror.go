@@ -29,8 +29,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
@@ -172,7 +170,8 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 		repo:    repo,
 		repoDir: opts.RepoDir,
 	}
-	p.auth, err = goGitAuth(opts.Auth)
+	// go-git 传输凭据统一由平台转换(含 SSH host key 指纹钉扎)。
+	p.auth, err = gitbackend.TransportAuth(opts.Auth)
 	if err != nil {
 		return nil, err
 	}
@@ -398,26 +397,6 @@ func remoteURL(repo *git.Repository, name string) (string, error) {
 		return "", fmt.Errorf("canonical 仓库未配置远端 %s(先 git remote add %s <镜像仓库 URL>)", name, name)
 	}
 	return rem.URLs[0], nil
-}
-
-// goGitAuth 把 SDK AuthConfig 转为 go-git 传输凭据;AuthNone 返回 nil
-// (匿名;推送侧走 SDK native 后端时仍使用本机默认凭据)。
-func goGitAuth(a gitbackend.AuthConfig) (transport.AuthMethod, error) {
-	switch a.Type {
-	case "", gitbackend.AuthNone:
-		return nil, nil
-	case gitbackend.AuthHTTPBasic:
-		return &githttp.BasicAuth{Username: a.Username, Password: a.Password}, nil
-	case gitbackend.AuthHTTPToken:
-		return &githttp.BasicAuth{Username: a.Username, Password: a.Token}, nil
-	case gitbackend.AuthSSH:
-		if a.SSHKeyContent != "" && a.SSHKey == "" {
-			return gitssh.NewPublicKeys("git", []byte(a.SSHKeyContent), a.Passphrase)
-		}
-		return gitssh.NewPublicKeysFromFile("git", a.SSHKey, a.Passphrase)
-	default:
-		return nil, fmt.Errorf("不支持的认证类型: %s", a.Type)
-	}
 }
 
 // ReadModulePath 从 dir/go.mod 解析 module 行(兼容带引号写法),供壳层

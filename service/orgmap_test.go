@@ -4,10 +4,10 @@ import "testing"
 
 func TestResolveOrgTarget(t *testing.T) {
 	cases := []struct {
-		strategy OrgMapStrategy
+		strategy                                 OrgMapStrategy
 		srcOwner, srcRepo, targetOrg, targetUser string
-		personal bool
-		wantOwner, wantRepo string
+		personal                                 bool
+		wantOwner, wantRepo                      string
 	}{
 		{OrgMapPreserve, "acme", "api", "", "", false, "acme", "api"},
 		{OrgMapPreserve, "alice", "dot", "", "alice", true, "alice", "dot"},

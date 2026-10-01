@@ -3,12 +3,15 @@ package executor
 import (
 	"context"
 	"fmt"
-	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 
 	errors "github.com/cockroachdb/errors"
 )
@@ -184,15 +187,31 @@ func needsCheckout(destDir string) bool {
 }
 
 // runGitRead 只读 git 命令(独立于 Executor,便于 Service 层调用)。
+// 统一经 gitbackend 执行:平台 RunRaw 白名单覆盖到的子命令
+// (clone/for-each-ref/checkout/rev-list/...)走 RunRaw,bundle/fsck 这类
+// 白名单之外的回落裸 git(dir="" 即无仓库上下文,RunRaw 原样支持)。
 func runGitRead(ctx context.Context, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("empty git args")
 	}
-	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // 参数由内部构造
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", errors.Wrapf(err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
+	return runGitThroughBackend(ctx, readGitBackend(), dir, args...)
+}
+
+var (
+	readBackendOnce sync.Once
+	readBackend     gitbackend.GitBackend
+)
+
+// readGitBackend 包级只读 git 后端(与 MirrorService 同款 Options{} 自动选择)。
+// runGitRead 不挂在 Executor 上,进程内复用一个实例即可。
+func readGitBackend() gitbackend.GitBackend {
+	readBackendOnce.Do(func() {
+		b, err := gitbackend.NewGitBackend(gitbackend.Options{})
+		if err != nil {
+			slog.Warn("init git backend for read-only git failed", "error", err)
+			return
+		}
+		readBackend = b
+	})
+	return readBackend
 }

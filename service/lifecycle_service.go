@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
 // DiscoveryReport 自动发现结果。
@@ -215,12 +219,19 @@ func ValidForcePushPolicy(p string) bool {
 	return false
 }
 
+// gitRevParse 解析引用为完整 SHA;任何失败(ref 不存在是正常分支、真错误同理)
+// 都回落空串 —— 与历史行为一致(此处并未用 IsNotFound 区分,调用方只关心
+// “能不能解析出 SHA”)。
 func gitRevParse(ctx context.Context, dir, ref string) string {
-	out, err := runGitQuiet(ctx, dir, "rev-parse", "--verify", "--quiet", ref)
+	backend := lifecycleBackend()
+	if backend == nil {
+		return ""
+	}
+	sha, err := backend.RevParse(ctx, dir, ref)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	return strings.TrimSpace(sha)
 }
 
 func gitLsRemote(ctx context.Context, dir, remote, ref string) string {
@@ -235,6 +246,11 @@ func gitLsRemote(ctx context.Context, dir, remote, ref string) string {
 	return ""
 }
 
+// revListCounts 统计 a/b 两端各自独有的提交数。
+// 调用方传入的是裸 SHA(a=本地 ref 解析结果,b=ls-remote 的远端 SHA,
+// 后者未必等于本地的 refs/remotes/* 跟踪引用),GetBranchSyncInfo 只接受
+// refs/heads/<branch> + refs/remotes/<upstream> 的组合、语义对不上,
+// 因此保留原 `rev-list --count a..b` 命令,经 RunRaw 收口执行。
 func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int) {
 	if out, err := runGitQuiet(ctx, dir, "rev-list", "--count", a+".."+b); err == nil {
 		_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &bAhead)
@@ -245,9 +261,45 @@ func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int) {
 	return
 }
 
+// runGitQuiet 只读 git 命令。优先走 backend.RunRaw(与 executor 侧同一收口),
+// 平台白名单之外的子命令回落裸 git;返回值与历史实现一致(stdout/stderr 合并
+// 后原样返回,不额外包装错误)。
 func runGitQuiet(ctx context.Context, dir string, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", errors.New("empty git args")
+	}
+	backend := lifecycleBackend()
+	if native, ok := backend.(*gitbackend.NativeGitBackend); ok && native != nil {
+		stdout, stderr, err := native.RunRaw(ctx, dir, args)
+		switch {
+		case err == nil:
+			return stdout, nil
+		case errors.Is(err, gitbackend.ErrInvalidGitArg):
+			// 白名单之外 → 回落裸 git
+		default:
+			return stdout + stderr, err
+		}
+	}
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // 内部构造
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+var (
+	lifeBackendOnce sync.Once
+	lifeBackend     gitbackend.GitBackend
+)
+
+// lifecycleBackend 漂移检测用的 git 后端,与 MirrorService 同款 Options{} 自动选择。
+func lifecycleBackend() gitbackend.GitBackend {
+	lifeBackendOnce.Do(func() {
+		b, err := gitbackend.NewGitBackend(gitbackend.Options{})
+		if err != nil {
+			slog.Warn("init git backend for lifecycle checks failed", "error", err)
+			return
+		}
+		lifeBackend = b
+	})
+	return lifeBackend
 }
