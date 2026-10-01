@@ -12,6 +12,14 @@
 - **冷备 zip** `sync.backup_format: bundle|zip`（keep 轮转）。
 - **org 映射辅助** `service/orgmap.go`。
 
+### Changed
+
+- **内聚重构**（随 v0.7.0 首发，CHANGELOG 补记）:
+  - `GetMirrorVersions` 拆为 `loadTagCommits` / `buildVersionCells` / `assembleVersionMatrix`(纯函数可单测)。
+  - `SyncPlatformReposFiltered` 拆为 `planRepoUpsert` + `persistRepoPlan` + `indexExistingByKey`。
+  - `NewService` 经 `initDB`/`initDAOs`/`appDAOs` 装配,压缩样板。
+  - `Execute` 改为 Stage 流水线;`FanoutUpload` 为 Uploader 策略注册表。
+
 ## [0.7.1] - 2026-10-01
 
 ### Added
@@ -19,15 +27,18 @@
 - **ForcePushApprover 注入** `Service.SetForcePushApprover`：壳层 force-push 审批流接入。
 - **backup_remote** 相关 executor 扩展（详见 executor/backup_remote.go）。
 
-## [Unreleased]
+## [0.7.2] - 2026-10-01
 
 ### Changed
 
-- **内聚重构**:
-  - `GetMirrorVersions` 拆为 `loadTagCommits` / `buildVersionCells` / `assembleVersionMatrix`(纯函数可单测)。
-  - `SyncPlatformReposFiltered` 拆为 `planRepoUpsert` + `persistRepoPlan` + `indexExistingByKey`。
-  - `NewService` 经 `initDB`/`initDAOs`/`appDAOs` 装配,压缩样板。
-  - `Execute` 改为 Stage 流水线;`FanoutUpload` 为 Uploader 策略注册表。
+- **认证路径重构**：`executor/auth.go` 集中构建 git 凭证；令牌经 go-git-platform
+  的临时 credential helper / GIT_ASKPASS 注入（**不进 argv / environ 明文**），
+  临时凭证目录 RAII 清理。SSH 密钥内容同样经 0600 临时文件 + `GIT_SSH_COMMAND`。
+  安全约定见 `executor/auth.go` 注释。
+- 依赖 go-git-platform v0.64.0 → **v0.68.2**（credential helper 落地）。
+  不升此依赖则认证路径仍走旧的 argv 传参。
+
+## [Unreleased]
 
 ## [0.6.1] - 2026-09-29
 
