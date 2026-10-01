@@ -101,8 +101,8 @@ func isDivergent(err error) bool {
 
 // checkDivergencePolicy 按显式策略做分歧保护。
 // backupDir 非空且 policy=backup_on_demand 时,覆盖前写入回滚快照。
-// 策略: allow=放行 | block=拒绝覆盖 | backup_on_demand=先快照再覆盖。
-func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir string) error {
+// 策略: allow=放行 | block=拒绝覆盖(可经 Approver 放行) | backup_on_demand=先快照再覆盖。
+func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string) error {
 	// 未 force 时 git 自己会拒绝非快进,无需额外检查
 	if !force {
 		return nil
@@ -152,6 +152,14 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 			return errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
 		}
 		return nil
+	}
+	// block 策略：若已有审批放行则放行；否则登记 pending 并拒绝
+	if e.Approver != nil {
+		if e.Approver.IsForcePushApproved(taskKey, targetBranch) {
+			return nil
+		}
+		e.Approver.RequestApproval(taskKey, targetBranch,
+			fmt.Sprintf("divergent target has %s unique commits", count))
 	}
 	return &divergentError{Branch: targetBranch, Extra: extra}
 }

@@ -225,6 +225,14 @@ func (s *Service) GetPlatformByID(ctx context.Context, id uint) (*model.Platform
 	return s.platforms.GetPlatformByID(ctx, id)
 }
 
+// SetForcePushApprover 注入 force-push 审批器（壳层 force-push-approvals）。
+// block 策略触发分歧时：已放行则继续，否则登记 pending 并拒绝。
+func (s *Service) SetForcePushApprover(a executor.ForcePushApprover) {
+	if s.executor != nil {
+		s.executor.Approver = a
+	}
+}
+
 // HealthCheck checks the health of all dependencies.
 // Returns a map of component name to "ok" or error message.
 // 内部对每个组件设置 5s 超时:基础设施卡住时健康检查不会无限阻塞。

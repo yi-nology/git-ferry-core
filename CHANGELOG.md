@@ -12,6 +12,13 @@
 - **冷备 zip** `sync.backup_format: bundle|zip`（keep 轮转）。
 - **org 映射辅助** `service/orgmap.go`。
 
+## [0.7.1] - 2026-10-01
+
+### Added
+
+- **ForcePushApprover 注入** `Service.SetForcePushApprover`：壳层 force-push 审批流接入。
+- **backup_remote** 相关 executor 扩展（详见 executor/backup_remote.go）。
+
 ## [Unreleased]
 
 ### Changed

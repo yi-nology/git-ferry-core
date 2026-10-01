@@ -138,13 +138,31 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 	return nil
 }
 
-// defaultPipeline 标准同步流水线:clone/fetch → remote → push → wiki → bundle。
+// backupRemoteStage 同步成功后向配置的备份远端 push 镜像副本（GitHub/GitLab 等）。
+// 失败只记 details，不影响主同步结果（冷备是附加能力）。
+type backupRemoteStage struct{}
+
+func (backupRemoteStage) Name() string     { return stageBackupRemote }
+func (backupRemoteStage) IsOptional() bool { return true }
+
+func (backupRemoteStage) Run(ctx context.Context, rc *RunContext) error {
+	cfg := rc.Exec.service.GetConfig()
+	if cfg == nil || len(cfg.Sync.BackupRemotes) == 0 {
+		return nil
+	}
+	rc.logf("push backup remotes...\n")
+	rc.Exec.pushBackupRemotes(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, cfg.Sync.BackupRemotes, rc.Details)
+	return nil
+}
+
+// defaultPipeline 标准同步流水线:clone/fetch → remote → push → wiki → bundle → backup remotes。
 // 顺序固定、阶段可单测;新增能力只需追加 Stage,不动 Execute。
 func defaultPipeline() *Pipeline {
 	return NewPipeline(
 		cloneFetchStage{},
 		ensureRemoteStage{},
 		pushStage{},
+		backupRemoteStage{},
 		wikiStage{},
 		bundleStage{},
 	)

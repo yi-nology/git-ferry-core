@@ -115,6 +115,23 @@ type SyncConfig struct {
 	PostExecScript string `yaml:"post_exec_script" env:"GIT_SYNC_POST_EXEC_SCRIPT"`
 	// BackupFormat 冷备形态:bundle(默认,git 语义) | zip(人工取件友好)
 	BackupFormat string `yaml:"backup_format" env:"GIT_SYNC_BACKUP_FORMAT"`
+	// BackupRemotes 额外备份远端（GitHub/GitLab 等），同步成功后 push 镜像副本。
+	// 与「镜像中心开源发布」区分：此处不改写 module 身份，纯备份。
+	BackupRemotes []BackupRemoteConfig `yaml:"backup_remotes"`
+}
+
+// BackupRemoteConfig 备份远端（git push）。
+type BackupRemoteConfig struct {
+	// Name 远端名（日志用）
+	Name string `yaml:"name" json:"name"`
+	// URL git 远端地址（https/ssh）；支持 {owner}/{repo} 占位由任务推导
+	URL string `yaml:"url" json:"url"`
+	// Token 注入用；也可走 GIT_SYNC_TOKEN_<NAME>
+	Token string `yaml:"token,omitempty" json:"token,omitempty"`
+	// Force 是否允许 force（仍受任务 force_push_policy 约束）
+	Force bool `yaml:"force" json:"force"`
+	// Enabled 默认 true
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 type WebhookConfig struct {

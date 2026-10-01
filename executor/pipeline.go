@@ -82,6 +82,8 @@ func stepNameFor(stage string) string {
 		return model.StepWiki
 	case stageBundle:
 		return "bundle"
+	case stageBackupRemote:
+		return "backup-remote"
 	default:
 		return stage
 	}
@@ -94,4 +96,5 @@ const (
 	stagePush         = "push"
 	stageWiki         = "wiki"
 	stageBundle       = "bundle"
+	stageBackupRemote = "backup-remote"
 )

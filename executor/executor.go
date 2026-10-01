@@ -48,6 +48,16 @@ type Service interface {
 type Executor struct {
 	service Service
 	backend gitbackend.GitBackend
+	// Approver 可选：force_push_policy=block 时查询是否已获人工放行。
+	// 由壳层注入（如 force-push-approvals 审批表）；nil=始终未放行。
+	Approver ForcePushApprover
+}
+
+// ForcePushApprover 查询某任务/分支的强制推送是否已获放行。
+type ForcePushApprover interface {
+	IsForcePushApproved(taskKey, branch string) bool
+	// RequestApproval 产生一条 pending 审批（best-effort，失败不影响主流程）。
+	RequestApproval(taskKey, branch, reason string)
 }
 
 func NewExecutor(svc Service) (*Executor, error) {
@@ -497,7 +507,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	if cfg := e.service.GetConfig(); cfg != nil {
 		backupDir = cfg.Sync.BackupDir
 	}
-	if err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir); err != nil {
+	if err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key); err != nil {
 		return err
 	}
 
