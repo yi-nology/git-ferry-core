@@ -6,6 +6,29 @@
 
 ### Added
 
+- **业务数据入表**（承接 v0.9.0 的存储下沉，补完多实例正确性）：
+  - `force_push_approvals` 表 + `dao.ForcePushApprovalDAO`；`ForcePushStore` 改为
+    表存储（读-改-写有实例内互斥），旧 `<backup_dir>/force-push-approvals.json`
+    在**表为空**时一次性导入（幂等）；JSON 字段与历史文件逐字兼容。
+  - `templates` 表（`tpl.Template` 增加 gorm 标签，json 契约不变）+ `dao.TemplateDAO`；
+    新增 `service.TemplateStore` 接口，生产为 DB 实现，测试/过渡可注入文件实现
+    （`SetTemplates(TemplateStore)`）；旧 `data/templates.json` 空表时一次性导入。
+  - `AutoMigrate` 注册上述两表（启动自动建表，无需手工迁移）。
+- **`pkg/proclog`**：`Setup(level, format)` 与 `ExitOnFail(msg, err)`——
+  公网壳与内网壳此前各复制一份逐字相同的实现，两者都依赖 core 故收敛于此
+  （core 自身不调用：库不应决定宿主进程日志与退出行为）。
+- **测试补账**（承接 v0.9.0）：`mirror_service`（通道 CRUD、凭据加密落库、入参校验）、
+  `backup_service`（bundle 列举/过期清理/legal hold/元数据快照轮转）、
+  `dr_service`（RPO 报表、演练历史哈希链篡改检出、冷备清单校验）、
+  `lifecycle_service`（AutoDiscover 只读发现/导入后比对、DetectDrift 空路径，
+  平台 API 用 httptest 伪造）、模板与审批的 DB 存储 + 旧文件迁移。
+
+### Fixed
+
+- **`UpdateMirrorTarget` 凭据空串语义**：文档写「空串=保持原凭据」，实现却在
+  `validateTargetInput` 直接拒绝（前端改 URL 必须重传 token）。拆分
+  `requireCredential` 参数，更新路径留空即保留原密文；新建路径仍强制必填。
+
 - **装配期依赖注入**：`NewService(cfg, opts...)` + `Option`——`WithDB`（外部
   `*gorm.DB`，`Stop()` 不再关闭注入的连接池）、`WithProviderHooks`、
   `WithForcePushApprover`。provider 钩子由包级全局改为**随 Service 实例走**。

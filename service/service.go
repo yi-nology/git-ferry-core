@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yi-nology/git-ferry-core/tpl"
-
 	errors "github.com/cockroachdb/errors"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
@@ -31,7 +29,7 @@ type Service struct {
 	sqlDB           *sql.DB
 	ownsDB          bool
 	providerHooks   *sdkprov.Hooks
-	templates       *tpl.Store
+	templates       TemplateStore
 	approvals       *ForcePushStore
 	retryTracker    *RetryTracker
 	runSubs         []runSubscriber
@@ -127,23 +125,21 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	}
 	svc.guard = guard
 
-	// 同步策略模板库：文件存储，路径由 cfg.Templates.Path 决定（默认 data/templates.json）。
+	// 同步策略模板库：表存储（templates）；旧 data/templates.json 空表时一次性导入。
 	tplPath := cfg.Templates.Path
 	if tplPath == "" {
 		tplPath = "data/templates.json"
 	}
-	tplStore, err := tpl.Open(tplPath)
-	if err != nil {
-		return nil, errors.Wrap(err, "init template store failed")
-	}
-	svc.templates = tplStore
+	migrateLegacyTemplates(daos.template, tplPath)
+	svc.templates = &dbTemplateStore{dao: daos.template}
 
-	// force-push 审批存储：<backup_dir>/force-push-approvals.json（未配置回落 data/）。
+	// force-push 审批：表存储（force_push_approvals）；
+	// 旧 <backup_dir>/force-push-approvals.json 空表时一次性导入。
 	approvalsPath := filepath.Join("data", "force-push-approvals.json")
 	if cfg.Sync.BackupDir != "" {
 		approvalsPath = filepath.Join(cfg.Sync.BackupDir, "force-push-approvals.json")
 	}
-	svc.approvals = NewForcePushStore(approvalsPath)
+	svc.approvals = NewForcePushStore(daos.approv, approvalsPath)
 	svc.retryTracker = NewRetryTracker(0)
 
 	exec, err := executor.NewExecutor(svc)

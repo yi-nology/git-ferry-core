@@ -19,11 +19,11 @@ import (
 // tplTaskLimit 参与模板匹配 / 盘点扫描的任务与仓库上限。
 const tplTaskLimit = 200
 
-// Templates 返回同步策略模板库（NewService 时按 cfg.Templates.Path 打开）。
-func (s *Service) Templates() *tpl.Store { return s.templates }
+// Templates 返回同步策略模板库（生产为表存储；cfg.Templates.Path 仅作旧 json 迁移源）。
+func (s *Service) Templates() TemplateStore { return s.templates }
 
-// SetTemplates 覆盖模板库（测试隔离 / 运行时切换文件）。
-func (s *Service) SetTemplates(st *tpl.Store) {
+// SetTemplates 覆盖模板库（测试隔离 / 注入文件实现）。
+func (s *Service) SetTemplates(st TemplateStore) {
 	if st != nil {
 		s.templates = st
 	}

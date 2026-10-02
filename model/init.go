@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/yi-nology/git-ferry-core/tpl"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -50,6 +51,8 @@ func InitDB(driver, dsn string) (*gorm.DB, error) {
 		&MirrorChannel{},
 		&MirrorTarget{},
 		&MirrorRun{},
+		&tpl.Template{},
+		&ForcePushApproval{},
 	)
 	if err != nil {
 		return nil, err

@@ -176,7 +176,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 }
 
 func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetInput) (*model.MirrorTarget, error) {
-	if err := validateTargetInput(in); err != nil {
+	if err := validateTargetInput(in, true); err != nil {
 		return nil, err
 	}
 	if ch.Mode == model.MirrorModePublish {
@@ -209,7 +209,9 @@ func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetIn
 	return t, nil
 }
 
-func validateTargetInput(in *MirrorTargetInput) error {
+// validateTargetInput 校验目标入参。
+// requireCredential=false 用于更新路径：凭据留空表示保持原凭据（见 UpdateMirrorTarget）。
+func validateTargetInput(in *MirrorTargetInput, requireCredential bool) error {
 	if strings.TrimSpace(in.Remote) == "" || strings.HasPrefix(in.Remote, "-") {
 		return fmt.Errorf("远端名非法: %q", in.Remote)
 	}
@@ -220,7 +222,7 @@ func validateTargetInput(in *MirrorTargetInput) error {
 	case "", model.MirrorCredNone:
 		in.CredType = model.MirrorCredNone
 	case model.MirrorCredToken, model.MirrorCredSSHKey:
-		if in.Credential == "" {
+		if requireCredential && in.Credential == "" {
 			return fmt.Errorf("凭据类型 %s 需要提供凭据内容", in.CredType)
 		}
 	default:
@@ -235,7 +237,8 @@ func (m *MirrorService) UpdateMirrorTarget(ctx context.Context, targetID uint, i
 	if err != nil {
 		return nil, fmt.Errorf("目标不存在: %d", targetID)
 	}
-	if err := validateTargetInput(&in); err != nil {
+	// 凭据空串 = 保持原凭据（不要求重传）
+	if err := validateTargetInput(&in, false); err != nil {
 		return nil, err
 	}
 	t.Remote = in.Remote

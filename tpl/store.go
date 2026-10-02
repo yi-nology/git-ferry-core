@@ -14,18 +14,19 @@ import (
 )
 
 // Template 同步策略模板。
+// 模板同时作为 core 的 ORM 模型（gorm 标签仅为序列化，json 契约不变）。
 type Template struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ID          string `gorm:"primaryKey;size:64" json:"id"`
+	Name        string `gorm:"size:128;not null" json:"name"`
+	Description string `gorm:"size:512" json:"description,omitempty"`
 	// Extends 继承的基础模板 ID（Renovate preset 模式）。可链式，须无环。
-	Extends string `json:"extends,omitempty"`
+	Extends string `gorm:"size:64" json:"extends,omitempty"`
 	// Match 任务/仓库匹配条件(与 health.Filter 同语义)
-	Match map[string][]string `json:"match,omitempty"`
+	Match map[string][]string `gorm:"serializer:json" json:"match,omitempty"`
 	// Spec 套用到任务的默认值(cron/分支/启用)；继承时子覆盖父（非空字段）。
-	Spec Spec `json:"spec"`
+	Spec Spec `gorm:"serializer:json" json:"spec"`
 	// Tags 便于检索
-	Tags      []string  `json:"tags,omitempty"`
+	Tags      []string  `gorm:"serializer:json" json:"tags,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

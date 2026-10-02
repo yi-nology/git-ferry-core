@@ -21,6 +21,8 @@ type appDAOs struct {
 	event    *dao.WebhookEventDAO
 	platform *dao.PlatformDAO
 	opLog    *dao.OperationLogDAO
+	template *dao.TemplateDAO
+	approv   *dao.ForcePushApprovalDAO
 	provider *sdkprov.Manager
 }
 
@@ -60,6 +62,8 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 		event:    dao.NewWebhookEventDAO(db),
 		platform: platformDAO,
 		opLog:    dao.NewOperationLogDAO(db),
+		template: dao.NewTemplateDAO(db),
+		approv:   dao.NewForcePushApprovalDAO(db),
 		provider: sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64)),
 	}, nil
 }
