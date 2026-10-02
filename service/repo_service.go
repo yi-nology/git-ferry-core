@@ -18,6 +18,7 @@ type RepoService struct {
 	repoDAO     *dao.RepoDAO
 	platformDAO *dao.PlatformDAO
 	providerMgr *sdkprov.Manager
+	hooks       *sdkprov.Hooks
 }
 
 // NewRepoService creates a new RepoService instance.
@@ -208,7 +209,7 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 		}
 	}
 	if platform != nil {
-		return rs.providerMgr.Get(providerConfig(platform, token))
+		return rs.providerMgr.Get(providerConfig(platform, token, rs.hooks))
 	}
 	return rs.providerMgr.GetByURL(repo.CloneURL, token)
 }

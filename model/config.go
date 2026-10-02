@@ -10,17 +10,24 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Redis    RedisConfig    `yaml:"redis"`
-	Git      GitConfig      `yaml:"git"`
-	Sync     SyncConfig     `yaml:"sync"`
-	Webhook  WebhookConfig  `yaml:"webhook"`
-	Log      LogConfig      `yaml:"log"`
+	Server    ServerConfig    `yaml:"server"`
+	Database  DatabaseConfig  `yaml:"database"`
+	Redis     RedisConfig     `yaml:"redis"`
+	Git       GitConfig       `yaml:"git"`
+	Sync      SyncConfig      `yaml:"sync"`
+	Webhook   WebhookConfig   `yaml:"webhook"`
+	Log       LogConfig       `yaml:"log"`
+	Templates TemplatesConfig `yaml:"templates"`
+}
+
+// TemplatesConfig 同步策略模板库（JSON 文件存储，壳层原本直接持有；下沉到 core 统一管理）。
+type TemplatesConfig struct {
+	// Path 模板库文件路径，空 = data/templates.json（与历史壳层默认一致）。
+	Path string `yaml:"path" env:"GIT_SYNC_TEMPLATES_PATH"`
 }
 
 // ServerConfig 壳层 HTTP 监听相关配置。
-// 用户登录 / API Key / SSO 等鉴权不属于本库；由 git-sync-service / git-sync-intranet 自行持有。
+// 用户登录 / API Key / SSO 等鉴权不属于本库；由 git-ferry / git-ferry-intranet 自行持有。
 // core 库本身不监听端口、不做用户鉴权。
 type ServerConfig struct {
 	Host string `yaml:"host" env:"GIT_SYNC_SERVER_HOST"`

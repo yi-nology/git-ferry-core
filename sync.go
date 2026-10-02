@@ -20,8 +20,11 @@ type Config = model.Config
 // WebhookPayload 协议无关的 Webhook 入站载荷（由壳层构造）。
 type WebhookPayload = service.WebhookPayload
 
-func NewService(cfg *Config) (*Service, error) {
-	return service.NewService(cfg)
+// Option 装配期依赖注入（WithDB / WithProviderHooks / WithForcePushApprover）。
+type Option = service.Option
+
+func NewService(cfg *Config, opts ...Option) (*Service, error) {
+	return service.NewService(cfg, opts...)
 }
 
 func LoadConfig(path string) (*Config, error) {

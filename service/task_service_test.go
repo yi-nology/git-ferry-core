@@ -413,3 +413,20 @@ func TestTaskService_CleanupOldRunSteps(t *testing.T) {
 
 	assert.Equal(t, int64(1), count, "expected count 1")
 }
+
+// TestValidateBranchName 锁定分支名校验的放行/拒绝集合：
+// 必须放行 executor 多分支规格用到的 glob 字符（org 导入/镜像编排传 "*" 表示全部分支）。
+func TestValidateBranchName(t *testing.T) {
+	allowed := []string{"", "main", "release/1.0", "feat/new_feature", "*", "feat/*", "fix-?", "a[bc]d", "release/*.[0-9]"}
+	for _, b := range allowed {
+		if err := validateBranchName(b); err != nil {
+			t.Errorf("validateBranchName(%q) = %v, want nil", b, err)
+		}
+	}
+	rejected := []string{"a:b", "..", "a b", "a\nb", "a~b", "a^b", `a\b`, "a@{b"}
+	for _, b := range rejected {
+		if err := validateBranchName(b); err == nil {
+			t.Errorf("validateBranchName(%q) = nil, want error", b)
+		}
+	}
+}

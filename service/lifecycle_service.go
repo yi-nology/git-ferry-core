@@ -71,7 +71,7 @@ func (s *Service) AutoDiscover(ctx context.Context, platformKey string, opts Aut
 		rep.Warnings = append(rep.Warnings, "platform not found")
 		return rep, nil
 	}
-	prov, err := platformProvider(s.platforms.providerMgr, plat)
+	prov, err := platformProvider(s.platforms.providerMgr, plat, s.providerHooks)
 	if err != nil {
 		rep.Warnings = append(rep.Warnings, "provider: "+err.Error())
 		return rep, nil

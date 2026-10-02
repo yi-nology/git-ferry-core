@@ -17,6 +17,7 @@ type PlatformService struct {
 	platformDAO *dao.PlatformDAO
 	repoDAO     *dao.RepoDAO
 	providerMgr *sdkprov.Manager
+	hooks       *sdkprov.Hooks
 }
 
 // NewPlatformService 创建 PlatformService
@@ -78,7 +79,7 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 		return nil, errors.Newf("platform not found: %s", key)
 	}
 
-	provider, err := platformProvider(s.providerMgr, platform)
+	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perP
 		return nil, errors.Newf("platform not found: %s", key)
 	}
 
-	provider, err := platformProvider(s.providerMgr, platform)
+	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +133,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 	if platform == nil {
 		return 0, errors.Newf("platform not found: %s", key)
 	}
-	provider, err := platformProvider(s.providerMgr, platform)
+	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
 	if err != nil {
 		return 0, err
 	}

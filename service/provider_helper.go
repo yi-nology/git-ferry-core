@@ -12,17 +12,10 @@ import (
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
-// providerHooks 由壳层注入(限流指标等),providerConfig 每次构造都带上。
-var providerHooks *sdkprov.Hooks
-
-// SetProviderHooks 注入 provider 请求/响应生命周期钩子(壳层启动时调用一次)。
-func SetProviderHooks(h *sdkprov.Hooks) {
-	providerHooks = h
-}
-
 // providerConfig 由平台记录构建 SDK provider 配置(token 可覆盖平台默认)。
 // RetryConfig 给默认重试(429/5xx 退避),避免下游自己再包一层;nil=不重试。
-func providerConfig(p *model.Platform, token string) sdkprov.Config {
+// hooks 来自 WithProviderHooks 装配,随 Service 实例走,不再用包级全局变量。
+func providerConfig(p *model.Platform, token string, hooks *sdkprov.Hooks) sdkprov.Config {
 	rc := sdkprov.DefaultRetryConfig()
 	return sdkprov.Config{
 		Platform:    sdkprov.Platform(p.Type),
@@ -30,13 +23,13 @@ func providerConfig(p *model.Platform, token string) sdkprov.Config {
 		Token:       token,
 		SkipTLS:     p.SkipTLSVerify,
 		RetryConfig: &rc,
-		Hooks:       providerHooks,
+		Hooks:       hooks,
 	}
 }
 
 // providerFromManager 按 token 取 provider(统一走 Manager 缓存)。
 // tokenOverride 非空时优先;否则按平台解析(GitHub App installation token 感知)。
-func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride string) (sdkprov.Provider, error) {
+func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride string, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
 	if mgr == nil {
 		return nil, errors.New("provider manager is nil")
 	}
@@ -48,7 +41,7 @@ func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride 
 		}
 		token = resolved
 	}
-	prov, err := mgr.Get(providerConfig(p, token))
+	prov, err := mgr.Get(providerConfig(p, token, hooks))
 	if err != nil {
 		return nil, fmt.Errorf("create provider failed: %w", err)
 	}
@@ -58,8 +51,8 @@ func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride 
 // platformProvider 返回平台对应的 provider,统一经 Manager 缓存,
 // 替代散落各处的 Config+NewProvider 样板。
 // Token 优先取 GitHub App installation token(若配置),否则用 AccessToken。
-func platformProvider(mgr *sdkprov.Manager, p *model.Platform) (sdkprov.Provider, error) {
-	return providerFromManager(mgr, p, "")
+func platformProvider(mgr *sdkprov.Manager, p *model.Platform, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
+	return providerFromManager(mgr, p, "", hooks)
 }
 
 // ProviderForPlatform 按平台取 provider,供壳层复用:
@@ -71,7 +64,7 @@ func (s *Service) ProviderForPlatform(p *model.Platform, tokenOverride string) (
 	if s.platforms == nil {
 		return nil, errors.New("provider manager is nil")
 	}
-	return providerFromManager(s.platforms.providerMgr, p, tokenOverride)
+	return providerFromManager(s.platforms.providerMgr, p, tokenOverride, s.providerHooks)
 }
 
 // parsePageOpts 解析分页参数字符串并归一化(空/非法回落 SDK 默认值)。

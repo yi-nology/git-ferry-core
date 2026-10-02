@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yi-nology/git-ferry-core/tpl"
+
 	errors "github.com/cockroachdb/errors"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
@@ -27,6 +29,14 @@ type Service struct {
 	config          *Config
 	db              *gorm.DB
 	sqlDB           *sql.DB
+	ownsDB          bool
+	providerHooks   *sdkprov.Hooks
+	templates       *tpl.Store
+	approvals       *ForcePushStore
+	retryTracker    *RetryTracker
+	runSubs         []runSubscriber
+	runSubID        uint64
+	runSubMu        sync.Mutex
 	repos           *RepoService
 	tasks           *TaskService
 	webhooks        *WebhookService
@@ -47,10 +57,21 @@ type Service struct {
 	wg          sync.WaitGroup
 }
 
-func NewService(cfg *Config) (*Service, error) {
-	db, err := initDB(cfg)
-	if err != nil {
-		return nil, err
+func NewService(cfg *Config, opts ...Option) (*Service, error) {
+	so := &serviceOptions{}
+	for _, opt := range opts {
+		opt(so)
+	}
+
+	// 外部注入 DB 时由调用方持有生命周期(Stop 不关闭)。
+	db := so.db
+	ownsDB := db == nil
+	if ownsDB {
+		var err error
+		db, err = initDB(cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := ensureTempDir(cfg.Git.TempDir); err != nil {
 		return nil, err
@@ -65,18 +86,23 @@ func NewService(cfg *Config) (*Service, error) {
 	webhookService := NewWebhookService(daos.rule, daos.event, daos.repo)
 	platformService := NewPlatformService(daos.platform, daos.repo, daos.provider)
 	opLogService := NewOperationLogService(daos.opLog)
+	// provider 生命周期钩子随实例走(WithProviderHooks),构造 provider 时带上。
+	repoService.hooks = so.providerHooks
+	platformService.hooks = so.providerHooks
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	daos.provider.StartJanitor(bgCtx, 10*time.Minute)
 
 	svc := &Service{
-		config:    cfg,
-		db:        db,
-		repos:     repoService,
-		tasks:     taskService,
-		webhooks:  webhookService,
-		platforms: platformService,
-		opLogs:    opLogService,
+		config:        cfg,
+		db:            db,
+		ownsDB:        ownsDB,
+		providerHooks: so.providerHooks,
+		repos:         repoService,
+		tasks:         taskService,
+		webhooks:      webhookService,
+		platforms:     platformService,
+		opLogs:        opLogService,
 		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
 		cron:         cron.New(),
 		cronEntryIDs: make(map[string]cron.EntryID),
@@ -101,11 +127,36 @@ func NewService(cfg *Config) (*Service, error) {
 	}
 	svc.guard = guard
 
+	// 同步策略模板库：文件存储，路径由 cfg.Templates.Path 决定（默认 data/templates.json）。
+	tplPath := cfg.Templates.Path
+	if tplPath == "" {
+		tplPath = "data/templates.json"
+	}
+	tplStore, err := tpl.Open(tplPath)
+	if err != nil {
+		return nil, errors.Wrap(err, "init template store failed")
+	}
+	svc.templates = tplStore
+
+	// force-push 审批存储：<backup_dir>/force-push-approvals.json（未配置回落 data/）。
+	approvalsPath := filepath.Join("data", "force-push-approvals.json")
+	if cfg.Sync.BackupDir != "" {
+		approvalsPath = filepath.Join(cfg.Sync.BackupDir, "force-push-approvals.json")
+	}
+	svc.approvals = NewForcePushStore(approvalsPath)
+	svc.retryTracker = NewRetryTracker(0)
+
 	exec, err := executor.NewExecutor(svc)
 	if err != nil {
 		return nil, errors.Wrap(err, "init executor failed")
 	}
 	svc.executor = exec
+	// 默认用 core 自带的审批存储；WithForcePushApprover 可覆盖（外部审批系统）。
+	if so.forcePushApprover != nil {
+		exec.Approver = so.forcePushApprover
+	} else {
+		exec.Approver = svc.approvals
+	}
 
 	mirrorSvc, err := NewMirrorService(svc, db)
 	if err != nil {
@@ -157,6 +208,13 @@ func (s *Service) doStop() {
 		slog.Warn("timeout waiting for background goroutines to stop")
 	}
 
+	// 释放镜像通道跨实例锁的 redis 连接
+	if s.mirror != nil && s.mirror.redisLock != nil {
+		if err := s.mirror.redisLock.Close(); err != nil {
+			slog.Error("failed to close mirror redis lock", "error", err)
+		}
+	}
+
 	// 释放并发控制器(关闭 redis 连接等)
 	if s.guard != nil {
 		if err := s.guard.Close(); err != nil {
@@ -164,8 +222,8 @@ func (s *Service) doStop() {
 		}
 	}
 
-	// 关闭数据库连接池
-	if s.sqlDB != nil {
+	// 关闭数据库连接池(仅 core 自建的;WithDB 注入的由调用方负责)
+	if s.sqlDB != nil && s.ownsDB {
 		if err := s.sqlDB.Close(); err != nil {
 			slog.Error("failed to close database connection", "error", err)
 		}

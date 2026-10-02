@@ -12,8 +12,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// validBranchName 匹配合法的 git 分支名:字母数字._/-,不含冒号/双点/波浪号等危险字符。
-var validBranchName = regexp.MustCompile(`^[a-zA-Z0-9._/\-]+$`)
+// validBranchName 匹配合法的分支名/分支规格:字母数字._/-,不含冒号/双点/波浪号等危险字符。
+// 额外允许 glob 元字符 * ? [ ]：executor 以 strings.ContainsAny(spec, "*?[") 识别
+// 多分支规格（org 导入/镜像编排用 "*" 表示同步全部分支），校验必须放行同一套字符。
+var validBranchName = regexp.MustCompile(`^[a-zA-Z0-9._/\-*?\[\]]+$`)
 
 func validateBranchName(branch string) error {
 	if branch == "" {

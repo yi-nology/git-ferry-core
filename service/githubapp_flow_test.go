@@ -124,7 +124,7 @@ func TestGitHubApp_UsedByPlatformProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "provider_token", tok, "GitHub App 优先于 PAT")
 
-	cfg := providerConfig(p, tok)
+	cfg := providerConfig(p, tok, nil)
 	assert.Equal(t, "provider_token", cfg.Token)
 	assert.Equal(t, "github", string(cfg.Platform))
 }

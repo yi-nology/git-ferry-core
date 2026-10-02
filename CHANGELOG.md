@@ -2,6 +2,65 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- **装配期依赖注入**：`NewService(cfg, opts...)` + `Option`——`WithDB`（外部
+  `*gorm.DB`，`Stop()` 不再关闭注入的连接池）、`WithProviderHooks`、
+  `WithForcePushApprover`。provider 钩子由包级全局改为**随 Service 实例走**。
+- **错误→HTTP 分类契约**：`ErrorClass` + `Classify(err)`，配套哨兵
+  `ErrPlatformNotFound` / `ErrTargetPlatformNotFound` / `ErrStarredUnsupported` /
+  `ErrTemplateNotFound` / `ErrTemplateCycle` / `ErrMetadataValidation`（壳层据此选状态码）。
+- **org 映射收敛为唯一实现**：`OrgMapOptions{PreserveRedirect, MixedOrgToTarget,
+  RequireTarget}` 表达三份历史语义差异 + `ParseStrategy`；修 `IsPersonalOwner`
+  恒 false 的死分支。
+- **metadata 备份/回灌引擎**（自壳层下沉）：`BackupMetadata` /
+  `ListMetadataBackups` / `RestoreMetadata` / `SampleMetadataVerify` /
+  `MetadataBackupDir` / `BackupGists` / `DownloadReleaseAssets`，含 manifest、
+  kind 分发、截断与历史文件格式。
+- **health 评分**（整包自壳层 `internal/health` 平移为 `health/`）+
+  `Service.HealthSnapshot`（含 summary 聚合）。
+- **运维聚合查询**：`OpsTrends`、`OpsTodo`、`TaskService.RecentRuns`。
+- **组织导入/镜像编排**：`ImportPublicOrg` / `BulkMirrorOrg` / `ListStarredRepos` /
+  `RewriteRepoURL`（列表、过滤、映射、批量建仓建任务与统计）。
+- **同步策略模板**（自壳层平移为 `tpl/`）：`Service.Templates` /
+  `SetTemplates` / `PreviewTemplate` / `ApplyTemplate` / `RepoInventory`，
+  新增 `cfg.Templates.Path`（默认 `data/templates.json`）。
+- **force-push 审批存储**：`ForcePushStore`（JSON 字段与历史文件逐字兼容），
+  `Service.ForcePushApprovals()`，并**默认接线为执行器 Approver**（`WithForcePushApprover` 可覆盖）。
+- **运行完成事件**：`SubscribeRuns(fn) (cancel)` + `RunEvent`，在
+  `RunTaskAsync` / `RunTaskWithTrigger` 收尾广播（cron/webhook/手动全覆盖），
+  每订阅者独立 goroutine + recover。
+- **失败自动补偿**：`RetryTracker.ShouldRetry(run, AutoRetryPolicy)`（次数/冷却/淘汰）。
+- **mirror 通道跨实例互斥**：配 redis 时 `mirror-channel-<id>` 抢锁（TTL 30min），
+  被其它实例占用直接报忙碌；redis 抖动降级为进程内互斥；release 幂等。
+- **`pkg/deploykey`**：`Generate(comment)`（Ed25519 部署密钥对）。
+- **`pkg/strutil`**：`Truncate` 改 UTF-8 安全截断；新增 `TruncateRunes` /
+  `SanitizePathToken` / `BoolFact`。
+- 测试补账：`orgmap`（三份语义表驱动）、`Classify`、`events`/`retry`（-race）、
+  `forcepush_store`（含旧文件兼容）、`mirror_lock`（跨实例/本地/降级）、
+  `provider_helper`（RepoImportFilter）、`ops_query`、`template_service`、`strutil`。
+
+### Changed
+
+- **`ResolveOrgTarget` 签名变更**：改为 `(sourceOwner, sourceRepo, OrgMapOptions)`，
+  原多参数版本只有测试引用（生产零调用）。
+- **分支名校验放行 glob 字符 `*?[]`**：`executor` 明确以
+  `strings.ContainsAny(spec, "*?[")` 识别多分支规格，而 `CreateTask` 的
+  `validateBranchName` 此前拒绝 `*`——导致**组织导入/组织镜像建任务一直静默失败**。
+
+### Removed
+
+- **`SetProviderHooks`**（包级全局 setter）：无法转发到实例，改由
+  `WithProviderHooks` 注入；全仓仅壳层 `main.go` 一处调用，已同步改造。
+
+### Fixed
+
+- **`OpsTrends` 恒返回空序列**：原实现 `ListHistory(ctx, "", 0, 2000)` 实际是
+  `task_key = ''` 等值匹配，而 `CreateRun` 总写入真实 taskKey → 改用既有但未
+  暴露的 `SyncRunDAO.FindRecent`（新增 `TaskService.RecentRuns` 门面）。
+
 ## [0.7.0] - 2026-10-01
 
 ### Added

@@ -100,10 +100,12 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		if _, err := s.executor.Execute(s.bgCtx, task, trigger, webhookEventID); err != nil {
+		run, err := s.executor.Execute(s.bgCtx, task, trigger, webhookEventID)
+		if err != nil {
 			// 结果已落 run 记录,这里仅留痕
 			slog.Warn("async task run failed", "task", taskKey, "error", err)
 		}
+		s.emitRunCompleted(taskKey, trigger, run, err)
 	}()
 	return nil
 }
@@ -135,7 +137,8 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 	}
 	defer release()
 
-	_, err = s.executor.Execute(ctx, task, trigger, webhookEventID)
+	run, err := s.executor.Execute(ctx, task, trigger, webhookEventID)
+	s.emitRunCompleted(taskKey, trigger, run, err)
 	return err
 }
 
