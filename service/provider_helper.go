@@ -140,16 +140,18 @@ func globMatchName(pattern, s string) bool {
 }
 
 // fetchAllPlatformRepos 按最大页大小循环翻页,拉取平台全部仓库。
-// 返回条数不足一页时认为已到末页;maxPages 作为安全上限防止异常平台无限翻页。
-// 翻页骨架复用平台 provider.ListAllPages,这里只保留按 CloneURL/FullName 的去重。
+// 空页终止,复用平台 provider.CollectBounded(v0.73 起唯一分页面;
+// 短页≠末页——服务端可能把页大小压到请求值以下);maxPages 作为安全
+// 上限防止异常平台(忽略 page 参数)无限翻页,撞上限报 ErrPageBudgetExceeded
+// 而非静默截断。这里只保留按 CloneURL/FullName 的去重。
 func fetchAllPlatformRepos(ctx context.Context, provider sdkprov.Provider) ([]*sdkprov.PlatformRepo, error) {
 	const maxPages = 100
 	perPage := sdkprov.MaxPerPage
 
-	repos, err := sdkprov.ListAllPages(ctx, perPage, maxPages,
-		func(ctx context.Context, page, perPage int) ([]*sdkprov.PlatformRepo, error) {
+	repos, err := sdkprov.CollectBounded(ctx,
+		func(ctx context.Context, page int) ([]*sdkprov.PlatformRepo, error) {
 			return provider.ListRepos(ctx, sdkprov.ListRepoOptions{Page: page, PerPage: perPage})
-		})
+		}, maxPages)
 	if err != nil {
 		return nil, err
 	}

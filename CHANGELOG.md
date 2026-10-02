@@ -72,6 +72,15 @@
 - 依赖 go-git-platform v0.68.2 → **v0.72.0**（githubapp/四能力/分页/403 重试，
   连带 v0.69 传递依赖保鲜：gitea.dev/sdk v1.3.0、gitlab client-go v3.15.0 等）。
 
+## [0.8.1] - 2026-10-02
+
+### Changed
+
+- 依赖 go-git-platform v0.72.0 → **v0.75.0**；分页迁移到 v0.73 收敛后的唯一
+  分页面：`fetchAllPlatformRepos` 改 `provider.CollectBounded`（`ListAllPages`
+  已被平台删除——空页终止语义，短页≠末页，防服务端压缩页大小时提前停；
+  撞页预算报 `ErrPageBudgetExceeded` 而非静默截断）。
+
 ## [0.6.1] - 2026-09-29
 
 ### Added
