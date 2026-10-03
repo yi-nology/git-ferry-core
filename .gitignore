@@ -13,3 +13,6 @@ output/
 
 # Data
 data/
+
+# 本地多仓联调覆盖(发布以 go.mod 为准)
+go.work*
