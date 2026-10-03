@@ -13,7 +13,7 @@ require (
 	github.com/sethvargo/go-envconfig v1.4.3
 	github.com/stretchr/testify v1.12.1
 	github.com/yi-nology/go-git-platform v0.76.0
-	golang.org/x/tools v0.49.0
+	golang.org/x/tools v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.5.7
 	gorm.io/driver/sqlite v1.6.0
