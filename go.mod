@@ -3,7 +3,7 @@ module github.com/yi-nology/git-ferry-core
 go 1.26.3
 
 require (
-	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/cockroachdb/errors v1.14.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.2
