@@ -9,13 +9,13 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
 	github.com/oekit/concurrency v0.5.4
-	github.com/oekit/logx v0.5.0
+	github.com/oekit/logx v0.5.1
 	github.com/oekit/redisx v0.7.5
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sethvargo/go-envconfig v1.4.3
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v0.89.0
+	github.com/yi-nology/go-git-platform v0.90.0
 	golang.org/x/tools v0.51.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.5.7

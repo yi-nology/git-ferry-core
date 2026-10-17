@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.10.1] - 2026-10-17
+
+### Changed
+
+- **依赖升 go-git-platform v0.89.0 → v0.90.0、oekit/logx v0.5.0 → v0.5.1**(地板对齐,
+  生产代码零改动)：
+  - SDK v0.90.0 随 oekit 新地板（pkg v0.11.0 / concurrency v0.5.4 / logx v0.5.0）对齐,
+    transport 在 Debug 被级别过滤时不再求值响应体拷贝等 kv 参数(`DebugEnabled` 守卫)。
+  - logx v0.5.1 修复 `NewStdLogger` 无参默认级别 DEBUG 的 iota 陷阱(#11)——未设
+    `LOG_LEVEL` 时 oekit 组件内部日志会全量打进生产；本仓 proclog 一直显式设级,
+    实际未受影响,升级以对齐契约。logx 另新增 `NewAuditLogger`(审计留痕不被降级),暂无使用点。
+
 ## [v0.10.0] - 2026-10-17
 
 ### Added
