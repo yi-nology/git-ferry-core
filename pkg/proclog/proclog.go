@@ -18,8 +18,8 @@ import (
 // 并把进程内 oekit 组件接到同一套输出：
 //   - async.GoSafe 恢复的 panic 经 slog.Error 记录（库默认走标准库 log，格式不一致）；
 //   - oekit 组件内部日志（如 distlock 续期告警）经 logx 门面输出，service 字段取可执行
-//     文件名，级别与 level 对齐。logx 的 slog 后端自带 JSON 输出、不经过 slog handler，
-//     因此 format=text 时这部分仍是 JSON 行。
+//     文件名；logx.WithHandler 注入上面构造的 slog.Handler——格式/输出目标完全随
+//     format(text|json) 与 level 走，与业务日志同格式落 stdout。
 func Setup(level, format string) {
 	var lv slog.Level
 	switch level {
@@ -44,11 +44,11 @@ func Setup(level, format string) {
 		slog.Error("goroutine panic recovered", "panic", msg, "stack", string(stack))
 	})
 
-	l := logx.NewSlogLogger(filepath.Base(os.Args[0]))
+	opts := []logx.SlogOption{logx.WithHandler(h)}
 	if lx := logx.ParseLogLevel(level); lx != nil {
-		l.SetLevel(*lx)
+		opts = append(opts, logx.WithLevel(*lx))
 	}
-	logx.SetDefault(l)
+	logx.SetDefault(logx.NewSlogLogger(filepath.Base(os.Args[0]), opts...))
 }
 
 // ExitOnFail 打日志并退出进程（启动期不可恢复错误用）。

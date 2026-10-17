@@ -95,8 +95,9 @@
   - **push 重试 → `github.com/oekit/concurrency/retry.Do`**：线性退避改为「第 i 次失败后等待
     i×RetryBackoffMs」（此前为 (i+1)×），ctx 取消统一映射为 `retry aborted`。
   - **`pkg/proclog.Setup`** 顺带接管进程内 oekit 组件：`async.SetPanicHandler` 走 slog；
-    `logx.SetDefault` 设为 slog 风格 JSON 后端（`service` 取可执行文件名，级别随 level），
-    distlock 等组件的内部告警与业务日志同格式落 stdout。
+    `logx.SetDefault` 以 `WithHandler` 注入同一个 slog.Handler（logx v0.3.0）——oekit
+    组件内部日志（distlock 续期告警等）与业务日志同格式同级别落 stdout，service 字段取
+    可执行文件名，text/json 配置对组件日志同样生效。
 - **`ResolveOrgTarget` 签名变更**：改为 `(sourceOwner, sourceRepo, OrgMapOptions)`，
   原多参数版本只有测试引用（生产零调用）。
 - **分支名校验放行 glob 字符 `*?[]`**：`executor` 明确以

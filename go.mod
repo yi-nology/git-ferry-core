@@ -9,7 +9,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
 	github.com/oekit/concurrency v0.4.0
-	github.com/oekit/logx v0.2.0
+	github.com/oekit/logx v0.3.0
 	github.com/oekit/redisx v0.7.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
