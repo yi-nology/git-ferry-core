@@ -67,6 +67,11 @@
 
 ### Changed
 
+- **依赖升 go-git-platform v0.88.1 → v0.89.0 + oekit 新基线**:concurrency v0.4.0 → v0.5.2
+  (retry 指数退避/Jitter、loop、GoSafeLabeled 等纯增量,GoSafe/retry.Do 签名未动)、
+  logx v0.3.0 → v0.5.0(`Delegating` 改单参——SDK v0.89.0 已同步适配其零参调用;
+  Sink 迁嵌套模块 `logx/sink`,本仓未使用)、间接 pkg v0.6.0 → v0.9.3。生产代码零改动,
+  `go mod tidy` exit 0;`go test -race ./...` 10 包全绿。
 - **依赖升 go-git-platform v0.76.0 → v0.88.1**(12 个 0.x minor,SDK 侧已接入 oekit
   pkg/errors·concurrency·logx,与本仓同一套版本线)。随之 **Go 版本线 1.26.3 → 1.27.2**
   (SDK go.mod 要求;CI 矩阵同步 `'1.27'`),go-git v5.19.3、gitlab client-go v3.18.0、
