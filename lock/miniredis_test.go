@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
@@ -17,29 +18,29 @@ func newMiniredis(t *testing.T) *redis.Client {
 	return redis.NewClient(&redis.Options{Addr: mr.Addr()})
 }
 
-// TestRedisLock_ExtendLockWithValue_miniredis 验证 CAS 续期:
-// 持有者能续期,非持有者/已释放后续期失败。
-func TestRedisLock_ExtendLockWithValue_miniredis(t *testing.T) {
-	client := newMiniredis(t)
+// TestNewLocker_KeyLayout_miniredis 钉住跨实例锁的 key 布局:distlock 必须落在
+// "git-sync:lock:<key>" 下,与迁移前自写实现一致,否则滚动升级期间新老实例各持一把锁。
+// 同时验证 ownerID 校验:非持有者无法解锁。
+func TestNewLocker_KeyLayout_miniredis(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer func() { _ = client.Close() }()
-	rl := &RedisLock{client: client, lockValues: make(map[string]string)}
 	ctx := context.Background()
 
-	ok, value, err := rl.LockWithTTL(ctx, "k1", 2*time.Second)
-	require.NoError(t, err, "LockWithTTL failed")
-	require.True(t, ok, "LockWithTTL should acquire lock")
+	locker := NewLocker(client)
+	ownerID, err := locker.TryLock(ctx, "task:k1", 2*time.Second)
+	require.NoError(t, err, "TryLock")
+	require.NotEmpty(t, ownerID)
+	require.True(t, mr.Exists("git-sync:lock:task:k1"), "lock key layout must stay git-sync:lock:<key>")
 
-	got, _ := rl.ExtendLockWithValue(ctx, "k1", value, 5*time.Second)
-	require.True(t, got, "owner extend should succeed")
+	_, err = locker.TryLock(ctx, "task:k1", 2*time.Second)
+	require.ErrorIs(t, err, distlock.ErrLockNotAcquired, "second holder must be rejected")
 
-	got, _ = rl.ExtendLockWithValue(ctx, "k1", "wrong-value", 5*time.Second)
-	require.False(t, got, "non-owner extend should fail")
+	require.NoError(t, locker.Unlock(ctx, "task:k1", "wrong-owner"), "non-owner unlock is a no-op, not an error")
+	require.True(t, mr.Exists("git-sync:lock:task:k1"), "non-owner must not release the lock")
 
-	err = rl.UnlockWithValue(ctx, "k1", value)
-	require.NoError(t, err, "UnlockWithValue")
-
-	got, _ = rl.ExtendLockWithValue(ctx, "k1", value, 5*time.Second)
-	require.False(t, got, "extend after unlock should fail")
+	require.NoError(t, locker.Unlock(ctx, "task:k1", ownerID))
+	require.False(t, mr.Exists("git-sync:lock:task:k1"), "owner unlock releases the lock")
 }
 
 // TestSemaphore_RespectsMax_miniredis 验证不超过 max,release 后释放槽。

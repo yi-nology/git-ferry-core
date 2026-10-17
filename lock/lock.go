@@ -1,38 +1,29 @@
+// Package lock 提供同步任务的并发控制原语:
+//   - 跨实例互斥锁:oekit redisx/distlock(SetNX + Lua 原子解锁 + 自动续期),
+//     本包只负责固定 key 前缀与客户端构造;
+//   - Semaphore:基于 redis ZSET 的分布式信号量,限制全局并发上限;
+//   - LocalLock:单实例(未配 redis)时的进程内互斥。
 package lock
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"math/big"
 	"sync"
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
 	defaultLockTTL = 30 * time.Second
+
+	// LockKeyPrefix 是跨实例互斥锁的 key 前缀。distlock 以 "<prefix>:<key>" 落 key,
+	// 与迁移前自写实现的 "git-sync:lock:<key>" 布局一致:滚动升级期间新老实例
+	// 看到的是同一把锁,不会出现两边各持一把而同时执行的窗口。
+	LockKeyPrefix = "git-sync:lock"
 )
-
-var unlockScript = redis.NewScript(`
-	if redis.call("get", KEYS[1]) == ARGV[1] then
-		return redis.call("del", KEYS[1])
-	else
-		return 0
-	end
-`)
-
-// extendScript 仅当锁的 value 匹配(自己是持有者)才续期,避免误续别人的锁。
-var extendScript = redis.NewScript(`
-	if redis.call("get", KEYS[1]) == ARGV[1] then
-		return redis.call("pexpire", KEYS[1], ARGV[2])
-	else
-		return 0
-	end
-`)
 
 var semaphoreAcquireScript = redis.NewScript(`
 local key = KEYS[1]
@@ -54,19 +45,6 @@ redis.call('ZADD', key, expire, member)
 return 1
 `)
 
-type DistLock interface {
-	TryLock(ctx context.Context, key string) (bool, error)
-	TryLockWithTTL(ctx context.Context, key string, ttl time.Duration) (bool, error)
-	Lock(ctx context.Context, key string) error
-	Unlock(ctx context.Context, key string) error
-}
-
-type RedisLock struct {
-	client     *redis.Client
-	mu         sync.Mutex
-	lockValues map[string]string
-}
-
 // RedisPoolOptions 连接池可选配置,零值使用 go-redis 默认。
 type RedisPoolOptions struct {
 	PoolSize        int // 连接池大小,默认 10*GOMAXPROCS
@@ -76,7 +54,7 @@ type RedisPoolOptions struct {
 	WriteTimeoutSec int // 写超时秒数
 }
 
-// Option functional option for NewRedisLock.
+// Option functional option for NewRedisClient.
 type Option func(*redis.Options)
 
 // WithPoolOptions 设置连接池参数。
@@ -100,7 +78,8 @@ func WithPoolOptions(pool RedisPoolOptions) Option {
 	}
 }
 
-func NewRedisLock(addr, password string, db int, opts ...Option) *RedisLock {
+// NewRedisClient 按地址与连接池参数构造 go-redis 客户端,供 NewLocker / NewSemaphore 共用。
+func NewRedisClient(addr, password string, db int, opts ...Option) *redis.Client {
 	o := &redis.Options{
 		Addr:     addr,
 		Password: password,
@@ -109,157 +88,13 @@ func NewRedisLock(addr, password string, db int, opts ...Option) *RedisLock {
 	for _, opt := range opts {
 		opt(o)
 	}
-
-	return &RedisLock{
-		client:     redis.NewClient(o),
-		lockValues: make(map[string]string),
-	}
+	return redis.NewClient(o)
 }
 
-func generateLockValue() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func (l *RedisLock) TryLock(ctx context.Context, key string) (bool, error) {
-	return l.TryLockWithTTL(ctx, key, defaultLockTTL)
-}
-
-func (l *RedisLock) TryLockWithTTL(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	lockKey := "git-sync:lock:" + key
-	value := generateLockValue()
-	ok, err := l.client.SetNX(ctx, lockKey, value, ttl).Result()
-	if err != nil {
-		return false, errors.Wrap(err, "redis setnx failed")
-	}
-	if ok {
-		l.mu.Lock()
-		l.lockValues[key] = value
-		l.mu.Unlock()
-	}
-	return ok, nil
-}
-
-func (l *RedisLock) LockWithTTL(ctx context.Context, key string, ttl time.Duration) (bool, string, error) {
-	lockKey := "git-sync:lock:" + key
-	value := generateLockValue()
-	ok, err := l.client.SetNX(ctx, lockKey, value, ttl).Result()
-	if err != nil {
-		return false, "", errors.Wrap(err, "redis setnx failed")
-	}
-	if ok {
-		l.mu.Lock()
-		l.lockValues[key] = value
-		l.mu.Unlock()
-	}
-	return ok, value, nil
-}
-
-func (l *RedisLock) UnlockWithValue(ctx context.Context, key, value string) error {
-	lockKey := "git-sync:lock:" + key
-	_, err := unlockScript.Run(ctx, l.client, []string{lockKey}, value).Result()
-	if err != nil {
-		return errors.Wrap(err, "redis unlock failed")
-	}
-	// 清理 lockValues 避免条目累积:TTL 过期或显式释放后不再需要保留
-	l.mu.Lock()
-	if v, ok := l.lockValues[key]; ok && v == value {
-		delete(l.lockValues, key)
-	}
-	l.mu.Unlock()
-	return nil
-}
-
-// ExtendLockWithValue 续期:仅当 value 匹配(自己持有)才延长 TTL,返回是否成功续期。
-// 供 watchdog 在长任务期间周期性续期,避免锁过期被别人抢走。
-func (l *RedisLock) ExtendLockWithValue(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
-	lockKey := "git-sync:lock:" + key
-	res, err := extendScript.Run(ctx, l.client, []string{lockKey}, value, ttl.Milliseconds()).Int()
-	if err != nil {
-		return false, errors.Wrap(err, "redis extend failed")
-	}
-	return res == 1, nil
-}
-
-func (l *RedisLock) Lock(ctx context.Context, key string) error {
-	backoff := 100 * time.Millisecond
-	const maxBackoff = 5 * time.Second
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		ok, _, err := l.LockWithTTL(ctx, key, defaultLockTTL)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
-		}
-		if ok {
-			return nil
-		}
-
-		// 指数退避 + 随机 jitter 防惊群(crypto/rand 安全随机)
-		jitter, _ := rand.Int(rand.Reader, big.NewInt(int64(backoff)))
-		jitteredBackoff := backoff/2 + time.Duration(jitter.Int64())
-		timer := time.NewTimer(jitteredBackoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		// 指数退避,上限 5s
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
-}
-
-func (l *RedisLock) Unlock(ctx context.Context, key string) error {
-	l.mu.Lock()
-	value, exists := l.lockValues[key]
-	if exists {
-		delete(l.lockValues, key)
-	}
-	l.mu.Unlock()
-
-	if !exists || value == "" {
-		// 无法确认锁的所有权,不做无条件 DEL 以免误删其他进程的锁。
-		return nil
-	}
-	return l.UnlockWithValue(ctx, key, value)
-}
-
-// ExtendLock 续期:从 lockValues 取出持有值,用 Lua 脚本安全续期。
-// 若 lockValues 中无记录(非本进程持有),返回错误而非盲目续期。
-func (l *RedisLock) ExtendLock(ctx context.Context, key string, ttl time.Duration) error {
-	l.mu.Lock()
-	value, exists := l.lockValues[key]
-	l.mu.Unlock()
-
-	if !exists || value == "" {
-		return errors.Newf("cannot extend lock %q: no stored value (not owned by this instance)", key)
-	}
-	_, err := l.ExtendLockWithValue(ctx, key, value, ttl)
-	return err
-}
-
-func (l *RedisLock) Ping(ctx context.Context) error {
-	return l.client.Ping(ctx).Err()
-}
-
-func (l *RedisLock) Close() error {
-	return l.client.Close()
-}
-
-func (l *RedisLock) Client() *redis.Client {
-	return l.client
+// NewLocker 构造跨实例互斥锁,key 前缀固定为 LockKeyPrefix;续期等策略由调用方按场景追加。
+func NewLocker(client redis.UniversalClient, opts ...distlock.RedisLockerOption) *distlock.RedisLocker {
+	all := append([]distlock.RedisLockerOption{distlock.WithPrefix(LockKeyPrefix)}, opts...)
+	return distlock.NewRedisLocker(client, all...)
 }
 
 type Semaphore struct {

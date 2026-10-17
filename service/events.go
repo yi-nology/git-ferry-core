@@ -1,10 +1,10 @@
 package service
 
 import (
-	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -71,13 +71,7 @@ func (s *Service) emitRunCompleted(taskKey, trigger string, run *model.SyncRun, 
 
 	ev := RunEvent{TaskKey: taskKey, Run: run, Trigger: trigger, Err: err, At: time.Now()}
 	for _, sub := range subs {
-		go func(fn func(RunEvent)) {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("run subscriber panic recovered", "panic", r)
-				}
-			}()
-			fn(ev)
-		}(sub.fn)
+		fn := sub.fn
+		async.GoSafe(func() { fn(ev) })
 	}
 }

@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/oekit/concurrency/async"
+	"github.com/oekit/redisx/distlock"
+	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -77,24 +81,33 @@ func (g *localGuard) TryCronLock(_ context.Context, _ string, _ time.Duration) (
 
 // ---------------- 分布式(redis)实现 ----------------
 
-// redisGuard 多实例并发控制:RedisLock 做 taskKey 互斥,ZSET 信号量做全局并发上限,
-// 均带 watchdog 续期。进程崩溃后锁/槽在 TTL 内自动释放。
+// redisGuard 多实例并发控制:distlock 做 taskKey 互斥(库内自动续期),ZSET 信号量做全局并发上限
+// (watchdog 续期)。进程崩溃后锁/槽在 TTL 内自动释放。
 type redisGuard struct {
-	rlock *lock.RedisLock
-	sem   *lock.Semaphore
+	client *redis.Client
+	locker *distlock.RedisLocker
+	sem    *lock.Semaphore
 }
 
 func newRedisGuard(addr, password string, db, maxConcurrent int, poolOpts lock.RedisPoolOptions) (*redisGuard, error) {
 	if maxConcurrent <= 0 {
 		maxConcurrent = model.DefaultMaxConcurrent
 	}
-	rl := lock.NewRedisLock(addr, password, db, lock.WithPoolOptions(poolOpts))
-	if err := rl.Ping(context.Background()); err != nil {
-		_ = rl.Close()
+	client := lock.NewRedisClient(addr, password, db, lock.WithPoolOptions(poolOpts))
+	if err := client.Ping(context.Background()).Err(); err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("redis ping failed: %w", err)
 	}
-	sem := lock.NewSemaphore(rl.Client(), semSlotKey, maxConcurrent, semSlotTTL)
-	return &redisGuard{rlock: rl, sem: sem}, nil
+	// WithMaxAutoRenew(-1) 取消 distlock 默认的 10×TTL 续期上限:同步任务可能跑数小时
+	// (大仓库克隆),上限一到锁会在任务中途静默过期,被别的实例重复执行。
+	// 锁的生命周期由 release 里的 Unlock 显式终止。
+	locker := lock.NewLocker(client,
+		distlock.WithAutoRenew(),
+		distlock.WithRenewInterval(renewInterval),
+		distlock.WithMaxAutoRenew(-1),
+	)
+	sem := lock.NewSemaphore(client, semSlotKey, maxConcurrent, semSlotTTL)
+	return &redisGuard{client: client, locker: locker, sem: sem}, nil
 }
 
 func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, error) {
@@ -108,28 +121,27 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 		return nil, ErrTooManyConcurrent
 	}
 
-	// 2) 同 taskKey 互斥锁
+	// 2) 同 taskKey 互斥锁:timeout=0 即单次尝试,被占直接返回而不排队
 	lockKey := taskLockKeyPfx + taskKey
-	locked, value, err := g.rlock.LockWithTTL(ctx, lockKey, taskLockTTL)
+	ownerID, err := g.locker.Lock(ctx, lockKey, taskLockTTL, 0)
 	if err != nil {
 		_ = g.sem.Release(ctx, semID)
+		if errors.Is(err, distlock.ErrLockTimeout) {
+			return nil, ErrTaskRunning
+		}
 		return nil, err
 	}
-	if !locked {
-		_ = g.sem.Release(ctx, semID)
-		return nil, ErrTaskRunning
-	}
 
-	// 3) watchdog 续期锁与信号量槽,避免长任务期间过期被别的实例抢走
+	// 3) watchdog 续期信号量槽,避免长任务期间槽过期被回收(任务锁由 distlock 自动续期)
 	stop := make(chan struct{})
-	go g.watchdog(lockKey, value, semID, stop) //nolint:gosec // watchdog goroutine 需要独立于请求生命周期运行
+	async.GoSafe(func() { g.watchdog(semID, stop) })
 
 	return func() {
 		close(stop)
 		// 用带超时的独立 context 释放,避免 Redis 不可响应时 goroutine 永久挂死
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
-		if err := g.rlock.UnlockWithValue(releaseCtx, lockKey, value); err != nil {
+		if err := g.locker.Unlock(releaseCtx, lockKey, ownerID); err != nil {
 			slog.Warn("release: failed to unlock", "lockKey", lockKey, "error", err)
 		}
 		if err := g.sem.Release(releaseCtx, semID); err != nil {
@@ -138,15 +150,9 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 	}, nil
 }
 
-// watchdog 周期性续期持有的锁与信号量槽。stop 关闭即退出。
-// 使用 context.Background() 是有意为之：watchdog 作为后台 goroutine 需要在请求上下文取消后继续运行，
-// 直到 stop 通道被关闭。这是后台任务续期的标准模式。
-func (g *redisGuard) watchdog(lockKey, value, semID string, stop <-chan struct{}) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("watchdog goroutine panic recovered", "lockKey", lockKey, "panic", fmt.Sprintf("%v", r))
-		}
-	}()
+// watchdog 周期性续期持有的信号量槽。stop 关闭即退出。
+// 使用 context.Background() 是有意为之:续期需独立于请求上下文运行,直到 stop 被关闭。
+func (g *redisGuard) watchdog(semID string, stop <-chan struct{}) {
 	t := time.NewTicker(renewInterval)
 	defer t.Stop()
 	ctx := context.Background() //nolint:gosec // watchdog goroutine intentionally uses background context
@@ -156,32 +162,35 @@ func (g *redisGuard) watchdog(lockKey, value, semID string, stop <-chan struct{}
 		case <-stop:
 			return
 		case <-t.C:
-			if _, err := g.rlock.ExtendLockWithValue(ctx, lockKey, value, taskLockTTL); err != nil {
+			if err := g.sem.Renew(ctx, semID); err != nil {
 				failures++
 				if failures%3 == 1 { // 每 3 次失败记一条日志,避免刷屏
-					slog.Warn("watchdog: failed to extend lock", "lockKey", lockKey, "error", err, "consecutive_failures", failures)
+					slog.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err, "consecutive_failures", failures)
 				}
-			} else {
-				failures = 0
-				if err := g.sem.Renew(ctx, semID); err != nil {
-					slog.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err)
-				}
+				continue
 			}
+			failures = 0
 		}
 	}
 }
 
 func (g *redisGuard) Ping() error {
-	return g.rlock.Ping(context.Background())
+	return g.client.Ping(context.Background()).Err()
 }
 
-// TryCronLock 用 Redis SetNX 获取短 TTL 的 cron 锁,防止多实例重复触发。
+// TryCronLock 用短 TTL 的 cron 锁防止多实例重复触发;锁不显式释放,到期自然过期。
 func (g *redisGuard) TryCronLock(ctx context.Context, taskKey string, ttl time.Duration) (bool, error) {
-	return g.rlock.TryLockWithTTL(ctx, "cron:"+taskKey, ttl)
+	if _, err := g.locker.TryLock(ctx, "cron:"+taskKey, ttl); err != nil {
+		if errors.Is(err, distlock.ErrLockNotAcquired) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (g *redisGuard) Close() error {
-	return g.rlock.Close()
+	return g.client.Close()
 }
 
 // newGuard 按是否配置 redis 选择实现。配了 redis 用分布式,否则用进程内。

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/concurrency/retry"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -63,37 +64,33 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 	if cfg != nil && cfg.Sync.RetryCount > 0 {
 		maxRetries = cfg.Sync.RetryCount
 	}
-	var pushErr error
 	var retries int
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	err := retry.Do(ctx, retry.Config{
+		Attempts: maxRetries,
+		Delay:    time.Duration(model.RetryBackoffMs) * time.Millisecond,
+		Linear:   true, // 第 i 次失败后等待 i×RetryBackoffMs
+	}, func(attempt int) error {
 		if attempt > 1 {
 			retries = attempt - 1
 			rc.logf("retry attempt %d/%d...\n", attempt, maxRetries)
-			backoff := time.Duration(attempt*model.RetryBackoffMs) * time.Millisecond
-			timer := time.NewTimer(backoff)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return errors.Wrap(ctx.Err(), "retry aborted")
-			case <-timer.C:
-			}
 		}
-		pushErr = rc.Exec.push(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID])
-		if pushErr == nil {
-			break
-		}
-		if attempt < maxRetries {
+		pushErr := rc.Exec.push(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID])
+		if pushErr != nil && attempt < maxRetries {
 			rc.logf("push failed, retrying fetch...\n")
-			if err := rc.Exec.fetchRepo(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, rc.Platforms[rc.SourceRepo.PlatformID]); err != nil {
-				rc.logf("retry fetch failed: %v\n", err)
+			if ferr := rc.Exec.fetchRepo(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, rc.Platforms[rc.SourceRepo.PlatformID]); ferr != nil {
+				rc.logf("retry fetch failed: %v\n", ferr)
 			}
 		}
-	}
+		return pushErr
+	})
 	rc.Run.RetryTotal = retries
-	if pushErr != nil {
-		return errors.Wrapf(pushErr, "push failed after %d attempts", maxRetries)
+	if err == nil {
+		return nil
 	}
-	return nil
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return errors.Wrap(err, "retry aborted")
+	}
+	return errors.Wrapf(err, "push failed after %d attempts", maxRetries)
 }
 
 // wikiStage 同步 wiki(可选,失败不阻断)。

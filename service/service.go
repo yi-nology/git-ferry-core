@@ -9,6 +9,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/concurrency/async"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
@@ -161,15 +162,10 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	svc.mirror = mirrorSvc
 
 	svc.wg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer svc.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("cleanupTriggerTimes goroutine panic recovered", "panic", r)
-			}
-		}()
 		svc.cleanupTriggerTimes()
-	}()
+	})
 	svc.startLifecycleJobs()
 
 	return svc, nil
@@ -191,10 +187,10 @@ func (s *Service) doStop() {
 
 	// Wait for background goroutines to finish (with timeout)
 	done := make(chan struct{})
-	go func() {
+	async.GoSafe(func() {
 		s.wg.Wait()
 		close(done)
-	}()
+	})
 	stopTimer := time.NewTimer(10 * time.Second)
 	defer stopTimer.Stop()
 	select {
@@ -205,8 +201,8 @@ func (s *Service) doStop() {
 	}
 
 	// 释放镜像通道跨实例锁的 redis 连接
-	if s.mirror != nil && s.mirror.redisLock != nil {
-		if err := s.mirror.redisLock.Close(); err != nil {
+	if s.mirror != nil && s.mirror.lockClient != nil {
+		if err := s.mirror.lockClient.Close(); err != nil {
 			slog.Error("failed to close mirror redis lock", "error", err)
 		}
 	}
@@ -299,7 +295,7 @@ func (s *Service) HealthCheck() map[string]string {
 
 	// Check database connectivity with timeout
 	dbDone := make(chan error, 1)
-	go func() { dbDone <- s.sqlDB.Ping() }()
+	async.GoSafe(func() { dbDone <- s.sqlDB.Ping() })
 	select {
 	case err := <-dbDone:
 		if err != nil {
@@ -314,7 +310,7 @@ func (s *Service) HealthCheck() map[string]string {
 	// Check Redis connectivity (if configured) with timeout
 	if s.config.Redis.Addr != "" {
 		redisDone := make(chan error, 1)
-		go func() { redisDone <- s.guard.Ping() }()
+		async.GoSafe(func() { redisDone <- s.guard.Ping() })
 		select {
 		case err := <-redisDone:
 			if err != nil {

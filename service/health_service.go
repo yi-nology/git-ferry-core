@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
@@ -120,12 +121,15 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	for i := range tasks {
 		ch := make(chan histResult, 1)
 		histCh[i] = ch
-		go func(i int, taskKey string) {
+		taskKey := tasks[i].Key
+		async.GoSafe(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			runs, _, herr := s.ListHistory(ctx, taskKey, 0, healthHistoryLimit)
-			ch <- histResult{runs: runs, err: herr}
-		}(i, tasks[i].Key)
+			var res histResult
+			// defer 发送:ListHistory panic 时也回传(空)结果,消费方不会永久阻塞
+			defer func() { ch <- res }()
+			res.runs, _, res.err = s.ListHistory(ctx, taskKey, 0, healthHistoryLimit)
+		})
 	}
 
 	items := make([]HealthScoreItem, 0, len(tasks))

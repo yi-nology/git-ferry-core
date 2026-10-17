@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -98,7 +99,7 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 	}
 
 	s.wg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer s.wg.Done()
 		run, err := s.executor.Execute(s.bgCtx, task, trigger, webhookEventID)
 		if err != nil {
@@ -106,7 +107,7 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 			slog.Warn("async task run failed", "task", taskKey, "error", err)
 		}
 		s.emitRunCompleted(taskKey, trigger, run, err)
-	}()
+	})
 	return nil
 }
 

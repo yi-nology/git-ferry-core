@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/oekit/concurrency/async"
 )
 
 // startLifecycleJobs 启动生命周期后台任务:
@@ -24,13 +26,8 @@ func (s *Service) startLifecycleJobs() {
 	}
 
 	s.wg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer s.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("lifecycle jobs goroutine panic recovered", "panic", r)
-			}
-		}()
 		ticker := time.NewTicker(tick)
 		defer ticker.Stop()
 		// 启动后先等一个周期,避免与初始化竞争
@@ -42,7 +39,7 @@ func (s *Service) startLifecycleJobs() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // runLifecycleOnce 执行一轮生命周期任务(清理 + 自动发现)。

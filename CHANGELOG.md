@@ -67,6 +67,23 @@
 
 ### Changed
 
+- **接入 oekit 基础库**（替换自写并发/锁原语，依据 <https://oekit.github.io/llms.txt>）：
+  - **跨实例互斥锁 → `github.com/oekit/redisx/distlock`**：删除 `lock.RedisLock`
+    （自写 SetNX/Lua 解锁/CAS 续期/`lockValues` 映射共 ~180 行），`redisGuard` 的任务锁与
+    cron 锁、`MirrorService` 的通道锁改走 `distlock.RedisLocker`；任务锁续期由库的
+    `WithAutoRenew` 承担（`WithMaxAutoRenew(-1)` 取消 10×TTL 默认上限——同步任务可跑数小时），
+    watchdog 只剩信号量槽续期。key 布局固定为 `git-sync:lock:<key>`（`lock.LockKeyPrefix`），
+    滚动升级期间新老实例共用同一把锁；`lock` 包保留 ZSET `Semaphore`、`LocalLock`，
+    新增 `NewRedisClient` / `NewLocker` 构造器。
+  - **裸 `go func` → `github.com/oekit/concurrency/async.GoSafe`**：service 层 15 处后台
+    goroutine（webhook 规则应用、异步任务、镜像执行、事件分发、清理、生命周期、健康评分
+    fan-out、健康检查 ping）统一经 GoSafe 启动并 recover，删除 6 处手写 recover 样板；
+    健康评分 fan-out 改为 defer 回传结果，子任务 panic 不再卡死聚合方。
+  - **push 重试 → `github.com/oekit/concurrency/retry.Do`**：线性退避改为「第 i 次失败后等待
+    i×RetryBackoffMs」（此前为 (i+1)×），ctx 取消统一映射为 `retry aborted`。
+  - **`pkg/proclog.Setup`** 顺带接管进程内 oekit 组件：`async.SetPanicHandler` 走 slog；
+    `logx.SetDefault` 设为 slog 风格 JSON 后端（`service` 取可执行文件名，级别随 level），
+    distlock 等组件的内部告警与业务日志同格式落 stdout。
 - **`ResolveOrgTarget` 签名变更**：改为 `(sourceOwner, sourceRepo, OrgMapOptions)`，
   原多参数版本只有测试引用（生产零调用）。
 - **分支名校验放行 glob 字符 `*?[]`**：`executor` 明确以
@@ -75,6 +92,10 @@
 
 ### Removed
 
+- **`lock.RedisLock` / `lock.DistLock`**：被 oekit `distlock` 取代（见 Changed）；
+  对应的 `redis_lock_test.go`（依赖本机 6379 的集成测试）一并删除，锁的正确性由库自身
+  测试 + 本仓 `TestNewLocker_KeyLayout_miniredis`（key 布局与 owner 校验）与
+  `TestRedisGuard_*`/`TestMirrorLockChannel_*` 覆盖。
 - **`SetProviderHooks`**（包级全局 setter）：无法转发到实例，改由
   `WithProviderHooks` 注入；全仓仅壳层 `main.go` 一处调用，已同步改造。
 

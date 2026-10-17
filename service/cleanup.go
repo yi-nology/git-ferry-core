@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/oekit/concurrency/async"
 )
 
 // cleanupResult 用于并行 cleanup goroutine 的结果传递。
@@ -25,23 +27,25 @@ func recoverCleanup(name string, r *cleanupResult) {
 
 func (s *Service) CleanupOldData(ctx context.Context, maxAge time.Duration) (events, runs, steps int64, err error) {
 	// 三张表独立清理,互不依赖,并行执行缩短耗时。
+	// recoverCleanup 把 panic 转成 result.err 回传(调用方要知道哪张表没清),
+	// 不能只靠 GoSafe 的全局 recover。
 	ch := make(chan cleanupResult, 3)
 
-	go func() {
+	async.GoSafe(func() {
 		var r cleanupResult
 		defer func() { recoverCleanup("CleanupOldEvents", &r); ch <- r }()
 		r.count, r.err = s.webhooks.CleanupOldEvents(ctx, maxAge)
-	}()
-	go func() {
+	})
+	async.GoSafe(func() {
 		var r cleanupResult
 		defer func() { recoverCleanup("CleanupOldRuns", &r); ch <- r }()
 		r.count, r.err = s.tasks.CleanupOldRuns(ctx, maxAge)
-	}()
-	go func() {
+	})
+	async.GoSafe(func() {
 		var r cleanupResult
 		defer func() { recoverCleanup("CleanupOldRunSteps", &r); ch <- r }()
 		r.count, r.err = s.tasks.CleanupOldRunSteps(ctx, maxAge)
-	}()
+	})
 
 	r1, r2, r3 := <-ch, <-ch, <-ch
 	events, runs, steps = r1.count, r2.count, r3.count

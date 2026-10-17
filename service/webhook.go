@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 )
@@ -115,21 +116,12 @@ func (s *Service) ReceiveWebhook(ctx context.Context, repoKey string, payload *W
 	}
 
 	s.wg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer s.wg.Done()
-		s.safeApplyRules(s.bgCtx, repoKey, whEvent)
-	}()
+		s.applyRules(s.bgCtx, repoKey, whEvent)
+	})
 
 	return nil
-}
-
-func (s *Service) safeApplyRules(ctx context.Context, repoKey string, event *model.WebhookEvent) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("panic in applyRules", "repoKey", repoKey, "error", r)
-		}
-	}()
-	s.applyRules(ctx, repoKey, event)
 }
 
 func (s *Service) applyRules(ctx context.Context, repoKey string, event *model.WebhookEvent) {
@@ -160,10 +152,10 @@ func (s *Service) RetryEvent(ctx context.Context, eventID uint) error {
 	// 纳入 WaitGroup + 用 bgCtx,优雅关停时能被等待/取消,不再泄露 goroutine。
 	// applyRules 内部会闭环 processing → processed,这里不再重复标记。
 	s.wg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer s.wg.Done()
-		s.safeApplyRules(s.bgCtx, event.RepoKey, event)
-	}()
+		s.applyRules(s.bgCtx, event.RepoKey, event)
+	})
 	return nil
 }
 

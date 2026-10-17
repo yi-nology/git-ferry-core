@@ -13,6 +13,9 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/concurrency/async"
+	"github.com/oekit/redisx/distlock"
+	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
@@ -33,14 +36,16 @@ type MirrorService struct {
 	cm       *credential.CryptoManager
 	// locks 保证同一通道的进程内互斥（克隆/增量 fetch 不可重入）。
 	locks sync.Map
-	// redisLock 配 redis 时提供跨实例互斥：抢不到 = 另一实例正在执行同一通道，
+	// locker 配 redis 时提供跨实例互斥：抢不到 = 另一实例正在执行同一通道，
 	// 直接返回忙碌错误而不是两边同时克隆（TTL 见 mirrorLockTTL，覆盖整次操作）。
-	redisLock *lock.RedisLock
-	lockTTL   time.Duration
+	locker  *distlock.RedisLocker
+	lockTTL time.Duration
+	// lockClient 是 locker 底层的 redis 连接,由 Service.Stop 统一关闭。
+	lockClient *redis.Client
 }
 
 // mirrorLockTTL 通道锁 TTL：覆盖一次克隆+推送的最长耗时。
-// 远大于 lock.defaultLockTTL(30s)，避免操作中途锁过期导致并发进入。
+// 远大于任务锁的 30s，避免操作中途锁过期导致并发进入。
 const mirrorLockTTL = 30 * time.Minute
 
 func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
@@ -52,19 +57,22 @@ func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "init crypto manager failed")
 	}
-	// 配 redis 时追加跨实例互斥；未配或构造失败只降级为进程内互斥（有告警）。
-	var rl *lock.RedisLock
+	// 配 redis 时追加跨实例互斥；未配或 redis 抖动只降级为进程内互斥（有告警）。
+	var locker *distlock.RedisLocker
+	var lockClient *redis.Client
 	if cfg := svc.GetConfig(); cfg != nil && cfg.Redis.Addr != "" {
-		rl = lock.NewRedisLock(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+		lockClient = lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+		locker = lock.NewLocker(lockClient)
 	}
 	return &MirrorService{
-		svc:       svc,
-		channels:  dao.NewMirrorChannelDAO(db),
-		runs:      dao.NewMirrorRunDAO(db),
-		backend:   backend,
-		cm:        cm,
-		redisLock: rl,
-		lockTTL:   mirrorLockTTL,
+		svc:        svc,
+		channels:   dao.NewMirrorChannelDAO(db),
+		runs:       dao.NewMirrorRunDAO(db),
+		backend:    backend,
+		cm:         cm,
+		locker:     locker,
+		lockTTL:    mirrorLockTTL,
+		lockClient: lockClient,
 	}, nil
 }
 
@@ -76,28 +84,33 @@ func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release fun
 	gate := mu.(*sync.Mutex)
 	gate.Lock()
 
+	key := fmt.Sprintf("mirror-channel-%d", chID)
+	// ownerID 为空表示未持有跨实例锁（未配 redis 或降级路径），release 时跳过远端解锁。
+	var ownerID string
 	var once sync.Once
 	unlock := func() {
 		once.Do(func() {
 			gate.Unlock()
-			if m.redisLock != nil {
-				if uerr := m.redisLock.Unlock(ctx, fmt.Sprintf("mirror-channel-%d", chID)); uerr != nil {
-					// 未持有(降级路径)或已过期：仅告警，TTL 会兜底
+			if m.locker != nil && ownerID != "" {
+				if uerr := m.locker.Unlock(ctx, key, ownerID); uerr != nil {
+					// 已过期易主或 redis 抖动：仅告警，TTL 会兜底
 					slog.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
 				}
 			}
 		})
 	}
 
-	if m.redisLock != nil {
-		key := fmt.Sprintf("mirror-channel-%d", chID)
-		ok, lerr := m.redisLock.TryLockWithTTL(ctx, key, m.lockTTL)
-		if lerr != nil {
-			// redis 抖动：降级为进程内互斥，不阻断镜像任务
-			slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
-		} else if !ok {
+	if m.locker != nil {
+		id, lerr := m.locker.TryLock(ctx, key, m.lockTTL)
+		switch {
+		case lerr == nil:
+			ownerID = id
+		case errors.Is(lerr, distlock.ErrLockNotAcquired):
 			gate.Unlock()
 			return func() {}, fmt.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
+		default:
+			// redis 抖动：降级为进程内互斥，不阻断镜像任务
+			slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
 		}
 	}
 	return unlock, nil
@@ -484,11 +497,11 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 	// 异步执行:挂到 Service 的后台上下文,随服务关停而取消
 	runCtx, cancel := context.WithCancel(m.svc.bgCtx)
 	m.svc.wg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer m.svc.wg.Done()
 		defer cancel()
 		m.execute(runCtx, run.ID, ch, t, in)
-	}()
+	})
 	return run, nil
 }
 

@@ -18,14 +18,14 @@ const mirrorTestKey = "mirror-channel-1"
 // 对方释放后可正常获取。不同通道互不影响。
 func TestMirrorLockChannel_CrossInstance(t *testing.T) {
 	mr := miniredis.RunT(t)
-	m := &MirrorService{redisLock: lock.NewRedisLock(mr.Addr(), "", 0), lockTTL: time.Minute}
+	m := &MirrorService{locker: lock.NewLocker(lock.NewRedisClient(mr.Addr(), "", 0)), lockTTL: time.Minute}
 	ctx := context.Background()
 
 	// 模拟"另一实例"先占住同通道
-	other := lock.NewRedisLock(mr.Addr(), "", 0)
-	ok, err := other.TryLockWithTTL(ctx, mirrorTestKey, time.Minute)
+	other := lock.NewLocker(lock.NewRedisClient(mr.Addr(), "", 0))
+	otherID, err := other.TryLock(ctx, mirrorTestKey, time.Minute)
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotEmpty(t, otherID)
 
 	_, err = m.lockChannel(ctx, 1)
 	require.Error(t, err)
@@ -37,7 +37,7 @@ func TestMirrorLockChannel_CrossInstance(t *testing.T) {
 	release2()
 
 	// 对方释放后可获取
-	require.NoError(t, other.Unlock(ctx, mirrorTestKey))
+	require.NoError(t, other.Unlock(ctx, mirrorTestKey, otherID))
 	release, err := m.lockChannel(ctx, 1)
 	require.NoError(t, err)
 	release()
@@ -76,7 +76,7 @@ func TestMirrorLockChannel_LocalOnly(t *testing.T) {
 // TestMirrorLockChannel_Degraded Redis 不可用时降级为进程内互斥，不阻断任务。
 func TestMirrorLockChannel_Degraded(t *testing.T) {
 	// 指向不存在的地址：TryLock 出错 → 降级路径
-	m := &MirrorService{redisLock: lock.NewRedisLock("127.0.0.1:1", "", 0), lockTTL: time.Second}
+	m := &MirrorService{locker: lock.NewLocker(lock.NewRedisClient("127.0.0.1:1", "", 0)), lockTTL: time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
