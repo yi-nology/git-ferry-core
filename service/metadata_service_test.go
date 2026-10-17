@@ -187,11 +187,12 @@ func (f *fakeEngineProv) DeleteMilestone(context.Context, string, string, string
 
 // --- ChangeRequestManager ---
 
-func (f *fakeEngineProv) ListCRs(_ context.Context, _ sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, int, error) {
+func (f *fakeEngineProv) ListCRs(_ context.Context, _ sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error) {
 	if f.prsErr != nil {
-		return nil, 0, f.prsErr
+		return nil, nil, f.prsErr
 	}
-	return f.prs, len(f.prs), nil
+	total := len(f.prs)
+	return f.prs, &total, nil
 }
 
 func (f *fakeEngineProv) CreateCR(context.Context, sdkprov.CreateCROptions) (*sdkprov.ChangeRequest, error) {

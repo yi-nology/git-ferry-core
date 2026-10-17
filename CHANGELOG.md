@@ -67,6 +67,19 @@
 
 ### Changed
 
+- **依赖升 go-git-platform v0.76.0 → v0.88.1**(12 个 0.x minor,SDK 侧已接入 oekit
+  pkg/errors·concurrency·logx,与本仓同一套版本线)。随之 **Go 版本线 1.26.3 → 1.27.2**
+  (SDK go.mod 要求;CI 矩阵同步 `'1.27'`),go-git v5.19.3、gitlab client-go v3.18.0、
+  x/crypto v0.58.0。接口适配仅一处:`ChangeRequestManager.ListCRs` 的 total 改为 `*int`
+  (nil=平台未给总数),生产代码本就忽略该值,只改测试假对象。
+  **随 SDK 带入的行为变更**(本仓代码未改,契约随 SDK):
+  - webhook 验签**空密钥从"放行"改为拒绝**(SDK 0.77 安全加固:空 HMAC 密钥可伪造载荷)。
+    经 git-ferry 注册的 webhook 都会写入密钥;手工在平台侧配置且未填密钥的回调将被拒
+    (壳层返 401),需在平台与仓库两侧补齐同一密钥。
+  - 分页触顶(50 页预算)从"静默截断"改为报 `provider.ErrPageBudgetExceeded`
+    ——本仓 `CollectBounded`/`EachBounded` 调用点已按错误处理。
+  - SDK 错误文本形状变化(动态值移到 kv 后缀);本仓 `executor.ClassifyError` 的关键字
+    分类与哨兵判定均不受影响(测试全绿)。
 - **接入 oekit 基础库**（替换自写并发/锁原语，依据 <https://oekit.github.io/llms.txt>）：
   - **跨实例互斥锁 → `github.com/oekit/redisx/distlock`**：删除 `lock.RedisLock`
     （自写 SetNX/Lua 解锁/CAS 续期/`lockValues` 映射共 ~180 行），`redisGuard` 的任务锁与

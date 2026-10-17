@@ -1,12 +1,12 @@
 module github.com/yi-nology/git-ferry-core
 
-go 1.26.3
+go 1.27.2
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/cockroachdb/errors v1.14.0
 	github.com/glebarez/sqlite v1.11.0
-	github.com/go-git/go-git/v5 v5.19.2
+	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
 	github.com/oekit/concurrency v0.4.0
 	github.com/oekit/logx v0.2.0
@@ -15,8 +15,8 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sethvargo/go-envconfig v1.4.3
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v0.76.0
-	golang.org/x/tools v0.49.0
+	github.com/yi-nology/go-git-platform v0.88.1
+	golang.org/x/tools v0.51.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.5.7
 	gorm.io/driver/sqlite v1.6.0
@@ -42,7 +42,7 @@ require (
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
-	github.com/go-git/go-billy/v5 v5.9.1 // indirect
+	github.com/go-git/go-billy/v5 v5.9.2 // indirect
 	github.com/go-openapi/errors v0.22.9 // indirect
 	github.com/go-openapi/jsonpointer v1.0.2 // indirect
 	github.com/go-openapi/strfmt v0.27.2 // indirect
@@ -77,6 +77,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/next-bin/go-gitee v0.0.0-20260521141902-36ce436eee18 // indirect
+	github.com/oekit/pkg v0.6.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/pjbgf/sha1cd v0.7.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -88,16 +89,16 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/yi-nology/go-gitcode v0.7.2 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
-	gitlab.com/gitlab-org/api/client-go/v3 v3.15.0 // indirect
+	gitlab.com/gitlab-org/api/client-go/v3 v3.18.0 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
