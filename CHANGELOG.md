@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.10.2] - 2026-10-18
+
+### Changed
+
+- **依赖升 go-git-platform v0.90.1、oekit concurrency v0.10.0 / logx v0.7.0 / redisx v0.7.6**(地板对齐;
+  concurrency 新增 breaker 三态/计数触发、retry DelayHint/JitterRatio、async PanicError/Runner、
+  loop/syncx/budget 等均为增量,本仓所用 GoSafe/retry.Do API 不变)。
+- **适配 logx v0.7.0 破坏变更**:`ParseLogLevel` 签名改 `(Level, error)`——proclog 改用
+  `ParseLogLevelOr(level, LevelInfo)` 免判空形态,语义不变(配置错退 Info)。
+
 ## [v0.10.1] - 2026-10-17
 
 ### Changed

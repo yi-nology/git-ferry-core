@@ -45,9 +45,7 @@ func Setup(level, format string) {
 	})
 
 	opts := []logx.SlogOption{logx.WithHandler(h)}
-	if lx := logx.ParseLogLevel(level); lx != nil {
-		opts = append(opts, logx.WithLevel(*lx))
-	}
+	opts = append(opts, logx.WithLevel(logx.ParseLogLevelOr(level, logx.LevelInfo)))
 	logx.SetDefault(logx.NewSlogLogger(filepath.Base(os.Args[0]), opts...))
 }
 
