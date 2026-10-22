@@ -6,7 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/syncx"
+	"github.com/oekit/pkg/slicex"
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
@@ -112,25 +113,15 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	}
 	now := time.Now()
 
-	type histResult struct {
-		runs []*model.SyncRun
-		err  error
-	}
-	histCh := make([]chan histResult, len(tasks))
-	sem := make(chan struct{}, 8)
-	for i := range tasks {
-		ch := make(chan histResult, 1)
-		histCh[i] = ch
-		taskKey := tasks[i].Key
-		async.GoSafe(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			var res histResult
-			// defer 发送:ListHistory panic 时也回传(空)结果,消费方不会永久阻塞
-			defer func() { ch <- res }()
-			res.runs, _, res.err = s.ListHistory(ctx, taskKey, 0, healthHistoryLimit)
-		})
-	}
+	// 历史按任务并行拉取(并发上限 8)——每任务各自取最近 N 条,保持既有语义。
+	// 用 oekit concurrency/syncx.FanInLimitCtx:并发上限由引擎内建(不必自维护
+	// 信号量),结果按 index 序返回(与原「逐任务 channel 保序」等价),
+	// panic 落槽不丢结果;ctx 取消时不再启动新工作——原实现的 goroutine
+	// 会在信号量上一直排队直到 ListHistory 自己超时。
+	histSlots := syncx.FanInLimitCtx(ctx, len(tasks), 8, func(ctx context.Context, i int) ([]*model.SyncRun, error) {
+		runs, _, err := s.ListHistory(ctx, tasks[i].Key, 0, healthHistoryLimit)
+		return runs, err
+	})
 
 	items := make([]HealthScoreItem, 0, len(tasks))
 	for i, t := range tasks {
@@ -149,9 +140,9 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 			facts["drift_count"] = strutil.Itoa(n)
 		}
 
-		hr := <-histCh[i]
-		runs := hr.runs
-		if hr.err == nil && len(runs) > 0 {
+		hist := histSlots[i]
+		runs := hist.Val
+		if hist.Err == nil && len(runs) > 0 {
 			snaps := make([]health.RunSnapshot, 0, len(runs))
 			for _, r := range runs {
 				end := time.Time{}
@@ -184,10 +175,10 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		legacy := healthRules.Evaluate(facts)
 		issues := uniqueStrings(append(legacy.Issues, dimRes.Issues...))
 
-		// 最近失败 run_id（动作路由）
+		// 最近失败 run_id(动作路由)
 		var failRunID int64
-		if hr.err == nil {
-			for _, r := range hr.runs {
+		if hist.Err == nil {
+			for _, r := range runs {
 				if r.Status == "failed" {
 					failRunID = int64(r.ID)
 					break
@@ -215,15 +206,9 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	return items, nil
 }
 
+// uniqueStrings 保序去重并丢弃空串。
+// 用 oekit pkg/slicex:Unique 保序去重,Filter 滤空串——
+// 与 health/dimension.go 的 uniqueKeepOrder 是同一份逻辑,不再两处各写一遍。
 func uniqueStrings(in []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
+	return slicex.Unique(slicex.Filter(in, func(s string) bool { return s != "" }))
 }

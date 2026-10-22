@@ -46,7 +46,8 @@ func Setup(level, format string) {
 
 	opts := []logx.SlogOption{logx.WithHandler(h)}
 	opts = append(opts, logx.WithLevel(logx.ParseLogLevelOr(level, logx.LevelInfo)))
-	logx.SetDefault(logx.NewSlogLogger(filepath.Base(os.Args[0]), opts...))
+	// UseSlog 是 SetDefault(NewSlogLogger(...)) 的等价简写。
+	logx.UseSlog(filepath.Base(os.Args[0]), opts...)
 }
 
 // ExitOnFail 打日志并退出进程（启动期不可恢复错误用）。

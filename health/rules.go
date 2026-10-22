@@ -5,8 +5,9 @@
 package health
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/oekit/pkg/convert"
 )
 
 // Rule 一条加权规则。
@@ -72,9 +73,9 @@ func (c *Config) Evaluate(f Facts) Result {
 	totalWeight, score := 0, 0
 	var issues []string
 	for _, r := range c.Rules {
-		totalWeight += maxInt(r.Weight, 0)
+		totalWeight += max(r.Weight, 0)
 		if match(f, &r) {
-			score += maxInt(r.Weight, 0)
+			score += max(r.Weight, 0)
 		} else if r.Message != "" {
 			issues = append(issues, r.Message)
 		}
@@ -120,15 +121,12 @@ func match(f Facts, r *Rule) bool {
 	}
 }
 
+// toFloat 字符串转 float64，解析失败回落 0。
+//
+// 语义变更说明：原实现用 fmt.Sscanf(s, "%f")，"12abc" 会被部分解析成 12；
+// 现委托 oekit/pkg/convert.Str2Float64（内部为 strconv.ParseFloat），
+// 遇到任何非纯数字串（如 "12abc"、""、带空白）一律解析失败并回落 0。
+// facts 全部由内部代码生成（数值均为合法十进制），故实际行为一致。
 func toFloat(s string) float64 {
-	var f float64
-	_, _ = fmt.Sscanf(s, "%f", &f)
-	return f
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return convert.Str2Float64(s, 0)
 }

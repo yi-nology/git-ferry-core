@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/oekit/concurrency/retry"
 )
 
 // 验证重试策略:proxy 首次回源常有数秒延迟,失败先重试再排查。
@@ -32,25 +34,23 @@ func VerifyModule(ctx context.Context, module, version string) error {
 		return err
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= verifyAttempts; attempt++ {
-		lastErr = verifyOnce(ctx, module, version)
-		if lastErr == nil {
-			return nil
-		}
+	// 固定间隔重试:用 oekit concurrency/retry(Linear=false 即固定间隔),
+	// 退避等待感知 ctx 取消,不必自维护 attempt 计数与 select。
+	err := retry.Do(ctx, retry.Config{
+		Attempts: verifyAttempts,
+		Delay:    verifyRetryWait,
+		Linear:   false,
+	}, func(int) error {
+		return verifyOnce(ctx, module, version)
+	})
+	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if attempt < verifyAttempts {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(verifyRetryWait):
-			}
-		}
+		return fmt.Errorf("验证 %s@%s 失败(proxy 回源可能有数秒延迟,已重试 %d 次): %w",
+			module, version, verifyAttempts, err)
 	}
-	return fmt.Errorf("验证 %s@%s 失败(proxy 回源可能有数秒延迟,已重试 %d 次): %w",
-		module, version, verifyAttempts, lastErr)
+	return nil
 }
 
 func verifyOnce(ctx context.Context, module, version string) error {

@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
@@ -108,14 +108,14 @@ func (f *RepoImportFilter) Allow(r *sdkprov.PlatformRepo) bool {
 		name = r.Name
 	}
 	for _, g := range f.ExcludeGlobs {
-		if globMatchName(g, name) {
+		if pathx.MatchGlob(g, name) {
 			return false
 		}
 	}
 	if len(f.IncludeGlobs) > 0 {
 		ok := false
 		for _, g := range f.IncludeGlobs {
-			if globMatchName(g, name) {
+			if pathx.MatchGlob(g, name) {
 				ok = true
 				break
 			}
@@ -125,11 +125,6 @@ func (f *RepoImportFilter) Allow(r *sdkprov.PlatformRepo) bool {
 		}
 	}
 	return true
-}
-
-func globMatchName(pattern, s string) bool {
-	ok, _ := filepath.Match(pattern, s)
-	return ok
 }
 
 // fetchAllPlatformRepos 按最大页大小循环翻页,拉取平台全部仓库。

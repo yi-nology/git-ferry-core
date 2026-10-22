@@ -3,14 +3,15 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/executor"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 )
 
 // DrillReport = executor.DrillReport(壳层直接使用)
@@ -31,7 +32,7 @@ func (s *Service) RunDRDrill(ctx context.Context, name string) (*DrillReport, er
 	if dir == "" {
 		return nil, errBackupDisabled
 	}
-	if filepath.Base(name) != name {
+	if !pathx.IsSafeFileName(name) {
 		return nil, errInvalidName
 	}
 	rep, err := executor.RunDRDrill(ctx, filepath.Join(dir, name))
@@ -63,7 +64,7 @@ func (s *Service) BatchDRDrill(ctx context.Context, names []string, max int) ([]
 		}
 	} else {
 		for _, n := range names {
-			if filepath.Base(n) != n {
+			if !pathx.IsSafeFileName(n) {
 				return nil, nil, errInvalidName
 			}
 			paths = append(paths, filepath.Join(dir, n))

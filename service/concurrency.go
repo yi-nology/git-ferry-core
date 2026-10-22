@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/loop"
+	"github.com/oekit/concurrency/syncx"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/lock"
@@ -43,33 +44,34 @@ const (
 
 // ---------------- 本地(进程内)实现 ----------------
 
-// localGuard 单实例并发控制:sync.Map 做 taskKey 互斥,buffered channel 做全局并发上限。
+// localGuard 单实例并发控制:sync.Map 做 taskKey 互斥,Gate 做全局并发上限。
+// Gate 走 TryAcquire(满额即拒,不排队)——与迁移前 chan 缓冲的实现语义一致:
+// 全局并发用满就立即回 ErrTooManyConcurrent,而不是把请求堆在队列里。
 type localGuard struct {
 	runningTasks sync.Map
-	sem          chan struct{}
+	gate         *syncx.Gate
 }
 
 func newLocalGuard(maxConcurrent int) *localGuard {
 	if maxConcurrent <= 0 {
 		maxConcurrent = model.DefaultMaxConcurrent
 	}
-	return &localGuard{sem: make(chan struct{}, maxConcurrent)}
+	return &localGuard{gate: syncx.NewGate(maxConcurrent)}
 }
 
 func (g *localGuard) Acquire(_ context.Context, taskKey string) (releaseFunc, error) {
-	select {
-	case g.sem <- struct{}{}:
-	default:
+	release, ok := g.gate.TryAcquire()
+	if !ok {
 		return nil, ErrTooManyConcurrent
 	}
 	// 只有成功 store 才注册 Delete,避免误删别的执行流的标记
 	if _, loaded := g.runningTasks.LoadOrStore(taskKey, struct{}{}); loaded {
-		<-g.sem
+		release()
 		return nil, ErrTaskRunning
 	}
 	return func() {
 		g.runningTasks.Delete(taskKey)
-		<-g.sem
+		release()
 	}, nil
 }
 
@@ -133,11 +135,29 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 	}
 
 	// 3) watchdog 续期信号量槽,避免长任务期间槽过期被回收(任务锁由 distlock 自动续期)
-	stop := make(chan struct{})
-	async.GoSafe(func() { g.watchdog(semID, stop) })
+	//    续期循环用 oekit concurrency/loop:自带 panic 隔离与 ctx 取消,
+	//    生命周期由 cancelWatch 收敛(不再自维护 ticker + stop channel)。
+	watchCtx, cancelWatch := context.WithCancel(context.Background()) //nolint:gosec // watchdog 独立于请求上下文运行,直到 release 取消
+	failures := 0
+	loop.Run(watchCtx, loop.Config{Interval: renewInterval, FirstDelay: renewInterval, Name: "semaphore-watchdog"}, func(ctx context.Context) {
+		renewed, err := g.sem.Renew(ctx, semID)
+		switch {
+		case err != nil:
+			failures++
+			if failures%3 == 1 { // 每 3 次失败记一条日志,避免刷屏
+				slog.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err, "consecutive_failures", failures)
+			}
+		case !renewed:
+			// 槽已丢失(过期回收或已被释放):配额可能已被其他 Acquire 接管,
+			// 此时续期无意义——上游只允许续期未过期的槽,复活即超限。
+			slog.Warn("watchdog: semaphore slot lost", "semID", semID)
+		default:
+			failures = 0
+		}
+	})
 
 	return func() {
-		close(stop)
+		cancelWatch()
 		// 用带超时的独立 context 释放,避免 Redis 不可响应时 goroutine 永久挂死
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
@@ -148,30 +168,6 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 			slog.Warn("release: failed to release semaphore slot", "semID", semID, "error", err)
 		}
 	}, nil
-}
-
-// watchdog 周期性续期持有的信号量槽。stop 关闭即退出。
-// 使用 context.Background() 是有意为之:续期需独立于请求上下文运行,直到 stop 被关闭。
-func (g *redisGuard) watchdog(semID string, stop <-chan struct{}) {
-	t := time.NewTicker(renewInterval)
-	defer t.Stop()
-	ctx := context.Background() //nolint:gosec // watchdog goroutine intentionally uses background context
-	failures := 0
-	for {
-		select {
-		case <-stop:
-			return
-		case <-t.C:
-			if err := g.sem.Renew(ctx, semID); err != nil {
-				failures++
-				if failures%3 == 1 { // 每 3 次失败记一条日志,避免刷屏
-					slog.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err, "consecutive_failures", failures)
-				}
-				continue
-			}
-			failures = 0
-		}
-	}
 }
 
 func (g *redisGuard) Ping() error {

@@ -2,6 +2,105 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed
+
+- **依赖地板抬到真最新**：oekit `core` v0.6.0→**v0.12.0**、`pkg` v0.11.0→**v0.21.0**、
+  `concurrency` v0.10.0→**v0.20.0**、`logx` v0.7.0→**v0.7.1**、`redisx` v0.7.6→**v0.10.0**、
+  go-git-platform v0.90.1→**v0.96.0**（go 指令 1.27.2→1.27.3，与 go-git-platform 对齐）。
+  `pkg` 由间接依赖升为直接依赖（health/strutil 开始直接消费 `convert`/`slicex`/`stringx`）。
+- **手写并发原语收编 oekit `concurrency`**（本轮主体，净减代码）：
+  - `service/concurrency.go` 本地并发闸门 `chan struct{}` → `syncx.Gate` + `TryAcquire`
+    （满额即拒语义与原 `select/default` 逐位一致，release 幂等）；
+    信号量续期 watchdog 的手写 ticker → `loop.Run`（FirstDelay 复刻「先等一个周期」，
+    退出信号由 stop channel 换成 ctx 取消）。
+  - `service/health_service.go` 逐任务 channel + 信号量扇出 → `syncx.FanInLimitCtx`：
+    并发上限由引擎内建、按 index 序返回、panic 落槽不丢结果；ctx 取消时不再启动新工作
+    （原实现的 goroutine 会在信号量上一直排队到 ListHistory 自己超时）。
+  - `service/cleanup.go` 三 goroutine + channel → `syncx.FanInErr`（逐槽 panic 收编 +
+    结果按槽位序），周期清理 ticker → `loop.Run`。
+  - `service/lifecycle_bg.go` 生命周期 ticker → `loop.Run`（panic 隔离：单轮失败只记日志，
+    不中断循环——原实现里一次 panic 会杀死整个循环）。
+  - `service/mirror_service.go` per-key 互斥表（`sync.Map` + 类型断言）→ `syncx.KeyedGate`
+    （cap=1 → 每个通道一把锁，Acquire 感知 ctx 取消）。
+  - `mirror/verify.go` 手写固定间隔重试循环 → `retry.Do`（退避等待感知 ctx 取消）。
+- **`health/**` 工具函数收编 oekit `pkg`**：手写 `atoi` → `convert.Str2Int`、
+  `toFloat` → `convert.Str2Float64`、`uniqueKeepOrder`/`uniqueStrings` → `slicex.Unique`+
+  `slicex.Filter`（两处逐字重复的保序去重合并为一份口径）、手写 `minInt`/`maxInt` → 内建
+  `min`/`max`。
+- **`service/retry_policy.go`**：`pruneLocked` 的手写 O(n²) 选择排序 → 标准库 `slices.Sort`
+  （1000 条目时 10⁶ → 10⁴ 次比较，排序键与保留策略不变）。
+- **`pkg/proclog`**：`logx.SetDefault(logx.NewSlogLogger(...))` → `logx.UseSlog(...)`（等价简写）。
+- **手写排序/取址收编标准库与 oekit `pkg`**：
+  - `executor/bundle.go` 与 `executor/bundle_ops.go` 两处手写 O(n²) 冒泡排序
+    → 标准库 `sort.Strings` / `sort.Slice`（两处是同一逻辑的复制）。
+  - `executor/drdrill.go` 与壳层 `internal/metrics/metrics.go` 两份逐字同构的
+    `sortedKeys` → 标准库 `slices.Sorted(maps.Keys(m))`。
+  - `executor/executor.go` 的 `timePtr` → oekit `pkg/ptrx.Of`。
+- **CSV 拆分跨仓统一**：core `executor` 与壳层 CLI 各有一份逐字相同的
+  `splitCSV`/`splitCSVNonEmpty`，统一到 oekit `pkg/stringx.SplitCSVNonEmpty` 一份
+  （oekit pkg v0.22.0 新增，见下「收编上游新原语」）。
+- **分页缺省与上限单一事实源**：core `dao`、壳层 `converter.PageToOffset`、
+  壳层 `mirror` 的 `parsePage` 各写一份钳制，缺省值还分 50 与 20 两种。
+  现在常量只在 `dao.DefaultPageSize` / `dao.MaxPageSize` 定义一次。
+- **`pkg/strutil`**：`Itoa`/`Itoa64`/`BoolFact`/`TruncateRunes` 四个函数体委托给 oekit
+  `convert`/`stringx`（**签名一律不变**——本包是跨仓公开 API）。按字节 `Truncate`、
+  `CSVEscape`、`SanitizeFileToken`、`SanitizePathToken` 保留本地实现：oekit 无等价物，
+  且 `pathx.SanitizeFileName` 的语义相反（取最后一段 vs 保留整串），替换会撞名。
+- **收编上游新原语（oekit pkg v0.22.0）**：本轮曾为消费方缺口在本地实现过
+  `MatchGlob` / `IsSafeFileName` / `SplitCSVNonEmpty` 三个原语，上游已补齐同名原语，
+  **本地实现全部删除、改为直接调用 oekit**（`pathx.MatchGlob` / `pathx.IsSafeFileName` /
+  `stringx.SplitCSVNonEmpty`）——本地不再有第二份口径。
+  两处上游实现比本地更正确：
+  - `pathx.MatchGlob` 把「`*` 是通配符」的判定**前置于**字面量比较——本地实现
+    顺序反了，模式里的 `*` 会被当成字面量（`MatchGlob("a*b", "a*b")` 本地返回 false、
+    上游返回 true）；
+  - `stringx.SplitCSVNonEmpty` 全空白输入返回 **nil**（本地返回空切片）——
+    调用方用 `!= nil` 区分「没配」与「配了空」，空切片会把两者混同。
+
+### Added
+
+- **`dao.DefaultPageSize` / `dao.MaxPageSize`**：分页缺省与上限的常量（50 / 200）。
+### Fixed
+
+- **同一 glob 表达式在 core 内有三份语义各异的实现**（此前必现的行为不一致）：
+  `executor/advanced.go` 的递归版（`*` 跨 `/`）、`health/filter.go` 的
+  `path.Match` 版（不跨 + 子串兜底）、`service/provider_helper.go` 的
+  `filepath.Match` 版（不跨）。现收敛为 `strutil.MatchGlob` 一份，口径为
+  **`*` 跨 `/`、`?` 匹配一个 rune**。三处行为变化：
+  - 平台仓库过滤（`provider_helper.go`）此前用 `filepath.Match`（不跨 `/`），
+    而匹配对象是仓库全名 `owner/repo`——于是 `*` 这类模式**永远匹配不到**，
+    等于配了等于没配（`exclude_globs: ["*"]` 拦不住任何仓库）。现在按直觉生效。
+  - `health` 过滤的 `*foo*` 子串兜底此前与 `path.Match` 重复且对中间含 `*`
+    的模式（如 `a*b`）按字面量找（几乎永不命中）；现在按 glob 正常语义匹配。
+  - `?` 由**按字节**切改为**按 rune** 切——此前中文名会被切出半个字符。
+- **bundle 名可逃逸到父目录**（`service/dr_service.go` 的 `RunDRDrill` / `BatchDRDrill`）：
+  原校验是 `filepath.Base(name) != name`，而 `filepath.Base("..") == ".."` —— `".."`
+  会被放行，随后 `filepath.Join(backupDir, name)` 把路径指到 backup 目录的**父目录**。
+  改用 `strutil.IsSafeFileName`：拒 `"."` / `".."` 段、绝对路径、Windows 盘符与 UNC。
+  同款校验在壳层 `biz/handler/git_sync/backup_service.go`（verify / restore bundle）
+  也是同一个洞，一并收敛到本函数。
+- **分布式信号量续期可复活已过期槽**（`lock` 包原手写实现）：原 `renewScript` 只判
+  「成员存在于 ZSET」而不判是否已过期，而 `Acquire` 清理过期槽后其配额可能已被其他持有者
+  接管——此时 `Renew` 把过期槽"复活"即导致全局并发超限。改用 oekit `redisx/distlock.Semaphore`
+  后，续期要求 `score > now`（只续未过期的槽），且 `Acquire` 对同一 identifier 幂等刷新。
+  Redis key 布局保持 `git-sync:semaphore:<key>` 不变（滚动升级期新老实例看同一把信号量），
+  并新增两条 miniredis 回归测试钉住 key 布局与「过期槽不得被复活」。
+
+### Removed
+
+- **`lock.LocalLock`（进程内互斥）**：三仓均无生产调用方（仅自身测试），且其「无限指数退避
+  直到 ctx 取消」的锁语义 oekit `retry`/`poll` 均表达不了（两者都是有界重试），留着只会
+  被误用成第二套锁语义。连同其测试一并删除。
+
+### Breaking
+
+- `lock.Semaphore` 的 `Renew` 返回值由 `error` 改为 `(bool, error)`——`false` 表示槽已丢失
+  （过期回收或已被释放），调用方须据此停工而非继续续期；`Cleanup` 返回值由 `error` 改为
+  `(int64, error)`（被清理的槽数）。实现改为内嵌 `*distlock.Semaphore`。
+- `lock.NewSemaphore` 的 client 参数由 `*redis.Client` 放宽为 `redis.UniversalClient`。
+
 ## [v0.10.2] - 2026-10-18
 
 ### Changed

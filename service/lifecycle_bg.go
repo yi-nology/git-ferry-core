@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/loop"
 )
 
 // startLifecycleJobs 启动生命周期后台任务:
@@ -28,17 +29,16 @@ func (s *Service) startLifecycleJobs() {
 	s.wg.Add(1)
 	async.GoSafe(func() {
 		defer s.wg.Done()
-		ticker := time.NewTicker(tick)
-		defer ticker.Stop()
-		// 启动后先等一个周期,避免与初始化竞争
-		for {
-			select {
-			case <-ticker.C:
-				s.runLifecycleOnce()
-			case <-s.cleanupDone:
-				return
-			}
-		}
+		// 用 oekit concurrency/loop:panic 隔离(单次失败只记日志,不中断循环)
+		// 与 ctx 取消退出(随 bgCancel 收敛)。FirstDelay 精确复刻「启动后先等一个
+		// 周期,避免与初始化竞争」的原语义。
+		loop.Run(s.bgCtx, loop.Config{
+			Interval:   tick,
+			FirstDelay: tick,
+			Name:       "lifecycle-jobs",
+		}, func(context.Context) {
+			s.runLifecycleOnce()
+		}).Wait()
 	})
 }
 

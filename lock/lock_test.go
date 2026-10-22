@@ -12,83 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLocalLock_TryLock(t *testing.T) {
-	lock := NewLocalLock()
-	ctx := context.Background()
-
-	ok, err := lock.TryLock(ctx, "test-key")
-	require.NoError(t, err, "TryLock failed")
-	require.True(t, ok, "Expected to acquire lock")
-
-	ok, err = lock.TryLock(ctx, "test-key")
-	require.NoError(t, err, "TryLock failed")
-	require.False(t, ok, "Expected lock to be already held")
-}
-
-func TestLocalLock_TryLockWithTTL(t *testing.T) {
-	lock := NewLocalLock()
-	ctx := context.Background()
-
-	ok, err := lock.TryLockWithTTL(ctx, "test-key", 100*time.Millisecond)
-	require.NoError(t, err, "TryLockWithTTL failed")
-	require.True(t, ok, "Expected to acquire lock")
-
-	ok, err = lock.TryLockWithTTL(ctx, "test-key", 100*time.Millisecond)
-	require.NoError(t, err, "TryLockWithTTL failed")
-	require.False(t, ok, "Expected lock to be already held")
-
-	time.Sleep(150 * time.Millisecond)
-
-	ok, err = lock.TryLockWithTTL(ctx, "test-key", 100*time.Millisecond)
-	require.NoError(t, err, "TryLockWithTTL failed")
-	require.True(t, ok, "Expected to acquire lock after TTL expired")
-}
-
-func TestLocalLock_Unlock(t *testing.T) {
-	lock := NewLocalLock()
-	ctx := context.Background()
-
-	ok, err := lock.TryLock(ctx, "test-key")
-	require.NoError(t, err, "TryLock failed")
-	require.True(t, ok, "Expected to acquire lock")
-
-	err = lock.Unlock(ctx, "test-key")
-	require.NoError(t, err, "Unlock failed")
-
-	ok, err = lock.TryLock(ctx, "test-key")
-	require.NoError(t, err, "TryLock failed")
-	require.True(t, ok, "Expected to acquire lock after unlock")
-}
-
-func TestLocalLock_Concurrent(t *testing.T) {
-	lock := NewLocalLock()
-	ctx := context.Background()
-
-	acquired := make(chan bool, 2)
-
-	go func() {
-		ok, _ := lock.TryLock(ctx, "concurrent-key")
-		acquired <- ok
-		if ok {
-			time.Sleep(50 * time.Millisecond)
-			_ = lock.Unlock(ctx, "concurrent-key")
-		}
-	}()
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		ok, _ := lock.TryLock(ctx, "concurrent-key")
-		acquired <- ok
-	}()
-
-	results := make([]bool, 2)
-	for i := 0; i < 2; i++ {
-		results[i] = <-acquired
-	}
-
-	require.True(t, results[0] || results[1], "At least one goroutine should have acquired the lock")
-}
-
 // Helper function to create a test Redis client
 func getTestRedisClient(t *testing.T) *redis.Client {
 	t.Helper()
@@ -225,16 +148,18 @@ func TestSemaphore_Cleanup(t *testing.T) {
 	}
 
 	// Cleanup(90min): 清理"过期超过 90 分钟"的条目 → 只清 stale-2h
-	err := sem.Cleanup(ctx, 90*time.Minute)
+	removed, err := sem.Cleanup(ctx, 90*time.Minute)
 	require.NoError(t, err, "Cleanup failed")
+	require.Equal(t, int64(1), removed, "Expected 1 stale slot removed")
 
 	card, err := client.ZCard(ctx, sem.key).Result()
 	require.NoError(t, err, "ZCard failed")
 	require.Equal(t, int64(2), card, "Expected 2 members after Cleanup(90min)")
 
 	// Cleanup(0): 清理所有已过期条目 → 只剩 live
-	err = sem.Cleanup(ctx, 0)
+	removed, err = sem.Cleanup(ctx, 0)
 	require.NoError(t, err, "Cleanup with 0 duration failed")
+	require.Equal(t, int64(1), removed, "Expected 1 stale slot removed")
 
 	members, _, err := client.ZScan(ctx, sem.key, 0, "", 0).Result()
 	require.NoError(t, err, "ZScan failed")

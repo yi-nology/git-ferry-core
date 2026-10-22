@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/convert"
+	"github.com/oekit/pkg/slicex"
 )
 
 // Dimension 单项健康维度（Scorecards 模式）。
@@ -42,13 +45,13 @@ func DefaultDimensions() []DimensionSpec {
 			Name:   "reliability",
 			Weight: 35,
 			Evaluate: func(f Facts) (int, string, []string, string) {
-				total := atoi(f["run_total"])
-				ok := atoi(f["run_success"])
-				failStreak := atoi(f["fail_streak"])
+				total := convert.Str2Int(f["run_total"], 0)
+				ok := convert.Str2Int(f["run_success"], 0)
+				failStreak := convert.Str2Int(f["fail_streak"], 0)
 				lastOK := truthy(f["recent_success"])
 				// 新信号：步骤级失败 / 重试堆积
-				stepFails := atoi(f["step_fail_count"])
-				retryHeavy := atoi(f["retry_total"]) >= 3
+				stepFails := convert.Str2Int(f["step_fail_count"], 0)
+				retryHeavy := convert.Str2Int(f["retry_total"], 0) >= 3
 
 				if total == 0 {
 					return 0, "尚无执行历史", nil, "gitferry task +run --key <TASK> --yes 做一次冒烟"
@@ -67,14 +70,14 @@ func DefaultDimensions() []DimensionSpec {
 				}
 				score := rate
 				if !lastOK {
-					score = minInt(score, 40)
+					score = min(score, 40)
 				}
 				if failStreak >= 3 {
-					score = minInt(score, 25)
+					score = min(score, 25)
 				}
 				// 步骤失败额外扣分（说明链路有具体断点）
 				if stepFails > 0 {
-					score = minInt(score, 55)
+					score = min(score, 55)
 				}
 				if retryHeavy {
 					score -= 10
@@ -174,25 +177,25 @@ func DefaultDimensions() []DimensionSpec {
 					detail = append(detail, "开启了 git_force")
 				}
 				// 实测漂移：目标/本地 refs 不一致 → 静默数据风险
-				if driftN := atoi(f["drift_count"]); driftN > 0 {
-					score = minInt(score, 35)
+				if driftN := convert.Str2Int(f["drift_count"], 0); driftN > 0 {
+					score = min(score, 35)
 					detail = append(detail, fmt.Sprintf("检测到 %d 处分支漂移", driftN))
 				} else if truthy(f["has_drift"]) {
-					score = minInt(score, 35)
+					score = min(score, 35)
 					detail = append(detail, "存在分支漂移")
 				}
 				reason := "强制推送保护"
 				if policy != "" {
 					reason = "force_push_policy=" + policy
 				}
-				if driftN := atoi(f["drift_count"]); driftN > 0 {
+				if driftN := convert.Str2Int(f["drift_count"], 0); driftN > 0 {
 					reason += fmt.Sprintf("；drift=%d", driftN)
 				}
 				action := ""
 				if score < 70 {
 					action = "评估是否改为 block/backup_on_demand：gitferry task +update --key <TASK>"
 				}
-				if driftN := atoi(f["drift_count"]); driftN > 0 || truthy(f["has_drift"]) {
+				if driftN := convert.Str2Int(f["drift_count"], 0); driftN > 0 || truthy(f["has_drift"]) {
 					action = "gitferry ops +drift --task <TASK> 确认分歧后决定 force/rebuild"
 				}
 				return score, reason, detail, action
@@ -242,7 +245,7 @@ func EvaluateDimensions(specs []DimensionSpec, f Facts) EvalResult {
 	var issues, actions []string
 
 	for _, s := range specs {
-		w := maxInt(s.Weight, 0)
+		w := max(s.Weight, 0)
 		totalW += w
 		score, reason := 0, ""
 		var detail []string
@@ -269,8 +272,8 @@ func EvaluateDimensions(specs []DimensionSpec, f Facts) EvalResult {
 	if totalW > 0 {
 		overall = weighted / totalW
 	}
-	// 动作去重保序
-	actions = uniqueKeepOrder(actions)
+	// 动作去重保序（原 uniqueKeepOrder：丢弃空串 + 保序去重）
+	actions = slicex.Unique(slicex.Filter(actions, func(s string) bool { return s != "" }))
 	return EvalResult{
 		Score:      clampScore(overall),
 		Level:      levelFromScore(overall),
@@ -332,8 +335,8 @@ func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 		if r.Status == "success" {
 			ok++
 		}
-		stepFails += maxInt(r.StepFails, 0)
-		retrySum += maxInt(r.RetryTotal, 0)
+		stepFails += max(r.StepFails, 0)
+		retrySum += max(r.RetryTotal, 0)
 		if r.ErrorType != "" {
 			errTypes[r.ErrorType]++
 		}
@@ -381,11 +384,6 @@ func truthy(s string) bool {
 	return s != "" && s != "false" && s != "0"
 }
 
-func atoi(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
 func clampScore(s int) int {
 	if s < 0 {
 		return 0
@@ -394,26 +392,6 @@ func clampScore(s int) int {
 		return 100
 	}
 	return s
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func uniqueKeepOrder(in []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
 }
 
 // SortedDimensionNames 返回默认维度名（稳定顺序，供文档/测试）。

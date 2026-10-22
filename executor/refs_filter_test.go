@@ -1,6 +1,10 @@
 package executor
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/oekit/pkg/stringx"
+)
 
 func TestMatchesInclude(t *testing.T) {
 	cases := []struct {
@@ -38,11 +42,11 @@ func TestMatchRefGlob(t *testing.T) {
 }
 
 func TestSplitCSVNonEmpty(t *testing.T) {
-	got := splitCSVNonEmpty(" a, ,b ,")
+	got := stringx.SplitCSVNonEmpty(" a, ,b ,")
 	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("got %v", got)
 	}
-	if splitCSVNonEmpty("") != nil {
+	if stringx.SplitCSVNonEmpty("") != nil {
 		t.Fatal("want nil")
 	}
 }

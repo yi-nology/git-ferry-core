@@ -3,13 +3,14 @@ package executor
 import (
 	"context"
 	"fmt"
-	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/pkg/pathx"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
@@ -48,39 +49,9 @@ func expandBranchSpec(sourceSpec string, listRefs func() ([]string, error)) (bra
 }
 
 // matchBranchGlob 简化 glob(* 任意段、? 单字符),避免引入额外依赖。
+// 实现复用 pathx.MatchGlob(全仓唯一口径:`*` 跨 `/`)。
 func matchBranchGlob(pattern, name string) bool {
-	return globMatch(pattern, name)
-}
-
-// globMatch 递归通配匹配。
-func globMatch(pattern, s string) bool {
-	if pattern == "" {
-		return s == ""
-	}
-	if pattern == "*" {
-		return true
-	}
-	if strings.HasPrefix(pattern, "*") {
-		rest := pattern[1:]
-		for i := 0; i <= len(s); i++ {
-			if globMatch(rest, s[i:]) {
-				return true
-			}
-		}
-		return false
-	}
-	if s == "" {
-		return false
-	}
-	switch pattern[0] {
-	case '?':
-		return globMatch(pattern[1:], s[1:])
-	default:
-		if pattern[0] != s[0] {
-			return false
-		}
-		return globMatch(pattern[1:], s[1:])
-	}
+	return pathx.MatchGlob(pattern, name)
 }
 
 // divergentError 分歧保护触发的错误。

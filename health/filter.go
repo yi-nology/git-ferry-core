@@ -1,8 +1,7 @@
 package health
 
 import (
-	"path"
-	"strings"
+	"github.com/oekit/pkg/pathx"
 )
 
 // Filter 过滤链(借鉴 gickup/ghorg):
@@ -38,7 +37,7 @@ func (f *Filter) included(key, name string) bool {
 		}
 	}
 	for _, g := range f.IncludeGlobs {
-		if globMatch(g, key) || globMatch(g, name) {
+		if pathx.MatchGlob(g, key) || pathx.MatchGlob(g, name) {
 			return true
 		}
 	}
@@ -52,17 +51,9 @@ func (f *Filter) excluded(key, name string) bool {
 		}
 	}
 	for _, g := range f.ExcludeGlobs {
-		if globMatch(g, key) || globMatch(g, name) {
+		if pathx.MatchGlob(g, key) || pathx.MatchGlob(g, name) {
 			return true
 		}
 	}
 	return false
-}
-
-func globMatch(pattern, s string) bool {
-	if ok, err := path.Match(pattern, s); err == nil && ok {
-		return true
-	}
-	// 也允许子串风格的 *foo*
-	return strings.Contains(s, strings.Trim(pattern, "*")) && strings.Contains(pattern, "*")
 }

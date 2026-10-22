@@ -48,12 +48,11 @@ type Service struct {
 	mirror          *MirrorService
 	lastTriggerTime sync.Map
 	// guard 统一封装”同 taskKey 互斥 + 全局并发上限”;配 redis 时为分布式,否则进程内。
-	guard       concurrencyGuard
-	cleanupDone chan struct{}
-	stopOnce    sync.Once
-	bgCtx       context.Context
-	bgCancel    context.CancelFunc
-	wg          sync.WaitGroup
+	guard    concurrencyGuard
+	stopOnce sync.Once
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 func NewService(cfg *Config, opts ...Option) (*Service, error) {
@@ -105,7 +104,6 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
 		cron:         cron.New(),
 		cronEntryIDs: make(map[string]cron.EntryID),
-		cleanupDone:  make(chan struct{}),
 		bgCtx:        bgCtx,
 		bgCancel:     bgCancel,
 	}
@@ -181,8 +179,8 @@ func (s *Service) Stop() {
 
 func (s *Service) doStop() {
 	// Cancel background context to signal all goroutines
+	// (后台周期循环统一挂在 bgCtx 上,取消即退出)
 	s.bgCancel()
-	close(s.cleanupDone)
 	s.stopCronJobs()
 
 	// Wait for background goroutines to finish (with timeout)

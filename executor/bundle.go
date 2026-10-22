@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -120,14 +121,8 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
 	if len(names) <= keep {
 		return 0
 	}
-	// 升序:最早在前
-	for i := 0; i < len(names); i++ {
-		for j := i + 1; j < len(names); j++ {
-			if names[j] < names[i] {
-				names[i], names[j] = names[j], names[i]
-			}
-		}
-	}
+	// 升序:最早在前(文件名含时间戳,字典序即时间序)
+	sort.Strings(names)
 	for _, name := range names[:len(names)-keep] {
 		if os.Remove(filepath.Join(backupDir, name)) == nil {
 			removed++

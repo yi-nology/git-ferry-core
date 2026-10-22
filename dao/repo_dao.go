@@ -13,12 +13,21 @@ type Pagination struct {
 	Limit  int
 }
 
+// 分页缺省与上限——全仓唯一口径。
+// 此前 core dao、壳层 converter.PageToOffset、壳层 mirror 的 parsePage
+// 各写一份钳制,且缺省值还分 50 与 20 两种——同一次请求在任务列表返回 50 条、
+// 在镜像通道列表返回 20 条。现在统一从这里取。
+const (
+	DefaultPageSize = 50
+	MaxPageSize     = 200
+)
+
 func DefaultPagination(offset, limit int) Pagination {
 	if limit <= 0 {
-		limit = 50
+		limit = DefaultPageSize
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > MaxPageSize {
+		limit = MaxPageSize
 	}
 	if offset < 0 {
 		offset = 0

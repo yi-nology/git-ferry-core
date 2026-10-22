@@ -14,6 +14,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/syncx"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/dao"
@@ -35,7 +36,9 @@ type MirrorService struct {
 	backend  gitbackend.GitBackend
 	cm       *credential.CryptoManager
 	// locks 保证同一通道的进程内互斥（克隆/增量 fetch 不可重入）。
-	locks sync.Map
+	// 用 oekit concurrency/syncx.KeyedGate(cap=1 → 每个 key 一把锁)。
+	locks     *syncx.KeyedGate
+	locksOnce sync.Once
 	// locker 配 redis 时提供跨实例互斥：抢不到 = 另一实例正在执行同一通道，
 	// 直接返回忙碌错误而不是两边同时克隆（TTL 见 mirrorLockTTL，覆盖整次操作）。
 	locker  *distlock.RedisLocker
@@ -70,19 +73,35 @@ func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 		runs:       dao.NewMirrorRunDAO(db),
 		backend:    backend,
 		cm:         cm,
+		locks:      syncx.NewKeyedGate(1),
 		locker:     locker,
 		lockTTL:    mirrorLockTTL,
 		lockClient: lockClient,
 	}, nil
 }
 
+// channelGate 返回本实例的进程内互斥闸门（懒初始化）。
+// MirrorService 允许直接字面量构造（测试路径），不能假设 locks 已注入；
+// KeyedGate 的零值 cap=0 不构成互斥，必须显式 NewKeyedGate(1)。
+func (m *MirrorService) channelGate() *syncx.KeyedGate {
+	m.locksOnce.Do(func() {
+		if m.locks == nil {
+			m.locks = syncx.NewKeyedGate(1)
+		}
+	})
+	return m.locks
+}
+
 // lockChannel 获取通道级互斥：先取进程内互斥（阻塞，保持既有串行语义），
 // 再抢跨实例锁（配 redis 时；被其它实例占用 → 忙碌错误，不排队等待）。
 // 返回幂等 release；通道被另一实例占用时返回忙碌错误。
 func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release func(), err error) {
-	mu, _ := m.locks.LoadOrStore(fmt.Sprintf("repo-%d", chID), &sync.Mutex{})
-	gate := mu.(*sync.Mutex)
-	gate.Lock()
+	// 进程内互斥用 oekit concurrency/syncx.KeyedGate(cap=1 → 每个 key 一把锁):
+	// 不必自维护 sync.Map + 类型断言,且 Acquire 感知 ctx 取消。
+	releaseLocal, err := m.channelGate().Acquire(ctx, fmt.Sprintf("repo-%d", chID))
+	if err != nil {
+		return nil, err
+	}
 
 	key := fmt.Sprintf("mirror-channel-%d", chID)
 	// ownerID 为空表示未持有跨实例锁（未配 redis 或降级路径），release 时跳过远端解锁。
@@ -90,7 +109,7 @@ func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release fun
 	var once sync.Once
 	unlock := func() {
 		once.Do(func() {
-			gate.Unlock()
+			releaseLocal()
 			if m.locker != nil && ownerID != "" {
 				if uerr := m.locker.Unlock(ctx, key, ownerID); uerr != nil {
 					// 已过期易主或 redis 抖动：仅告警，TTL 会兜底
@@ -106,7 +125,7 @@ func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release fun
 		case lerr == nil:
 			ownerID = id
 		case errors.Is(lerr, distlock.ErrLockNotAcquired):
-			gate.Unlock()
+			releaseLocal()
 			return func() {}, fmt.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
 		default:
 			// redis 抖动：降级为进程内互斥，不阻断镜像任务

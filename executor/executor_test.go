@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oekit/pkg/ptrx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -270,7 +271,7 @@ func TestAuthConfig_WithoutToken(t *testing.T) {
 
 func TestTimePtr(t *testing.T) {
 	now := time.Now()
-	ptr := timePtr(now)
+	ptr := ptrx.Of(now)
 	require.NotNil(t, ptr, "expected non-nil time pointer")
 	assert.Equal(t, now, *ptr, "expected time pointer value")
 }

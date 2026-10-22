@@ -83,8 +83,9 @@ func TestSemaphore_RenewKeepsSlot_miniredis(t *testing.T) {
 	// 续期 a 几次,撑过原始 TTL
 	for i := 0; i < 3; i++ {
 		time.Sleep(150 * time.Millisecond)
-		err := sem.Renew(ctx, "a")
+		renewed, err := sem.Renew(ctx, "a")
 		require.NoError(t, err, "renew a")
+		require.True(t, renewed, "slot must still be alive to renew")
 	}
 	// 此时已过 450ms > 300ms 原始 TTL,但续期后 a 仍存活
 	ok, _ = sem.Acquire(ctx, "b")
@@ -94,4 +95,47 @@ func TestSemaphore_RenewKeepsSlot_miniredis(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	ok, _ = sem.Acquire(ctx, "b")
 	require.True(t, ok, "b should acquire after a's slot expired")
+}
+
+// TestSemaphore_KeyLayout_miniredis 钉住信号量的 Redis key 布局:
+// 必须落在 "git-sync:semaphore:<key>" 下,与迁移前自写实现一致,
+// 否则滚动升级期间新老实例各看各的信号量,全局并发上限翻倍。
+func TestSemaphore_KeyLayout_miniredis(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer func() { _ = client.Close() }()
+
+	sem := NewSemaphore(client, "sync-tasks", 2, 5*time.Second)
+	require.Equal(t, "git-sync:semaphore:sync-tasks", sem.key, "semaphore key layout must stay git-sync:semaphore:<key>")
+	// 占一个槽才会真正建出 ZSET key
+	ok, err := sem.Acquire(context.Background(), "worker-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, mr.Exists("git-sync:semaphore:sync-tasks"), "semaphore key layout must stay git-sync:semaphore:<key>")
+}
+
+// TestSemaphore_RenewDoesNotResurrectExpiredSlot_miniredis 钉住上游更严的续期语义:
+// 已过期的槽不得借 Renew 复活——它的配额可能已被其他 Acquire 接管,
+// 复活即超限。迁移前自写实现的 renewScript 只判「成员存在」,不判是否过期。
+func TestSemaphore_RenewDoesNotResurrectExpiredSlot_miniredis(t *testing.T) {
+	client := newMiniredis(t)
+	defer func() { _ = client.Close() }()
+	ctx := context.Background()
+	sem := NewSemaphore(client, "sem-resurrect", 1, 200*time.Millisecond)
+
+	ok, err := sem.Acquire(ctx, "a")
+	require.NoError(t, err)
+	require.True(t, ok, "a should acquire")
+
+	// 等槽过期
+	time.Sleep(300 * time.Millisecond)
+
+	renewed, err := sem.Renew(ctx, "a")
+	require.NoError(t, err, "Renew on an expired slot must not error")
+	require.False(t, renewed, "expired slot must not be resurrected by Renew")
+
+	// 配额确实让出给了 b,a 不能凭 Renew 抢回
+	ok, err = sem.Acquire(ctx, "b")
+	require.NoError(t, err)
+	require.True(t, ok, "b should acquire the freed slot")
 }

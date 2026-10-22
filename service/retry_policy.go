@@ -1,6 +1,7 @@
 package service
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -93,14 +94,9 @@ func (t *RetryTracker) pruneLocked() {
 	for id := range t.counts {
 		ids = append(ids, id)
 	}
-	// 简单选择：只在超限时排序一次
-	for i := 0; i < len(ids); i++ {
-		for j := i + 1; j < len(ids); j++ {
-			if ids[j] < ids[i] {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-		}
-	}
+	// 升序排序（run ID 单调递增，越小越老），淘汰最老的 extra 条。
+	// 原为手写 O(n²) 选择排序，条目多时比较次数爆炸，标准库排序是 O(n log n)。
+	slices.Sort(ids)
 	extra := len(ids) - t.maxKeep
 	for _, id := range ids[:extra] {
 		delete(t.counts, id)

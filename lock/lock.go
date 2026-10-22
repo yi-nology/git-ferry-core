@@ -1,49 +1,28 @@
 // Package lock 提供同步任务的并发控制原语:
 //   - 跨实例互斥锁:oekit redisx/distlock(SetNX + Lua 原子解锁 + 自动续期),
 //     本包只负责固定 key 前缀与客户端构造;
-//   - Semaphore:基于 redis ZSET 的分布式信号量,限制全局并发上限;
-//   - LocalLock:单实例(未配 redis)时的进程内互斥。
+//   - Semaphore:基于 redis ZSET 的分布式信号量,限制全局并发上限,
+//     实现复用 oekit redisx/distlock.Semaphore。
 package lock
 
 import (
-	"context"
-	"fmt"
-	"sync"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	defaultLockTTL = 30 * time.Second
-
 	// LockKeyPrefix 是跨实例互斥锁的 key 前缀。distlock 以 "<prefix>:<key>" 落 key,
 	// 与迁移前自写实现的 "git-sync:lock:<key>" 布局一致:滚动升级期间新老实例
 	// 看到的是同一把锁,不会出现两边各持一把而同时执行的窗口。
 	LockKeyPrefix = "git-sync:lock"
+
+	// SemaphoreKeyPrefix 是全局并发信号量的 key 前缀。与迁移前自写实现的
+	// "git-sync:semaphore:<key>" 布局保持一致:滚动升级期间新老实例看到的是
+	// 同一把信号量,不会两把各算各的配额而使实际上限翻倍。
+	SemaphoreKeyPrefix = "git-sync:semaphore:"
 )
-
-var semaphoreAcquireScript = redis.NewScript(`
-local key = KEYS[1]
-local member = ARGV[1]
-local max = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])      -- 当前时间(毫秒)
-local expire = tonumber(ARGV[4])   -- 槽过期时间(毫秒)
-
--- 清理已过期的成员(score = 过期毫秒时间戳 <= now 即已过期)
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
-
-local current = redis.call('ZCARD', key)
-if current >= max then
-    return 0
-end
-
--- 占用一个槽,score 设为过期时间戳,到点未续期则被清理(进程崩溃也不会永久占槽)
-redis.call('ZADD', key, expire, member)
-return 1
-`)
 
 // RedisPoolOptions 连接池可选配置,零值使用 go-redis 默认。
 type RedisPoolOptions struct {
@@ -97,125 +76,28 @@ func NewLocker(client redis.UniversalClient, opts ...distlock.RedisLockerOption)
 	return distlock.NewRedisLocker(client, all...)
 }
 
+// Semaphore 是全局并发上限的分布式信号量,实现复用 oekit redisx/distlock.Semaphore
+// (ZSET 槽位模型 + 原子 Lua 脚本)。
+//
+// 本包只做两件事:固定 key 前缀、对外暴露 key 供测试与运维观测;
+// 槽位的获取/续期/释放/清理语义全部跟随上游,不再自维护 Lua 脚本。
+//
+// 与迁移前自写实现的差异(均为上游更严的方向):
+//   - Acquire 对同一 identifier 幂等刷新(重复 Acquire 不占第二个槽);
+//   - Renew 只续期**未过期**的槽,已过期槽不得借 Renew 复活——
+//     它的配额可能已被其他 Acquire 接管,复活即超限;
+//   - Release 幂等(未持有不报错),Cleanup 返回被清理的槽数。
 type Semaphore struct {
-	client  *redis.Client
-	key     string
-	max     int
-	slotTTL time.Duration // 单个槽的存活时长,持有期间需 Renew 续期,否则到期自动释放
+	*distlock.Semaphore
+	key string
 }
 
-// NewSemaphore 创建一个基于 redis ZSET 的分布式信号量。
+// NewSemaphore 构造分布式信号量,Redis key 为 "<SemaphoreKeyPrefix><key>"。
 // slotTTL 为单个槽的存活时长:持有者需周期性 Renew,进程崩溃后槽在 slotTTL 后自动释放。
-func NewSemaphore(client *redis.Client, key string, max int, slotTTL time.Duration) *Semaphore {
+func NewSemaphore(client redis.UniversalClient, key string, max int, slotTTL time.Duration) *Semaphore {
+	fullKey := SemaphoreKeyPrefix + key
 	return &Semaphore{
-		client:  client,
-		key:     "git-sync:semaphore:" + key,
-		max:     max,
-		slotTTL: slotTTL,
+		Semaphore: distlock.NewSemaphore(client, fullKey, max, slotTTL),
+		key:       fullKey,
 	}
-}
-
-func (s *Semaphore) Acquire(ctx context.Context, identifier string) (bool, error) {
-	now := time.Now().UnixMilli()
-	expire := time.Now().Add(s.slotTTL).UnixMilli()
-	result, err := semaphoreAcquireScript.Run(ctx, s.client, []string{s.key}, identifier, s.max, now, expire).Int()
-	if err != nil {
-		return false, errors.Wrap(err, "semaphore acquire failed")
-	}
-	return result == 1, nil
-}
-
-// renewScript 仅当成员已存在于集合中才续期,防止过期后重新加入导致超限。
-var renewScript = redis.NewScript(`
-	if redis.call("ZSCORE", KEYS[1], ARGV[1]) then
-		return redis.call("ZADD", KEYS[1], ARGV[2], ARGV[1])
-	end
-	return 0
-`)
-
-// Renew 续期持有的槽(把 score 推到 now+slotTTL),仅当成员已存在才续期。
-func (s *Semaphore) Renew(ctx context.Context, identifier string) error {
-	expire := time.Now().Add(s.slotTTL).UnixMilli()
-	_, err := renewScript.Run(ctx, s.client, []string{s.key}, identifier, expire).Result()
-	return err
-}
-
-func (s *Semaphore) Release(ctx context.Context, identifier string) error {
-	_, err := s.client.ZRem(ctx, s.key, identifier).Result()
-	return err
-}
-
-func (s *Semaphore) Cleanup(ctx context.Context, olderThan time.Duration) error {
-	// 注意:槽位 score 是毫秒时间戳(Acquire 用 UnixMilli),阈值必须同为毫秒,
-	// 否则 ZRemRangeByScore 永远删不到任何条目(此前用 Unix() 秒导致差 1000 倍)
-	cutoff := float64(time.Now().Add(-olderThan).UnixMilli())
-	_, err := s.client.ZRemRangeByScore(ctx, s.key, "-inf", fmt.Sprintf("%f", cutoff)).Result()
-	return err
-}
-
-type localLockEntry struct {
-	expiresAt time.Time
-}
-
-type LocalLock struct {
-	mu      sync.Mutex
-	entries map[string]*localLockEntry
-}
-
-func NewLocalLock() *LocalLock {
-	return &LocalLock{
-		entries: make(map[string]*localLockEntry),
-	}
-}
-
-func (l *LocalLock) TryLock(ctx context.Context, key string) (bool, error) {
-	return l.TryLockWithTTL(ctx, key, defaultLockTTL)
-}
-
-func (l *LocalLock) TryLockWithTTL(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	now := time.Now()
-	entry, exists := l.entries[key]
-	if !exists || now.After(entry.expiresAt) {
-		l.entries[key] = &localLockEntry{expiresAt: now.Add(ttl)}
-		return true, nil
-	}
-	return false, nil
-}
-
-func (l *LocalLock) Lock(ctx context.Context, key string) error {
-	backoff := 100 * time.Millisecond
-	const maxBackoff = 5 * time.Second
-	for {
-		ok, _ := l.TryLock(ctx, key)
-		if ok {
-			return nil
-		}
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
-	}
-}
-
-func (l *LocalLock) Unlock(ctx context.Context, key string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if _, exists := l.entries[key]; !exists {
-		// 双重 Unlock 防护:不存在时返回错误而非静默成功,
-		// 避免调用方误以为释放成功而后续逻辑依赖错误的锁状态
-		return fmt.Errorf("local lock %q: not held (double unlock?)", key)
-	}
-	delete(l.entries, key)
-	return nil
 }

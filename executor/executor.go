@@ -11,6 +11,9 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/pkg/pathx"
+	"github.com/oekit/pkg/ptrx"
+	"github.com/oekit/pkg/stringx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -90,7 +93,7 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	fmt.Fprintf(&details, "Time: %s\n", startTime.Format(time.RFC3339))
 
 	defer func() {
-		run.EndTime = timePtr(time.Now())
+		run.EndTime = ptrx.Of(time.Now())
 		run.DurationMs = run.EndTime.Sub(startTime).Milliseconds()
 		detailStr := details.String()
 		if len(detailStr) > maxDetailsSize {
@@ -309,7 +312,7 @@ var defaultExcludeRefs = []string{"refs/pull/*", "refs/merge-requests/*"}
 
 // excludeRefs 按 task.ExcludeRefPatterns(空=默认)删除本地匹配 ref。
 func (e *Executor) excludeRefs(ctx context.Context, dir string, task *model.SyncTask) {
-	patterns := splitCSVNonEmpty(task.ExcludeRefPatterns)
+	patterns := stringx.SplitCSVNonEmpty(task.ExcludeRefPatterns)
 	if len(patterns) == 0 {
 		patterns = defaultExcludeRefs
 	}
@@ -332,28 +335,14 @@ func (e *Executor) excludeRefs(ctx context.Context, dir string, task *model.Sync
 	}
 }
 
-func splitCSVNonEmpty(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // matchRefGlob 用统一 globMatch（`*` 跨 `/`），匹配完整 ref 名。
 func matchRefGlob(pattern, ref string) bool {
-	return globMatch(pattern, ref)
+	return pathx.MatchGlob(pattern, ref)
 }
 
 // matchesInclude 是否在 include_branches 白名单内(空=全部)。
 func matchesInclude(include, branch string) bool {
-	list := splitCSVNonEmpty(include)
+	list := stringx.SplitCSVNonEmpty(include)
 	if len(list) == 0 {
 		return true
 	}
@@ -361,7 +350,7 @@ func matchesInclude(include, branch string) bool {
 		if p == branch {
 			return true
 		}
-		if globMatch(p, branch) {
+		if pathx.MatchGlob(p, branch) {
 			return true
 		}
 	}
@@ -548,8 +537,4 @@ func (e *Executor) pruneRemoteBranch(ctx context.Context, dir, branch string, re
 		return nil
 	}
 	return err
-}
-
-func timePtr(t time.Time) *time.Time {
-	return &t
 }

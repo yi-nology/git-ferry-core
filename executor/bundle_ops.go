@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -61,13 +62,9 @@ func ListBundles(backupDir, taskKey string) ([]BundleInfo, error) {
 		})
 	}
 	// 时间倒序(新在前)
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].ModTime.After(out[i].ModTime) {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ModTime.After(out[j].ModTime)
+	})
 	return out, nil
 }
 
