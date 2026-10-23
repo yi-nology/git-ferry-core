@@ -233,7 +233,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	if err = materializeTree(p.workRepo.Storer, treeHash, buildDir); err != nil {
 		return nil, fmt.Errorf("物化改写后源码失败: %w", err)
 	}
-	if err = typeCheckGate(ctx, buildDir); err != nil {
+	if err = TypeCheckGate(ctx, buildDir); err != nil {
 		return nil, fmt.Errorf("编译门禁未通过,已中止(未推送): %w", err)
 	}
 	slog.Info("mirror: 编译门禁通过", "tag", tag)

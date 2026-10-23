@@ -13,9 +13,21 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
-// materializeTree 把 storer 中以 treeHash 为根的树写成目录内容,
+// MaterializeTree 把 storer 中以 treeHash 为根的树写成目录内容,
 // 供 go build 门禁编译。gitlink(子模块)跳过;symlink 原样重建。
+//
+// 导出以便历史同步模式复用:门禁必须跑在「按计划应用后的目标树」上,
+// 而不是跑在源树上——差异判定、门禁、格式校验要针对同一份产物。
+func MaterializeTree(st storer.EncodedObjectStorer, treeHash plumbing.Hash, dir string) error {
+	return materializeTree(st, treeHash, dir)
+}
+
 func materializeTree(st storer.EncodedObjectStorer, treeHash plumbing.Hash, dir string) error {
+	// 根目录必须存在:发布模式传的是 MkdirTemp 出来的目录(自带创建),
+	// 但导出后可能被传入一个尚不存在的路径。
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
 	enc, err := st.EncodedObject(plumbing.TreeObject, treeHash)
 	if err != nil {
 		return err

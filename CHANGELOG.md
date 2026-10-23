@@ -2,6 +2,34 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- **历史同步（双仓内容差异发布）**：新增 `mirror/history` 包——两个各自有完整历史的
+  仓库之间按**内容差异**同步。与镜像中心的「身份镜像」并存，语义不同：
+  那边是同一仓库的多个身份，这边是内网源树 → 公开目标树的内容移植。
+  - `Plan` / `Diff`：生成同步计划（逐文件处置：带过去 / 排除 / 改写）。
+  - 冲突规则（`ConflictRuleConfig`）：机械可判的冲突自动裁决。
+  - `ScrubRule`：痕迹检测与清理（内网标识泄漏到公开树的防护），强度分
+    `auto` / `mandatory`。
+  - `Resolve`：为 hold 文件计算解法（`keep_target` / `take_source` / `merged`），
+    并标出是否仍需人工介入。
+  - `Dossiers`：未解决冲突的完整卷宗，可渲染成 Markdown 交 AI 或人审。
+  - `Materialize` / `Verify`：把计划落到「预期目标树」+ 发布前门禁（gofmt 等）。
+  - `Push`：按通道目标的顺序逐个推送、各自凭据，任一失败立即中止。
+- **通道优先的历史同步 API**（`service/history_service.go` /
+  `history_channel_service.go` / `history_preview.go`）：配置只在通道里，执行按
+  channel id 进行，调用方不重传规则、也不回传服务端临时路径。DTO 与 Go 内部类型
+  解耦（规则种类用字符串、痕迹模式用正则源码）。执行记录进哈希链。
+- **历史同步的持久层与模型**：`dao/history_dao.go`、`model/history_channel.go`、
+  `model/history_override.go`。
+
+### Changed
+
+- `typeCheckGate` → `TypeCheckGate`（由未导出转导出）。
+- `github.com/sergi/go-diff` 由间接依赖升为直接依赖（内容差异计算要用）。
+
 ## [v0.11.0] - 2026-10-22
 
 ### Changed

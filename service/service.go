@@ -46,6 +46,7 @@ type Service struct {
 	cronMu          sync.RWMutex
 	executor        *executor.Executor
 	mirror          *MirrorService
+	history         *HistoryService
 	lastTriggerTime sync.Map
 	// guard 统一封装”同 taskKey 互斥 + 全局并发上限”;配 redis 时为分布式,否则进程内。
 	guard    concurrencyGuard
@@ -158,6 +159,11 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		return nil, errors.Wrap(err, "init mirror service failed")
 	}
 	svc.mirror = mirrorSvc
+	historySvc, err := NewHistoryService(svc, db)
+	if err != nil {
+		return nil, errors.Wrap(err, "init history service failed")
+	}
+	svc.history = historySvc
 
 	svc.wg.Add(1)
 	async.GoSafe(func() {

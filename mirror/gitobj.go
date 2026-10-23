@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"regexp"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -16,17 +15,21 @@ import (
 // rewriteModulePath 在 blob 数据中做模块路径边界改写。
 // 替代 bytes.ReplaceAll——旧实现会把 github.com/a/b-extra 中的
 // github.com/a/b 也替换,产生语义错误的 module path。
-// 改用正则:源路径后必须跟非 Go 模块路径字符(或文本末尾)才替换,
+//
+// 边界语义现由 rewrite.go 的 Rewriter 统一实现(KindModule):
+// 源路径后必须跟非 Go 模块路径字符(或文本末尾)才替换,
 // 使 github.com/a/b/pkg 仍被正确改写(子包路径),但 b-extra 不被误改。
-var modulePathTerminator = regexp.MustCompile(`[^a-zA-Z0-9_.\-]|$`)
-
+// 单一实现:改写规则只存在于 Rewriter 一处,publish 模式与历史同步共用。
 func rewriteModulePath(data []byte, source, target string) []byte {
-	if source == "" || target == "" || !bytes.Contains(data, []byte(source)) {
+	out, err := RewriteIdentities(data, []IdentityRule{{
+		Source: source,
+		Target: target,
+		Kind:   KindModule,
+	}})
+	if err != nil {
 		return data
 	}
-	// 匹配 "source + 边界字符",替换为 "target + 原边界字符"
-	re := regexp.MustCompile(`(` + regexp.QuoteMeta(source) + `)(` + modulePathTerminator.String() + `)`)
-	return re.ReplaceAll(data, []byte(target+"$2"))
+	return out
 }
 
 // maxRewriteSize 是参与身份改写扫描的 blob 大小上限;超过者按原样保留

@@ -51,6 +51,10 @@ func InitDB(driver, dsn string) (*gorm.DB, error) {
 		&MirrorChannel{},
 		&MirrorTarget{},
 		&MirrorRun{},
+		&HistoryChannel{},
+		&HistoryTarget{},
+		&HistoryRun{},
+		&HistoryOverride{},
 		&tpl.Template{},
 		&ForcePushApproval{},
 	)
