@@ -91,13 +91,19 @@ func ApplyScrub(content []byte, rules []ScrubRule) ScrubResult {
 			if len(matches) == 0 {
 				continue
 			}
+			// 命中报告与替换都基于**同一份快照**(替换前的 line)。
+			//
+			// 之前是"边报边改":第一处替换后行长度变了,后续命中仍用**原始下标**
+			// 去切 ⇒ ①第二处及以后的痕迹没清干净(残留),②中间文本被吃掉,
+			// ③三处以上直接越界 panic。
+			snapshot := line
 			for _, m := range matches {
 				// **密钥类命中不能回显原文**:命中行会进执行记录(落库)
 				// 与 API 响应 —— 原样回显等于把密钥抄一份到日志和数据库里。
 				// 命中的那一段替换成 ***,上下文仍保留(足够定位)。
-				text := line
+				text := snapshot
 				if rule.Mandatory() {
-					text = redactMatch(line, m[0], m[1])
+					text = redactMatch(snapshot, m[0], m[1])
 				}
 				hit := ScrubHit{
 					Rule:      rule.Name,
@@ -109,12 +115,14 @@ func ApplyScrub(content []byte, rules []ScrubRule) ScrubResult {
 				res.Hits = append(res.Hits, hit)
 				if rule.Mandatory() {
 					res.MandatoryHits = append(res.MandatoryHits, hit)
-					continue
 				}
-				replacement := rule.Replacement
-				line = line[:m[0]] + replacement + line[m[1]:]
-				res.Cleaned = true
 			}
+			if rule.Mandatory() {
+				continue // 密钥类不自动改内容
+			}
+			// 一次性替换**所有**命中(字面量替换,replacement 里的 $ 不做展开)。
+			line = rule.Pattern.ReplaceAllLiteralString(line, rule.Replacement)
+			res.Cleaned = true
 		}
 		lines[i] = line
 	}

@@ -94,6 +94,31 @@ func (b *builder) scrub(path string, data []byte) []byte {
 	return res.Content
 }
 
+// checkMandatoryOnly 对**不能改写**的 blob(二进制/超限)跑一遍 mandatory 规则。
+//
+// 只查密钥类(mandatory):auto 规则要改写内容,而二进制改写等于破坏文件。
+// 但密钥类恰恰是"绝不能进公开仓"的那类 —— 不能因为文件是二进制就放行。
+func (b *builder) checkMandatoryOnly(path string, data []byte) {
+	if len(b.scrubRules) == 0 {
+		return
+	}
+	mandatory := make([]ScrubRule, 0, len(b.scrubRules))
+	for _, r := range b.scrubRules {
+		if r.Mandatory() {
+			mandatory = append(mandatory, r)
+		}
+	}
+	if len(mandatory) == 0 {
+		return
+	}
+	res := ApplyScrub(data, mandatory)
+	for _, h := range res.Hits {
+		b.scrubHits = append(b.scrubHits, h)
+		b.mandatoryHits = append(b.mandatoryHits,
+			fmt.Sprintf("%s:%d(%s)", path, h.Line, h.Rule))
+	}
+}
+
 // rewriteTree 递归改写以 srcHash 为根的子树,prefix 是仓库内相对路径前缀
 // (用于报告)。返回合成子树的 hash。
 func (b *builder) rewriteTree(srcHash plumbing.Hash, prefix string) (plumbing.Hash, error) {
@@ -131,6 +156,12 @@ func (b *builder) rewriteTree(srcHash plumbing.Hash, prefix string) (plumbing.Ha
 					// 记残留:发布阶段会因此中止并把文件列出来。
 					b.residual = append(b.residual, path)
 				}
+				// **不能改写 ≠ 可以不管**:二进制/超限的 blob 仍要跑一遍
+				// mandatory 规则。此前这条路径完全跳过 scrub ⇒ 二进制里的
+				// 密钥(ghp_xxx 等)原样进公开 module,而密钥类规则一次都不会
+				// 触发 —— 规则形同虚设。
+				// auto 类规则对二进制无意义(改写二进制会破坏它),故只查 mandatory。
+				b.checkMandatoryOnly(path, data)
 				// 把对象复制进临时仓库,保证物化与推送时对象完整。
 				if err := b.copyBlobObject(entry.Hash); err != nil {
 					return plumbing.ZeroHash, err

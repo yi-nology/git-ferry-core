@@ -444,7 +444,17 @@ func applyFileContent(opts ApplyOptions, replayer *mirror.Rewriter,
 	if fp.Disposition == DispositionHold {
 		if res, ok := opts.Plan.Resolutions[path]; ok &&
 			(res.Verdict == ResolutionTakeTheirs || res.Verdict == ResolutionMergeClean) {
-			rewritten = []byte(res.Content)
+			// 裁决内容也要走**同一条发布形态**管线(身份改写 → gofmt) ——
+			// 否则 merged 裁决(人工/AI 给的原文)会把内网 module path
+			// 直接带进公开仓。
+			//
+			// 实测:裁决内容里写一句「详见 git.enjoye.top/enjoydream/app/internal」,
+			// 门禁全绿(注释既不是 gofmt 违规也不是类型错误),而内网路径原样
+			// 出现在公开仓的文件里。
+			//
+			// take_theirs 的内容本来就已改写,再走一遍是幂等的(改写找不到源路径、
+			// gofmt 已归一)。
+			rewritten = replayer.PublishForm(fp.SourcePath, []byte(res.Content))
 		}
 	}
 
