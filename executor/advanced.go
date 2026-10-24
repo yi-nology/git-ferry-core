@@ -63,17 +63,10 @@ type divergentError struct {
 	// 且不同 git 后端对"独有"的判定还不一致 ⇒ 用它当数量会报错数字。
 	Count int
 	Extra []string // 目标独有提交(展示用,可能截断)
-	// Note 追加说明(策略无法兑现时讲清楚为什么),例如
-	// "backup_on_demand 但没配 backup_dir,本次按 block 处理"。
-	Note string
 }
 
 func (e *divergentError) Error() string {
-	msg := fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, e.Count)
-	if e.Note != "" {
-		msg += " " + e.Note
-	}
-	return msg
+	return fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, e.Count)
 }
 
 // isDivergent 判断是否分歧保护错误。
@@ -100,6 +93,16 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	default:
 		// 未知策略按最安全处理
 		policy = "block"
+	}
+	// backup_on_demand 要求覆盖前先打回滚快照;没配 backup_dir 就打不了。
+	//
+	// 这里**直接报配置错**、不落 pending 审批:
+	// 若按 block 落审批,运维一次"放行"就会在**没有备份**的情况下覆盖目标侧独有提交 ——
+	// 那正是这个策略要防的数据丢失。配置没配好就该是配置错,不该被审批绕过。
+	if policy == "backup_on_demand" && backupDir == "" {
+		return false, errors.New("force_push_policy=backup_on_demand 需要先打回滚快照," +
+			"但未配置 sync.backup_dir(备份目录);请配置备份目录后重试。" +
+			"本次未覆盖任何内容,也未产生审批申请 —— 避免在没有备份的情况下被放行覆盖")
 	}
 	// 本地 source 与 target 远端跟踪比对:target 有而 source 没有的提交
 	targetRef := "refs/remotes/" + RemoteTarget + "/" + targetBranch
@@ -135,14 +138,6 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	if behind == 0 {
 		return false, nil
 	}
-	// backup_on_demand 需要备份目录才能在覆盖前打回滚快照;没配 ⇒ 无法兑现该策略,
-	// 只能按 block 处理(安全方向)。但**必须说清楚为什么** ——
-	// 否则操作者以为自己配的是"先快照再覆盖",实际被拦下却看不出原因。
-	policyNote := ""
-	if policy == "backup_on_demand" && backupDir == "" {
-		policyNote = "(force_push_policy=backup_on_demand 要求先打回滚快照,但未配置 sync.backup_dir," +
-			"无法兑现该策略,本次按 block 处理;配好 backup_dir 后此策略才会生效)"
-	}
 	count := fmt.Sprintf("%d", behind)
 	// 列出目标独有提交(最多 5 条,便于日志)。
 	// 原实现:git log --oneline -5 source..targetRef → "hash subject"。
@@ -157,16 +152,20 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		return false, nil
 	}
 	// block 策略：若已有审批放行则放行；否则登记 pending 并拒绝
+	//
+	// 放行绑定到**当前目标分支的 HEAD**:审批是"针对这一次分歧"的授权,
+	// 目标侧此后若又前进(独有提交从 1 个变成 50 个),旧放行不该继续适用。
+	targetSHA, _ := e.backend.RevParse(ctx, dir, targetRef)
 	if e.Approver != nil {
-		if e.Approver.IsForcePushApproved(taskKey, targetBranch) {
+		if e.Approver.IsForcePushApproved(taskKey, targetBranch, targetSHA) {
 			// 放行通过 —— 标记"用掉了":本次强推成功后要把这条放行消费掉,
 			// 否则一次人工放行会变成该任务+分支上的常驻后门。
 			return true, nil
 		}
 		e.Approver.RequestApproval(taskKey, targetBranch,
-			fmt.Sprintf("divergent target has %s unique commits", count))
+			fmt.Sprintf("divergent target has %s unique commits", count), targetSHA)
 	}
-	return false, &divergentError{Branch: targetBranch, Count: behind, Extra: extra, Note: policyNote}
+	return false, &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
 }
 
 // maxDivergentLog 与原 `log --oneline -5` 的条数上限一致。

@@ -148,12 +148,18 @@ func TestCheckDivergencePolicy_FirstPush_NoTargetBranch_Allows(t *testing.T) {
 
 // stubApprover 记录 executor 对审批器的调用。
 type stubApprover struct {
-	approved bool
-	consumed int
+	approved  bool
+	consumed  int
+	requested int
+	// checkedTargetRef 记录最近一次判定时传入的目标 SHA(验证"放行绑定目标状态")
+	checkedTargetRef string
 }
 
-func (s *stubApprover) IsForcePushApproved(taskKey, branch string) bool { return s.approved }
-func (s *stubApprover) RequestApproval(taskKey, branch, reason string)  {}
+func (s *stubApprover) IsForcePushApproved(taskKey, branch, targetRef string) bool {
+	s.checkedTargetRef = targetRef
+	return s.approved
+}
+func (s *stubApprover) RequestApproval(taskKey, branch, reason, targetRef string) { s.requested++ }
 
 // ConsumeForcePushApproval 镜像真实 store 的语义:用掉之后不再算已放行。
 func (s *stubApprover) ConsumeForcePushApproval(taskKey, branch string) {
@@ -239,8 +245,17 @@ func TestCheckDivergencePolicy_BackupOnDemandWithoutBackupDir_ExplainsWhy(t *tes
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
 	// backupDir 传空串 = 未配置 sync.backup_dir
-	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
+	used, err := exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sync.backup_dir",
 		"backup_on_demand 兑现不了时,错误必须点名 backup_dir,否则看不出为什么被拦下")
+	require.False(t, used)
+
+	// 关键:不能落 pending 审批 —— 否则运维一次"放行"就会在**没有备份**的情况下
+	// 覆盖目标侧独有提交,那正是这个策略要防的数据丢失。
+	ap := &stubApprover{}
+	exec.Approver = ap
+	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
+	require.Error(t, err)
+	require.Equal(t, 0, ap.requested, "配置错时不得产生审批申请(否则能被放行成无备份覆盖)")
 }

@@ -14,6 +14,14 @@ type ForcePushApproval struct {
 	Approved   bool       `json:"approved"`
 	ApprovedBy string     `gorm:"size:128" json:"approved_by,omitempty"`
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+	// TargetRef 申请审批时**目标分支的 HEAD SHA**。
+	//
+	// 放行必须绑定到它被批准时的目标状态:审批是"针对这一次分歧"的授权,
+	// 目标侧若在此之后又前进/后退(独有提交从 1 个变成 50 个),
+	// 旧审批就不该继续适用 —— 否则一次"批 1 个独有提交"会变成
+	// "授权覆盖此后的一切"。
+	// 空 = 早期版本创建的审批(未绑定),按未绑定处理(仍是一次性)。
+	TargetRef string `gorm:"size:64;index" json:"target_ref,omitempty"`
 	// RevokedAt / RevokedBy 放行被**撤销**的时间与操作者。
 	//
 	// 撤销是"我批错了/情况变了,这条放行作废"——与"用掉"不同:

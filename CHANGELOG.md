@@ -2,6 +2,30 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **backup_on_demand 兑现不了时 fail-fast，且不能被审批绕过**（`executor`）：该策略要求
+  覆盖前先打回滚快照，但没配 `sync.backup_dir` 就打不了。此前**静默按 block 处理**，
+  并落一条 pending 审批 ⇒ 运维一次"放行"就会在**没有备份**的情况下覆盖目标侧独有提交 ——
+  那正是这个策略要防的数据丢失。修法：直接报配置错并**不产生任何审批申请**；
+  配置没配好就该是配置错，不该能被审批绕过。
+- **强推放行绑定到"被批准时的目标状态"**（`executor` / `service` / `dao` / `model`）：
+  审批是"针对这一次分歧"的授权。目标侧若在审批之后又前进（独有提交从 1 个变成 50 个），
+  旧审批不该继续适用 —— 否则一次"批 1 个独有提交"会变成"授权覆盖此后的一切"。
+  修法：审批记录加 `target_ref`（申请时目标分支的 HEAD SHA）；判定时目标 SHA 变了
+  ⇒ 旧放行不再适用，必须重新审批。
+  （`ForcePushApprover` 接口的 `IsForcePushApproved` / `RequestApproval` 各加一个
+  `targetRef` 参数 —— 外部实现方需同步。）
+- **漂移检测给出真实的 ahead/behind**（`service/lifecycle_service.go`）：此前
+  `rev-list --count A..B` 要求两个 sha 都在本地对象库里，而远端那个 sha（ls-remote 拿到的）
+  没被 fetch 过 ⇒ 命令直接失败，旧实现静默给 0/0 ⇒ "漂移了多少"这个最该有的信息永远是空的。
+  修法：先把源端分支 fetch 下来（带凭证，私有仓必须）再算；fetch 失败则明说原因。
+  同时把比对分支从 `TargetBranch` 改成 `SourceBranch` —— 工作区里的本地分支是克隆**源端**时
+  检出的那个分支，用 TargetBranch 去找在源/目标分支不同的任务上必然找不到
+  （恒报 "cannot resolve refs"）。
+
 ## [v0.15.0] - 2026-10-24
 
 ### Fixed

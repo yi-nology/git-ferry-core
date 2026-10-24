@@ -12,6 +12,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -108,6 +109,8 @@ type DriftItem struct {
 	LocalAhead  int    `json:"local_ahead"`
 	RemoteAhead int    `json:"remote_ahead"`
 	Message     string `json:"message"`
+	// TargetBranch 目标分支(与实际比对的 SourceBranch 相对)。
+	TargetBranch string `json:"target_branch,omitempty"`
 }
 
 // DriftReport 漂移检测汇总。
@@ -148,7 +151,7 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 	}
 
 	for _, t := range tasks {
-		item := DriftItem{TaskKey: t.Key, Branch: t.TargetBranch, RepoKey: t.TargetRepoKey}
+		item := DriftItem{TaskKey: t.Key, Branch: t.SourceBranch, TargetBranch: t.TargetBranch, RepoKey: t.TargetRepoKey}
 		repo, rerr := s.GetRepoByKey(t.TargetRepoKey)
 		if rerr != nil || repo == nil {
 			item.Message = "target repo not found"
@@ -162,9 +165,13 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			rep.Items = append(rep.Items, item)
 			continue
 		}
-		localRef := gitRevParse(ctx, gitDir, "refs/heads/"+t.TargetBranch)
+		// 比对的是**源**分支:工作区里的本地分支就是克隆源端时检出的那个分支
+		// (executor.cloneRepo 按 task.SourceBranch 克隆)⇒ 用 TargetBranch 去找
+		// refs/heads/<target> 在源/目标分支不同的任务上必然找不到("cannot resolve refs")。
+		// origin 远端同样是源端(工作区的 "target" 才是目标仓)。
+		localRef := gitRevParse(ctx, gitDir, "refs/heads/"+t.SourceBranch)
 		item.LocalRef = localRef
-		remoteRef := gitLsRemote(ctx, gitDir, "origin", "refs/heads/"+t.TargetBranch)
+		remoteRef := gitLsRemote(ctx, gitDir, "origin", "refs/heads/"+t.SourceBranch)
 		item.RemoteRef = remoteRef
 		switch {
 		case localRef == "" || remoteRef == "":
@@ -173,21 +180,28 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			item.Message = "in sync"
 		default:
 			item.Drifted = true
+			// rev-list --count A..B 要求两个 sha 都在本地对象库里;
+			// 远端(ls-remote 拿到的)那个 sha 没被 fetch 过 ⇒ 命令直接失败,
+			// ahead/behind 只能报"未知"。先把源端分支 fetch 下来(带凭证,私有仓必须),
+			// 再算 —— 否则"漂移了多少"这个最该有的信息永远是空的。
+			if ferr := s.fetchDriftSource(ctx, gitDir, t); ferr != nil {
+				item.Message = "drifted (cannot fetch source branch to compute ahead/behind: " + ferr.Error() + ")"
+				rep.Drifted++
+				rep.Items = append(rep.Items, item)
+				continue
+			}
 			a, b, ok := revListCounts(ctx, gitDir, localRef, remoteRef)
 			item.LocalAhead, item.RemoteAhead = a, b
 			switch {
 			case !ok:
-				// 远端提交不在本地对象库里(没 fetch 过)⇒ rev-list 算不出数量。
-				// 旧实现静默给 0/0,于是"漂移了多少"变成"不知道"却看着像"没有"。
-				item.Message = "drifted (remote commit not in local object store; ahead/behind unknown)"
+				// fetch 过了还算不出 ⇒ 真的算不出来(罕见),明说而不是给 0/0
+				item.Message = "drifted (ahead/behind not resolvable after fetch)"
 			case a > 0 && b > 0:
 				item.Message = "diverged (both sides have unique commits)"
 			case a > 0:
-				item.Message = "local ahead (target behind)"
+				item.Message = "local ahead (workdir has commits the source does not)"
 			case b > 0:
-				item.Message = "remote ahead (target ahead)"
-			default:
-				item.Message = "drifted (refs differ; ahead/behind not resolvable)"
+				item.Message = "source ahead (workdir is behind; next sync will push)"
 			}
 			rep.Drifted++
 		}
@@ -258,6 +272,37 @@ func gitLsRemote(ctx context.Context, dir, remote, ref string) string {
 		return fields[0]
 	}
 	return ""
+}
+
+// fetchDriftSource 把源端分支 fetch 到工作区,让 ahead/behind 能算出来。
+//
+// 为什么要 fetch:rev-list --count <shaA>..<shaB> 要求两个 sha 都在本地对象库里;
+// 远端(ls-remote 拿到的)那个 sha 若没被 fetch 过,命令直接失败 ⇒
+// ahead/behind 只能报"未知"。
+//
+// 必须带凭证:源仓可能是私有仓,裸 git fetch 会 401。
+func (s *Service) fetchDriftSource(ctx context.Context, gitDir string, t *model.SyncTask) error {
+	backend := lifecycleBackend()
+	if backend == nil {
+		return errors.New("git backend 不可用")
+	}
+	repo, err := s.GetRepoByKey(t.SourceRepoKey)
+	if err != nil || repo == nil {
+		return errors.New("源仓记录不存在")
+	}
+	var p *model.Platform
+	if repo.PlatformID > 0 {
+		if got, gerr := s.GetPlatformByID(ctx, repo.PlatformID); gerr == nil {
+			p = got
+		}
+	}
+	_, err = backend.Fetch(ctx, gitbackend.FetchOptions{
+		RepoPath: gitDir,
+		Remote:   "origin",
+		Branches: []string{t.SourceBranch},
+		Auth:     executor.BuildRepoAuth(repo, p),
+	})
+	return err
 }
 
 // revListCounts 统计 a/b 两端各自独有的提交数。

@@ -65,12 +65,17 @@ func (d *ForcePushApprovalDAO) PendingExists(taskKey, branch string) (bool, erro
 //
 // 放行是一次性的:用掉之后(consumed_at 非空)不再算数 ——
 // 否则一次人工放行会变成该任务+分支上的常驻后门。
-func (d *ForcePushApprovalDAO) IsApproved(taskKey, branch string) (bool, error) {
-	var n int64
-	err := d.db.Model(&model.ForcePushApproval{}).
+func (d *ForcePushApprovalDAO) IsApproved(taskKey, branch, targetRef string) (bool, error) {
+	q := d.db.Model(&model.ForcePushApproval{}).
 		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL AND revoked_at IS NULL",
-			taskKey, branch, true).
-		Count(&n).Error
+			taskKey, branch, true)
+	// 绑定:审批只对"申请时的那个目标状态"有效。
+	// target_ref 为空的(早期版本创建的)视为未绑定,仍然适用。
+	if targetRef != "" {
+		q = q.Where("target_ref = ? OR target_ref = ''", targetRef)
+	}
+	var n int64
+	err := q.Count(&n).Error
 	return n > 0, err
 }
 

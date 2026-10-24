@@ -30,10 +30,10 @@ func TestForcePushStore_RoundTrip(t *testing.T) {
 	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
 
 	assert.Empty(t, st.List())
-	assert.False(t, st.IsForcePushApproved("t1", "main"))
+	assert.False(t, st.IsForcePushApproved("t1", "main", ""))
 	assert.Equal(t, 0, st.PendingCount())
 
-	item, err := st.Request("t1", "main", "divergent")
+	item, err := st.Request("t1", "main", "divergent", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, item.ID)
 	assert.True(t, len(item.ID) > 3 && item.ID[:3] == "fp-", "id 应为 fp- 前缀: %s", item.ID)
@@ -43,12 +43,12 @@ func TestForcePushStore_RoundTrip(t *testing.T) {
 	assert.Equal(t, "t1", got[0].TaskKey)
 	assert.Equal(t, "main", got[0].Branch)
 	assert.Equal(t, 1, st.PendingCount())
-	assert.False(t, st.IsForcePushApproved("t1", "main"))
+	assert.False(t, st.IsForcePushApproved("t1", "main", ""))
 
 	found, err := st.Approve(item.ID, "admin")
 	require.NoError(t, err)
 	assert.True(t, found)
-	assert.True(t, st.IsForcePushApproved("t1", "main"))
+	assert.True(t, st.IsForcePushApproved("t1", "main", ""))
 	assert.Equal(t, 0, st.PendingCount())
 
 	found, err = st.Approve("nope", "admin")
@@ -60,21 +60,21 @@ func TestForcePushStore_RoundTrip(t *testing.T) {
 func TestForcePushStore_ApproverInterface(t *testing.T) {
 	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
 	var approver interface {
-		IsForcePushApproved(taskKey, branch string) bool
-		RequestApproval(taskKey, branch, reason string)
+		IsForcePushApproved(taskKey, branch, targetRef string) bool
+		RequestApproval(taskKey, branch, reason, targetRef string)
 	} = st
 
-	approver.RequestApproval("k", "main", "r1")
-	approver.RequestApproval("k", "main", "r2")
+	approver.RequestApproval("k", "main", "r1", "")
+	approver.RequestApproval("k", "main", "r2", "")
 	require.Len(t, st.List(), 1, "重复 RequestApproval 只留一条 pending")
-	assert.False(t, st.IsForcePushApproved("k", "main"))
+	assert.False(t, st.IsForcePushApproved("k", "main", ""))
 
 	// 放行是一次性的：之后可再产生新 pending（与历史文件实现一致）
 	id := st.List()[0].ID
 	found, err := st.Approve(id, "admin")
 	require.NoError(t, err)
 	require.True(t, found)
-	approver.RequestApproval("k", "main", "r3")
+	approver.RequestApproval("k", "main", "r3", "")
 	require.Len(t, st.List(), 2, "放行后应允许新的 pending 申请")
 	assert.False(t, st.List()[1].Approved)
 }
@@ -95,7 +95,7 @@ func TestForcePushStore_LegacyImport(t *testing.T) {
 	st := NewForcePushStore(dao.NewForcePushApprovalDAO(db), path)
 	require.Len(t, st.List(), 1, "空表应导入旧文件")
 	assert.Equal(t, "fp-9", st.List()[0].ID)
-	assert.True(t, st.IsForcePushApproved("legacy", "dev"), "JSON 字段名与历史文件兼容")
+	assert.True(t, st.IsForcePushApproved("legacy", "dev", ""), "JSON 字段名与历史文件兼容")
 
 	// 表非空 + 旧文件变化 → 不再导入
 	require.NoError(t, os.WriteFile(path, []byte(`[{"id":"fp-10","task_key":"x","branch":"y","created_at":"2026-01-03T00:00:00Z"}]`), 0o600))
@@ -132,16 +132,16 @@ func TestForcePushStore_JSONContract(t *testing.T) {
 func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
 	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
 
-	st.RequestApproval("t1", "main", "divergent target has 1 unique commits")
+	st.RequestApproval("t1", "main", "divergent target has 1 unique commits", "sha-1")
 	id := st.List()[0].ID
 	found, err := st.Approve(id, "admin")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.True(t, st.IsForcePushApproved("t1", "main"), "放行后应当生效")
+	require.True(t, st.IsForcePushApproved("t1", "main", ""), "放行后应当生效")
 
 	// 用掉
 	st.ConsumeForcePushApproval("t1", "main")
-	assert.False(t, st.IsForcePushApproved("t1", "main"),
+	assert.False(t, st.IsForcePushApproved("t1", "main", ""),
 		"放行被用掉后不再算数(否则一次人工放行 = 常驻后门)")
 
 	// 记录保留(审计线索:谁批的、什么时候批的、什么时候用的)
@@ -152,7 +152,7 @@ func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
 	assert.True(t, list[0].Approved, "放行事实不变")
 
 	// 用掉之后,同任务同分支可以重新申请并重新走审批
-	st.RequestApproval("t1", "main", "again divergent")
+	st.RequestApproval("t1", "main", "again divergent", "sha-2")
 	list = st.List()
 	require.Len(t, list, 2, "用掉之后应能再产生新 pending")
 	assert.False(t, list[1].Approved)
@@ -165,18 +165,18 @@ func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
 func TestForcePushStore_Revoke(t *testing.T) {
 	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
 
-	st.RequestApproval("t1", "main", "divergent")
+	st.RequestApproval("t1", "main", "divergent", "sha-1")
 	id := st.List()[0].ID
 	found, err := st.Approve(id, "admin")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.True(t, st.IsForcePushApproved("t1", "main"), "放行后应当生效")
+	require.True(t, st.IsForcePushApproved("t1", "main", ""), "放行后应当生效")
 
 	// 撤销
 	found, err = st.Revoke(id, "admin2")
 	require.NoError(t, err)
 	require.True(t, found, "撤销应当找到这条记录")
-	assert.False(t, st.IsForcePushApproved("t1", "main"), "撤销后放行不再生效")
+	assert.False(t, st.IsForcePushApproved("t1", "main", ""), "撤销后放行不再生效")
 
 	// 记录保留(审计线索:批了、又撤了)
 	list := st.List()
@@ -190,4 +190,31 @@ func TestForcePushStore_Revoke(t *testing.T) {
 	found, err = st.Revoke("no-such-id", "admin2")
 	require.NoError(t, err)
 	assert.False(t, found, "撤销不存在的记录应当 found=false")
+}
+
+// TestForcePushStore_ApprovalBoundToTargetState 放行必须绑定到"申请时的目标状态"。
+//
+// 回归背景:审批是"针对这一次分歧"的授权。目标侧若在审批之后又前进
+// (独有提交从 1 个变成 50 个),旧审批不该继续适用 ——
+// 否则一次"批 1 个独有提交"会变成"授权覆盖此后的一切"。
+func TestForcePushStore_ApprovalBoundToTargetState(t *testing.T) {
+	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
+
+	st.RequestApproval("t1", "main", "divergent target has 1 unique commits", "sha-1")
+	id := st.List()[0].ID
+	found, err := st.Approve(id, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// 目标还是申请时那个状态 ⇒ 放行有效
+	assert.True(t, st.IsForcePushApproved("t1", "main", "sha-1"), "目标未变时放行应有效")
+
+	// 目标变了 ⇒ 放行不再适用(必须重新审批)
+	assert.False(t, st.IsForcePushApproved("t1", "main", "sha-2"),
+		"目标侧变了之后,旧放行不该继续适用")
+
+	// 记录里能看到绑定的是哪个 SHA(可审计)
+	list := st.List()
+	require.Len(t, list, 1)
+	assert.Equal(t, "sha-1", list[0].TargetRef, "要记下放行是针对哪个目标状态批的")
 }

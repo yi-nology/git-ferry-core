@@ -93,7 +93,7 @@ func (st *ForcePushStore) PendingCount() int {
 }
 
 // Request 追加一条 pending 审批（HTTP 端点语义：不幂等，调用方校验入参）。
-func (st *ForcePushStore) Request(taskKey, branch, reason string) (ForcePushApproval, error) {
+func (st *ForcePushStore) Request(taskKey, branch, reason, targetRef string) (ForcePushApproval, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	item := ForcePushApproval{
@@ -101,6 +101,7 @@ func (st *ForcePushStore) Request(taskKey, branch, reason string) (ForcePushAppr
 		TaskKey:   taskKey,
 		Branch:    branch,
 		Reason:    reason,
+		TargetRef: targetRef,
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := st.dao.Create(&item); err != nil {
@@ -111,7 +112,7 @@ func (st *ForcePushStore) Request(taskKey, branch, reason string) (ForcePushAppr
 
 // RequestApproval 满足 executor.ForcePushApprover：同 task+branch 已有 pending 则跳过，
 // 写失败 best-effort（不影响同步主流程）。
-func (st *ForcePushStore) RequestApproval(taskKey, branch, reason string) {
+func (st *ForcePushStore) RequestApproval(taskKey, branch, reason, targetRef string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	exists, err := st.dao.PendingExists(taskKey, branch)
@@ -123,6 +124,7 @@ func (st *ForcePushStore) RequestApproval(taskKey, branch, reason string) {
 		TaskKey:   taskKey,
 		Branch:    branch,
 		Reason:    reason,
+		TargetRef: targetRef,
 		CreatedAt: time.Now().UTC(),
 	})
 }
@@ -149,8 +151,8 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 }
 
 // IsForcePushApproved 查询任务+分支是否已放行**且尚未被用掉**（executor 分歧保护回调）。
-func (st *ForcePushStore) IsForcePushApproved(taskKey, branch string) bool {
-	ok, err := st.dao.IsApproved(taskKey, branch)
+func (st *ForcePushStore) IsForcePushApproved(taskKey, branch, targetRef string) bool {
+	ok, err := st.dao.IsApproved(taskKey, branch, targetRef)
 	if err != nil {
 		slog.Error("query force-push approval failed", "error", err)
 		return false

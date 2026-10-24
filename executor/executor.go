@@ -58,9 +58,13 @@ type Executor struct {
 
 // ForcePushApprover 查询某任务/分支的强制推送是否已获放行。
 type ForcePushApprover interface {
-	IsForcePushApproved(taskKey, branch string) bool
+	// IsForcePushApproved 查询放行是否生效。
+	// targetRef 是**当前**目标分支的 HEAD SHA:放行只对它被批准时的目标状态有效
+	// (目标侧此后又变了 ⇒ 旧放行不再适用,必须重新审批)。
+	IsForcePushApproved(taskKey, branch, targetRef string) bool
 	// RequestApproval 产生一条 pending 审批（best-effort，失败不影响主流程）。
-	RequestApproval(taskKey, branch, reason string)
+	// targetRef 记录申请时的目标分支 HEAD SHA,用于上面的绑定判定。
+	RequestApproval(taskKey, branch, reason, targetRef string)
 	// ConsumeForcePushApproval 消费掉一次放行。
 	// 放行是**一次性**的:一次成功的强推之后就要用掉,下次同任务同分支
 	// 再出现分歧必须重新审批(否则一次人工放行变成常驻后门)。
