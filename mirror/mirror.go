@@ -55,6 +55,13 @@ type Options struct {
 	// Auth 是访问镜像远端用的凭据;零值(AuthNone)时 native 后端以
 	// 本机 git 默认凭据(ssh-agent、credential helper)推送。
 	Auth gitbackend.AuthConfig
+	// BackendType git 后端类型(native|gogit);空=自动选择(native 优先)。
+	//
+	// 必须与全系统其余部分**同一个后端**:生产配置是 git.backend=gogit,
+	// 而这里硬编码 Options{} ⇒ 实际走 native —— 同一份配置下不同路径用不同后端,
+	// 行为差异(可rewritable判定、超时、错误类型)就不可比了。
+	BackendType string
+
 	// ScrubRules 痕迹清理规则:发布前把内容里的内网痕迹清掉。
 	//
 	// **为什么镜像发布也需要它**:身份改写只管 **module path**,
@@ -87,6 +94,13 @@ type Options struct {
 	// DryRun 为 true 时执行到远端一致性检查为止(校验、身份改写、门禁、
 	// 远端比对),不合成 commit/tag、不推送;用于发布前预检。
 	DryRun bool
+
+	// backendOverride 直接指定 git 后端,跳过 BackendType 的自动选择。
+	//
+	// **仅供同包测试注入**:竞态场景(并发发布)必须在"推 tag 的那一瞬间"插手,
+	// 而生产路径拿不到那个插手点 —— 不留这个口子,「推 main 前重读远端」
+	// 这条防护就只能靠人肉推理,测不到。
+	backendOverride gitbackend.GitBackend
 }
 
 // TagReport 是单个 tag 的发布报告。
@@ -128,6 +142,12 @@ type TagReport struct {
 	H1WillChange bool
 	// Warning 面向人的提醒(覆盖/盲推这类「用户可能没意识到的后果」)。
 	Warning string
+	// MainUpdated 表示本次是否**真的更新了远端 main 快照**。
+	// false ≠ 失败:可能本次版本不比远端新(不该动 main),也可能远端已有更高版本
+	// (并发发布,动 main 会把默认分支回退 ⇒ 主动不动)。
+	MainUpdated bool
+	// MainSkipped 说明 main 快照为何没动(非空即 MainUpdated=false 的原因)。
+	MainSkipped string
 }
 
 // Report 是整次发布的报告。
@@ -223,9 +243,13 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 	if err != nil {
 		return nil, err
 	}
-	p.backend, err = gitbackend.NewGitBackend(gitbackend.Options{})
-	if err != nil {
-		return nil, fmt.Errorf("初始化 git backend 失败: %w", err)
+	if opts.backendOverride != nil {
+		p.backend = opts.backendOverride
+	} else {
+		p.backend, err = gitbackend.NewGitBackend(gitbackend.Options{Type: opts.BackendType})
+		if err != nil {
+			return nil, fmt.Errorf("初始化 git backend 失败: %w", err)
+		}
 	}
 
 	p.tmpRepo, err = os.MkdirTemp("", "gomirror-repo-*")
@@ -407,7 +431,23 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 		return nil, fmt.Errorf("推送镜像远端 %s 的 tag %s 失败: %w", mirrorURL, tag, err)
 	}
 	if updateMain {
-		if _, err = p.backend.Push(ctx, gitbackend.PushOptions{
+		// **推 main 前必须重读远端状态** —— 上面那次判断是在推 tag **之前**做的,
+		// 隔着一个网络往返。这段时间里别人可能刚发布了更高版本并把 main 指过去,
+		// 我们再强推 main 就是**把默认分支回退到旧版本**
+		// (clone 公开仓 / go get module@main 的人拿到过期代码)。
+		//
+		// 这里重读远端 tag 列表、**排除本次已推的 tag**(否则它自己就是"最高版本",
+		// 判断永远失真),若发现远端已有比本次更新的版本 ⇒ 不动 main。
+		//
+		// 宁可 main 停在旧版本,也不能回退:main 是公开仓的默认分支,
+		// 回退是不可自愈的(已经 clone 走旧代码的人拿不到更新)。
+		if newer := p.remoteHighestVersionExcept(ctx, tag); newer != "" && compareVersions(newer, tag) > 0 {
+			slog.Info("mirror: 远端已有更高版本,本次不动 main 快照(避免默认分支回退)",
+				"tag", tag, "remote_newer", newer)
+			report.Warning = appendWarning(report.Warning,
+				"远端已有更高版本("+newer+"),本次不更新 main 快照(避免默认分支回退)")
+			report.MainSkipped = "远端已有更高版本 " + newer
+		} else if _, err = p.backend.Push(ctx, gitbackend.PushOptions{
 			RepoPath: p.tmpRepo,
 			Remote:   p.remote,
 			RefSpecs: []string{"refs/heads/main:refs/heads/main"},
@@ -419,9 +459,12 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 			slog.Warn("mirror: main 快照推送失败(tag 已发布)", "tag", tag, "error", err)
 			report.Warning = appendWarning(report.Warning,
 				"main 快照推送失败(不影响本次 tag 的发布):"+err.Error())
+		} else {
+			report.MainUpdated = true
 		}
 	} else {
 		slog.Info("mirror: 本次 tag 不比远端已有版本新,main 快照保持不动", "tag", tag)
+		report.MainSkipped = "本次版本不比远端已有版本新"
 	}
 
 	report.VerifyCmd = "go list -m " + p.opts.Mapping.Target + "@" + tag
@@ -438,15 +481,19 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 // 实测先发 v1.0.0 再补发 v0.9.0 ⇒ main 变成 v0.9.0 的快照,
 // 任何 clone 公开仓的人拿到的是过期代码。
 func (p *publisher) shouldUpdateMain(ctx context.Context, tag string) bool {
-	best := p.remoteHighestVersion(ctx)
+	best := p.remoteHighestVersionExcept(ctx, "")
 	if best == "" {
 		return true // 远端还没有任何版本 ⇒ 首次发布
 	}
 	return compareVersions(tag, best) > 0
 }
 
-// remoteHighestVersion 返回远端已有 tag 中的最高版本(空 = 远端还没有版本)。
-func (p *publisher) remoteHighestVersion(ctx context.Context) string {
+// remoteHighestVersionExcept 返回远端已有 tag 中的最高版本
+// (空 = 远端还没有版本)。exclude 非空时**排除该 tag**。
+//
+// 为什么要"排除":推 main 前重读远端时,本次的 tag 已经推上去了,
+// 它自己就是最高版本 ⇒ 不排除的话判断永远是"远端不比我新",回退防护失效。
+func (p *publisher) remoteHighestVersionExcept(ctx context.Context, exclude string) string {
 	rem, err := p.workRepo.Remote(p.remote)
 	if err != nil {
 		return ""
@@ -459,6 +506,9 @@ func (p *publisher) remoteHighestVersion(ctx context.Context) string {
 	for _, ref := range refs {
 		name := ref.Name().Short()
 		if !strings.HasPrefix(name, "v") {
+			continue
+		}
+		if exclude != "" && name == exclude {
 			continue
 		}
 		if best == "" || compareVersions(name, best) > 0 {

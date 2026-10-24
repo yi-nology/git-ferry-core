@@ -37,6 +37,12 @@ type RestoreRequest struct {
 type RestoreKindStat struct {
 	Planned int `json:"planned"`
 	Created int `json:"created"`
+	// Updated 是"覆盖更新"的条目数，**与 Created 分开记**。
+	//
+	// 原来 overwrite 走的是 UpdateLabel，却把计数记成 created ⇒
+	// 报告说"新建了 N 条"，实际是"改写了 N 条已存在的东西" ——
+	// 报告与事实相反，比失败本身更危险（运维以为在补建，其实在覆盖）。
+	Updated int `json:"updated"`
 	Skipped int `json:"skipped"`
 	Failed  int `json:"failed"`
 }
@@ -45,8 +51,11 @@ type RestoreKindStat struct {
 type RestoreItem struct {
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
-	Action string `json:"action"` // created | skipped | failed（dry-run 下 created 表示"将会创建"）
+	Action string `json:"action"` // created | updated | skipped | failed（dry-run 下 created/updated 表示"将会创建/将会覆盖"）
 	Error  string `json:"error,omitempty"`
+	// Note 补充说明这次到底改了什么（如"颜色 f00→0f0"）。
+	// 覆盖是破坏性动作，不说清楚就没法审。
+	Note string `json:"note,omitempty"`
 }
 
 // RestoreResult 回灌结果。SnapshotDir/Target/Stats/Warnings/DryRun/StartedAt/
@@ -69,7 +78,12 @@ type RestoreResult struct {
 
 // addDetail 登记逐条明细。
 func (r *RestoreResult) addDetail(kind, name, action string, err error) {
-	item := RestoreItem{Kind: kind, Name: name, Action: action}
+	r.addDetailNote(kind, name, action, "", err)
+}
+
+// addDetailNote 登记逐条明细（带补充说明）。
+func (r *RestoreResult) addDetailNote(kind, name, action, note string, err error) {
+	item := RestoreItem{Kind: kind, Name: name, Action: action, Note: note}
 	if err != nil {
 		item.Error = err.Error()
 	}
@@ -164,7 +178,7 @@ func (s *Service) runRestore(ctx context.Context, req RestoreRequest, snapDir st
 		if st == nil {
 			continue
 		}
-		result.Applied += st.Created
+		result.Applied += st.Created + st.Updated
 		result.Skipped += st.Skipped
 		result.Failed += st.Failed
 	}
@@ -184,6 +198,19 @@ type restoreTarget struct {
 	prov      sdkprov.Provider
 	overwrite bool
 	dryRun    bool
+}
+
+// warnOverwriteUnsupported 在"要求覆盖但该 kind 不支持覆盖"时告警。
+//
+// overwrite 目前只对 labels 生效(milestones / issues / releases 命中同名一律跳过)。
+// **静默跳过 = 调用方以为覆盖了、实际没覆盖** —— 从调用方视角看就是数据丢失,
+// 而 stats 里只体现为 skipped,没有任何提示。
+func (t *restoreTarget) warnOverwriteUnsupported(result *RestoreResult, kind, name string) {
+	if !t.overwrite {
+		return
+	}
+	result.Warnings = append(result.Warnings,
+		"overwrite 不支持该类型("+kind+"),同名条目已跳过(未覆盖):"+name)
 }
 
 func resolveTargetPlatform(ctx context.Context, s *Service, repo *model.Repo, key string) *model.Platform {
@@ -287,12 +314,15 @@ func restoreLabels(ctx context.Context, t restoreTarget, dir string, stat *Resto
 		result.Warnings = append(result.Warnings, "target does not support LabelManager")
 		return
 	}
-	existing := map[string]bool{}
+	// 记录目标侧 label 的**当前颜色**:覆盖与否必须拿它比对着色,
+	// 只记名字的话既判断不了"要不要写",也说不清"改了什么"。
+	existing := map[string]string{}
 	if cur, err := lm.ListLabels(ctx, t.owner, t.repo, sdkprov.ListLabelsOptions{PerPage: 100}); err == nil {
 		for _, l := range cur {
-			existing[l.Name] = true
+			existing[l.Name] = l.Color
 		}
 	}
+	var colorChanges []string
 	for _, lb := range labels {
 		stat.Planned++
 		if lb == nil || lb.Name == "" {
@@ -300,15 +330,26 @@ func restoreLabels(ctx context.Context, t restoreTarget, dir string, stat *Resto
 			result.addDetail("labels", "", "skipped", nil)
 			continue
 		}
-		if existing[lb.Name] {
+		cur, exists := existing[lb.Name]
+		if exists {
 			if !t.overwrite {
 				stat.Skipped++
 				result.addDetail("labels", lb.Name, "skipped", nil)
 				continue
 			}
+			// **颜色一致就不写**:
+			// 一次无意义的 UpdateLabel 会改动 label 的 updated_at,
+			// 白白触发下游 webhook(label 事件),还让"这次改了 N 个"变成假账。
+			if sameColor(cur, lb.Color) {
+				stat.Skipped++
+				result.addDetailNote("labels", lb.Name, "skipped", "颜色一致,无需覆盖", nil)
+				continue
+			}
+			note := "颜色 " + cur + "→" + lb.Color
 			if t.dryRun {
-				stat.Created++
-				result.addDetail("labels", lb.Name, "created", nil)
+				stat.Updated++
+				result.addDetailNote("labels", lb.Name, "updated", "将覆盖:"+note, nil)
+				colorChanges = append(colorChanges, lb.Name+"("+cur+"→"+lb.Color+")")
 				continue
 			}
 			if _, err := lm.UpdateLabel(ctx, t.owner, t.repo, lb.Name, sdkprov.UpdateLabelOptions{
@@ -319,8 +360,9 @@ func restoreLabels(ctx context.Context, t restoreTarget, dir string, stat *Resto
 				result.Warnings = append(result.Warnings, "update label "+lb.Name+": "+err.Error())
 				continue
 			}
-			stat.Created++
-			result.addDetail("labels", lb.Name, "created", nil)
+			stat.Updated++
+			result.addDetailNote("labels", lb.Name, "updated", note, nil)
+			colorChanges = append(colorChanges, lb.Name+"("+cur+"→"+lb.Color+")")
 			continue
 		}
 		if t.dryRun {
@@ -340,6 +382,23 @@ func restoreLabels(ctx context.Context, t restoreTarget, dir string, stat *Resto
 		stat.Created++
 		result.addDetail("labels", lb.Name, "created", nil)
 	}
+	// **覆盖必须留痕**:目标侧的颜色可能是人手工改过的,
+	// overwrite 会把它改回快照值 —— 这是破坏性动作,不能悄悄发生。
+	if len(colorChanges) > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"overwrite 覆盖了 %d 个 label 的颜色:%s",
+			len(colorChanges), strutil.Truncate(strings.Join(colorChanges, ", "), 500)))
+	}
+}
+
+// sameColor 判断两个颜色是否等价。
+//
+// 各平台的颜色写法不一样(GitHub 用 "f00f00"、GitLab 用 "#f00f00"),
+// 只差一个 "#" 或大小写的差异**不该触发一次写入**:
+// 写了要么无意义,要么把目标平台不认的格式塞进去。
+func sameColor(a, b string) bool {
+	return strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(a), "#"),
+		strings.TrimPrefix(strings.TrimSpace(b), "#"))
 }
 
 func restoreMilestones(ctx context.Context, t restoreTarget, dir string, stat *RestoreKindStat, result *RestoreResult) {
@@ -369,6 +428,7 @@ func restoreMilestones(ctx context.Context, t restoreTarget, dir string, stat *R
 		if existing[m.Title] {
 			stat.Skipped++
 			result.addDetail("milestones", m.Title, "skipped", nil)
+			t.warnOverwriteUnsupported(result, "milestones", m.Title)
 			continue
 		}
 		if t.dryRun {
@@ -424,6 +484,7 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 			if existingTitles[pr.Title] {
 				stat.Skipped++
 				result.addDetail(kind, pr.Title, "skipped", nil)
+				t.warnOverwriteUnsupported(result, kind, pr.Title)
 				continue
 			}
 			body := prBody(pr)
@@ -445,6 +506,13 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 			result.addDetail(kind, pr.Title, "created", nil)
 			existingTitles[pr.Title] = true
 			_ = created
+			// **PR 的状态要跟着回灌**:已合并/已关闭的 PR 回灌成"开着的 issue",
+			// 看着像一条待处理的请求(issues 分支本来就处理了 closed 状态)。
+			if pr.State == sdkprov.CRStateMerged || pr.State == sdkprov.CRStateClosed {
+				if _, cerr := im.CloseIssue(ctx, t.owner, t.repo, created.Number); cerr != nil {
+					result.Warnings = append(result.Warnings, "close pr-as-issue "+pr.Title+": "+cerr.Error())
+				}
+			}
 		}
 		return
 	}
@@ -464,6 +532,7 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 		if existingTitles[iss.Title] {
 			stat.Skipped++
 			result.addDetail(kind, iss.Title, "skipped", nil)
+			t.warnOverwriteUnsupported(result, kind, iss.Title)
 			continue
 		}
 		body := issueBody(iss)
@@ -550,6 +619,7 @@ func restoreReleases(ctx context.Context, t restoreTarget, dir string, stat *Res
 		if existing[rel.TagName] {
 			stat.Skipped++
 			result.addDetail("releases", rel.TagName, "skipped", nil)
+			t.warnOverwriteUnsupported(result, "releases", rel.TagName)
 			continue
 		}
 		if t.dryRun {

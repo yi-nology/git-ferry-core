@@ -1062,10 +1062,12 @@ func (h *HistoryService) pushRun(ctx context.Context, run *model.HistoryRun, for
 	for _, t := range targets {
 		res, err := history.Push(ctx, history.PushOptions{
 			RepoPath: run.WorkRepoPath,
-			Targets:  []history.PushTarget{{Name: t.Name, URL: t.RepoURL}},
-			Branch:   branch,
-			Auth:     auths[t.Name],
-			Force:    true, // 分叉检查已在上面做过;通过后强推是安全的(幂等)。
+			// 与全系统其余部分同一个后端(生产配置 git.backend=gogit)
+			BackendType: h.svc.backendType(),
+			Targets:     []history.PushTarget{{Name: t.Name, URL: t.RepoURL}},
+			Branch:      branch,
+			Auth:        auths[t.Name],
+			Force:       true, // 分叉检查已在上面做过;通过后强推是安全的(幂等)。
 		})
 		if err != nil {
 			_, _ = h.finishRun(pushRun, model.HistoryRunFailed, err.Error())

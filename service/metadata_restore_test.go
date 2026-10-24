@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -284,9 +285,95 @@ func TestRunRestore_CreateSkipFail(t *testing.T) {
 	prov2 := &fakeEngineProv{existLabels: []*sdkprov.Label{{Name: "bug"}}}
 	res2 := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", Overwrite: true, Kinds: []string{"labels"}},
 		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov2)
-	assert.Equal(t, RestoreKindStat{Planned: 2, Created: 2}, *res2.Stats["labels"])
+	// 「更新」必须与「新建」分开记:原来把 update 记成 created ⇒ 报告说"新建了 2 条",
+	// 实际是"新建 1 条 + 覆盖 1 条" —— 报告与事实相反。
+	assert.Equal(t, RestoreKindStat{Planned: 2, Created: 1, Updated: 1}, *res2.Stats["labels"])
 	assert.Equal(t, []string{"bug"}, prov2.updatedLabels, "overwrite=true 时同名 label 走 UpdateLabel")
 	assert.Equal(t, []string{"feat"}, prov2.createdLabels)
+}
+
+// TestRunRestore_OverwriteLabelColorHonest overwrite 覆盖 label 颜色必须**如实且可见**。
+//
+// 回归背景(P1-6):
+//   - 覆盖走的是 UpdateLabel,却把计数记成 created ⇒ 报告与事实相反;
+//   - 颜色**一致**时也照写一次 ⇒ 无意义写入(还会改动 label 的 updated_at、
+//     白白触发下游 label 事件);
+//   - 覆盖了目标侧的颜色(可能是人工改过的)却**一声不吭**。
+func TestRunRestore_OverwriteLabelColorHonest(t *testing.T) {
+	backupRoot := t.TempDir()
+	svc := newRestoreTestService(backupRoot)
+	snapDir := t.TempDir()
+	writeRestoreFixture(t, snapDir)
+	snap, err := loadMetadataSnapshot(snapDir)
+	require.NoError(t, err)
+
+	// 目标侧:bug 颜色与快照一致(f00);feat 颜色被人工改成 00f
+	prov := &fakeEngineProv{existLabels: []*sdkprov.Label{
+		{Name: "bug", Color: "f00"},
+		{Name: "feat", Color: "00f"},
+	}}
+	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", Overwrite: true, Kinds: []string{"labels"}},
+		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
+
+	// ① 计数如实:1 覆盖 + 1 跳过,没有"新建"
+	st := res.Stats["labels"]
+	require.NotNil(t, st)
+	assert.Equal(t, 0, st.Created, "没有新建 label")
+	assert.Equal(t, 1, st.Updated, "1 个 label 被覆盖更新")
+	assert.Equal(t, 1, st.Skipped, "颜色一致的 label 应跳过")
+
+	// ② 颜色一致 ⇒ 不写
+	assert.Equal(t, []string{"feat"}, prov.updatedLabels, "只应覆盖颜色确实变了的 label")
+
+	// ③ 覆盖内容留痕:明细说清动作与变化,warning 汇总点名
+	byName := map[string]RestoreItem{}
+	for _, d := range res.Details {
+		byName[d.Name] = d
+	}
+	feat, ok := byName["feat"]
+	require.True(t, ok)
+	assert.Equal(t, "updated", feat.Action, "覆盖必须记成 updated,不能记成 created")
+	assert.Contains(t, feat.Note, "00f→0f0", "明细要说清颜色从什么改成什么")
+	bug, ok := byName["bug"]
+	require.True(t, ok)
+	assert.Equal(t, "skipped", bug.Action)
+	assert.Contains(t, bug.Note, "颜色一致")
+
+	warns := strings.Join(res.Warnings, "|")
+	assert.Contains(t, warns, "overwrite 覆盖了 1 个 label 的颜色", "覆盖必须留痕")
+	assert.Contains(t, warns, "feat(00f→0f0)", "warning 要点名改了哪个、怎么改的")
+}
+
+// TestRunRestore_OverwriteLabelColorDryRunVisible dry_run 必须**提前**把
+// "会覆盖哪个 label 的颜色"说清楚 —— 运维要在动手前看到破坏面。
+func TestRunRestore_OverwriteLabelColorDryRunVisible(t *testing.T) {
+	backupRoot := t.TempDir()
+	svc := newRestoreTestService(backupRoot)
+	snapDir := t.TempDir()
+	writeRestoreFixture(t, snapDir)
+	snap, err := loadMetadataSnapshot(snapDir)
+	require.NoError(t, err)
+
+	prov := &fakeEngineProv{existLabels: []*sdkprov.Label{{Name: "feat", Color: "00f"}}}
+	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", Overwrite: true, DryRun: true, Kinds: []string{"labels"}},
+		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
+
+	assert.Empty(t, prov.updatedLabels, "dry_run 不得真的写")
+	st := res.Stats["labels"]
+	require.NotNil(t, st)
+	assert.Equal(t, 1, st.Updated, "dry_run 也要把覆盖数出来")
+	assert.Equal(t, 1, st.Created, "目标侧缺失的 bug 属于新建")
+
+	var note string
+	for _, d := range res.Details {
+		if d.Name == "feat" {
+			note = d.Note
+			assert.Equal(t, "updated", d.Action)
+		}
+	}
+	assert.Contains(t, note, "将覆盖", "dry_run 的明细要写明这是覆盖")
+	assert.Contains(t, note, "00f→0f0")
+	assert.Contains(t, strings.Join(res.Warnings, "|"), "overwrite 覆盖了 1 个 label 的颜色")
 }
 
 func TestRunRestore_MissingPartWarning(t *testing.T) {
@@ -302,4 +389,86 @@ func TestRunRestore_MissingPartWarning(t *testing.T) {
 		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", &fakeEngineProv{})
 	require.Len(t, res.Warnings, 1)
 	assert.True(t, strings.HasPrefix(res.Warnings[0], "labels.json: "), "got %q", res.Warnings[0])
+}
+
+// numberingProv 在 fakeEngineProv 之上记录「标题 → 服务端分配的编号」。
+//
+// 关闭 PR 回灌出来的 issue 时,调用方拿到的是 **CreateIssue 的返回值**里的编号,
+// 而 CreateIssueOptions 只是请求参数、本身没有编号字段 ⇒ 必须在 provider 侧留痕。
+type numberingProv struct {
+	*fakeEngineProv
+	numbers map[string]string
+}
+
+func (p *numberingProv) CreateIssue(ctx context.Context, opts sdkprov.CreateIssueOptions) (*sdkprov.Issue, error) {
+	iss, err := p.fakeEngineProv.CreateIssue(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if p.numbers == nil {
+		p.numbers = map[string]string{}
+	}
+	p.numbers[opts.Title] = iss.Number
+	return iss, nil
+}
+
+// TestRunRestore_PRStatePreserved 已合并/已关闭的 PR 回灌后对应 issue 必须是**关掉**的。
+//
+// 回归背景:PR 分支只调 CreateIssue、**从不看 state** ⇒ 早已合并的 PR 回灌成
+// 一个"开着的 issue",看着像一条待处理的请求。
+// (issues 分支本来就处理了 closed 状态。)
+func TestRunRestore_PRStatePreserved(t *testing.T) {
+	backupRoot := t.TempDir()
+	svc := newRestoreTestService(backupRoot)
+	snapDir := t.TempDir()
+	writeRestoreFixture(t, snapDir)
+	// 把 PR 改成已合并
+	prJSON := `[{"number":"7","title":"p1","state":"merged","source_branch":"feat","target_branch":"main","description":"desc"}]`
+	require.NoError(t, os.WriteFile(filepath.Join(snapDir, "pull_requests.json"), []byte(prJSON), 0o600))
+	snap, err := loadMetadataSnapshot(snapDir)
+	require.NoError(t, err)
+
+	prov := &numberingProv{fakeEngineProv: &fakeEngineProv{}}
+	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", DryRun: false},
+		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
+
+	// 3 个 issue + 1 个 PR-as-issue
+	require.Len(t, prov.createdIssues, 4)
+	prNumber := prov.numbers["p1"]
+	require.NotEmpty(t, prNumber, "PR 应回灌成一个 issue")
+	// 夹具里本来就有一个 closed issue(i2)⇒ 关闭列表里应有 2 个,
+	// 其一必须是 PR 回灌出来的那个。
+	require.GreaterOrEqual(t, len(prov.closedIssues), 2)
+	assert.Contains(t, prov.closedIssues, prNumber,
+		"已合并的 PR 回灌出的 issue 必须被关掉(实际关闭: %v)", prov.closedIssues)
+	assert.Zero(t, res.Failed)
+}
+
+// TestRunRestore_OverwriteUnsupportedWarns overwrite 对不支持覆盖的类型
+// 必须**告警**,不能静默跳过。
+//
+// 回归背景:overwrite 只对 labels 生效,milestones/issues/releases 命中同名一律跳过
+// 且零告警 ⇒ 调用方以为覆盖了、实际没覆盖(从调用方视角就是数据丢失)。
+func TestRunRestore_OverwriteUnsupportedWarns(t *testing.T) {
+	backupRoot := t.TempDir()
+	svc := newRestoreTestService(backupRoot)
+	snapDir := t.TempDir()
+	writeRestoreFixture(t, snapDir)
+	snap, err := loadMetadataSnapshot(snapDir)
+	require.NoError(t, err)
+
+	// 目标侧已有一个同名 milestone
+	prov := &fakeEngineProv{
+		milestones: []sdkprov.Milestone{{Number: "1", Title: "v1", State: "open"}},
+	}
+	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", DryRun: false, Overwrite: true},
+		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
+
+	require.NotEmpty(t, res.Warnings, "overwrite 不支持该类型时必须告警")
+	joined := ""
+	for _, w := range res.Warnings {
+		joined += w + "\n"
+	}
+	assert.Contains(t, joined, "overwrite", "告警要说清是 overwrite 不支持该类型")
+	assert.Contains(t, joined, "milestones", "告警要点名具体类型")
 }

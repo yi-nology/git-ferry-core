@@ -41,6 +41,12 @@ type MirrorService struct {
 	// 用 oekit concurrency/syncx.KeyedGate(cap=1 → 每个 key 一把锁)。
 	locks     *syncx.KeyedGate
 	locksOnce sync.Once
+	// reservations 是"通道执行权"的进程内占位表（try-acquire 语义）。
+	//
+	// 与 locks 分工：locks 是**排队**闸门（保护工作目录不被交错读写），
+	// reservations 是**即拒**占位（同一通道同时只允许一次执行）。
+	// key = channelID，值 = struct{}。
+	reservations sync.Map
 	// locker 配 redis 时提供跨实例互斥：抢不到 = 另一实例正在执行同一通道，
 	// 直接返回忙碌错误而不是两边同时克隆（TTL 见 mirrorLockTTL，覆盖整次操作）。
 	locker  *distlock.RedisLocker
@@ -94,47 +100,83 @@ func (m *MirrorService) channelGate() *syncx.KeyedGate {
 	return m.locks
 }
 
+// lockChannelLocal 取进程内通道闸门(阻塞)。
+//
+// 闸门(cap=1)覆盖"源仓库工作目录"的独占:ensureRepo 的增量 fetch 会
+// `git reset --hard` 改工作区 ⇒ 克隆/fetch 与发布**不能交错**。
+//
+// 用 oekit concurrency/syncx.KeyedGate(cap=1 → 每个 key 一把锁):
+// 不必自维护 sync.Map + 类型断言,且 Acquire 感知 ctx 取消。
+func (m *MirrorService) lockChannelLocal(ctx context.Context, chID uint) (func(), error) {
+	return m.channelGate().Acquire(ctx, fmt.Sprintf("repo-%d", chID))
+}
+
+// tryLockRemote 抢跨实例通道锁(配 redis 时)。
+//
+// 返回 (release, acquired, err):
+//   - acquired=true  :拿到锁,调用方**必须**在结束时 release;
+//   - acquired=false :被别的实例占用 ⇒ 忙碌(不排队);
+//   - redis 抖动     :降级为"仅进程内互斥",不阻断镜像任务(同 lockChannel 原语义)。
+func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release func(), acquired bool, err error) {
+	if m.locker == nil {
+		return func() {}, true, nil
+	}
+	key := fmt.Sprintf("mirror-channel-%d", chID)
+	id, lerr := m.locker.TryLock(ctx, key, m.lockTTL)
+	switch {
+	case lerr == nil:
+		return func() {
+			// 解锁不能挂在请求 ctx 上:请求早已取消 ⇒ 解锁必失败 ⇒ 锁要等 TTL。
+			if uerr := m.locker.Unlock(context.WithoutCancel(ctx), key, id); uerr != nil {
+				// 已过期易主或 redis 抖动：仅告警，TTL 会兜底
+				slog.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
+			}
+		}, true, nil
+	case errors.Is(lerr, distlock.ErrLockNotAcquired):
+		return func() {}, false, fmt.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
+	default:
+		// redis 抖动：降级为进程内互斥，不阻断镜像任务
+		slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
+		return func() {}, true, nil
+	}
+}
+
 // lockChannel 获取通道级互斥：先取进程内互斥（阻塞，保持既有串行语义），
 // 再抢跨实例锁（配 redis 时；被其它实例占用 → 忙碌错误，不排队等待）。
 // 返回幂等 release；通道被另一实例占用时返回忙碌错误。
 func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release func(), err error) {
-	// 进程内互斥用 oekit concurrency/syncx.KeyedGate(cap=1 → 每个 key 一把锁):
-	// 不必自维护 sync.Map + 类型断言,且 Acquire 感知 ctx 取消。
-	releaseLocal, err := m.channelGate().Acquire(ctx, fmt.Sprintf("repo-%d", chID))
+	releaseLocal, err := m.lockChannelLocal(ctx, chID)
 	if err != nil {
 		return nil, err
 	}
-
-	key := fmt.Sprintf("mirror-channel-%d", chID)
-	// ownerID 为空表示未持有跨实例锁（未配 redis 或降级路径），release 时跳过远端解锁。
-	var ownerID string
+	releaseRemote, acquired, rerr := m.tryLockRemote(ctx, chID)
+	if !acquired {
+		releaseLocal()
+		return func() {}, rerr
+	}
 	var once sync.Once
-	unlock := func() {
+	return func() {
 		once.Do(func() {
 			releaseLocal()
-			if m.locker != nil && ownerID != "" {
-				if uerr := m.locker.Unlock(ctx, key, ownerID); uerr != nil {
-					// 已过期易主或 redis 抖动：仅告警，TTL 会兜底
-					slog.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
-				}
-			}
+			releaseRemote()
 		})
-	}
+	}, nil
+}
 
-	if m.locker != nil {
-		id, lerr := m.locker.TryLock(ctx, key, m.lockTTL)
-		switch {
-		case lerr == nil:
-			ownerID = id
-		case errors.Is(lerr, distlock.ErrLockNotAcquired):
-			releaseLocal()
-			return func() {}, fmt.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
-		default:
-			// redis 抖动：降级为进程内互斥，不阻断镜像任务
-			slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
-		}
+// reserveChannel 同步占位"通道执行权"(进程内,try-acquire 语义)。
+//
+// 为什么不用 KeyedGate:它是**排队**语义 —— HTTP 请求会一直阻塞到上一轮
+// 发布结束(可能几分钟)⇒ 接口假死。这里要的是"满额即拒":占不上立刻回忙碌错误。
+//
+// 为什么必须有它:`HasRunningByChannel` 是 **check-then-act** ——
+// 两个并发请求可以同时查到"没有在跑的 run",然后各建一条 run 各跑一遍。
+// 占位必须**同步**发生在创建 run 记录之前,窗口才为零。
+func (m *MirrorService) reserveChannel(chID uint) (release func(), ok bool) {
+	if _, loaded := m.reservations.LoadOrStore(chID, struct{}{}); loaded {
+		return nil, false
 	}
-	return unlock, nil
+	var once sync.Once
+	return func() { once.Do(func() { m.reservations.Delete(chID) }) }, true
 }
 
 // ---------- 请求/响应结构 ----------
@@ -432,13 +474,21 @@ func (m *MirrorService) TestMirrorTarget(ctx context.Context, targetID uint) err
 
 // ensureRepo 返回源仓库的本地工作克隆(无则克隆,有则增量 fetch 全部 tag)。
 // cleanup 在失败时清理目录;成功时保留供后续增量操作。
+//
+// 本函数**自己加锁**（进程内闸门 + 跨实例锁）。
+// 已经持锁的调用方（如整段持锁的发布 run）必须改用 ensureRepoLocked ——
+// KeyedGate 不是可重入的,嵌套 Acquire 会死锁。
 func (m *MirrorService) ensureRepo(ctx context.Context, ch *model.MirrorChannel) (dir string, cleanup func(), err error) {
 	unlock, lerr := m.lockChannel(ctx, ch.ID)
 	if lerr != nil {
 		return "", func() {}, lerr
 	}
 	defer unlock()
+	return m.ensureRepoLocked(ctx, ch)
+}
 
+// ensureRepoLocked 是 ensureRepo 的**无锁**版本:调用方必须已持有通道锁。
+func (m *MirrorService) ensureRepoLocked(ctx context.Context, ch *model.MirrorChannel) (dir string, cleanup func(), err error) {
 	cleanup = func() {}
 	repo, err := m.svc.GetRepoByKey(ch.RepoKey)
 	if err != nil || repo == nil {
@@ -628,7 +678,18 @@ func (m *MirrorService) PreviewMirrorRun(ctx context.Context, channelID, targetI
 	if ch.Mode != model.MirrorModePublish {
 		return nil, errors.New("预检仅支持 publish 模式")
 	}
-	rep, err := m.publishOne(ctx, ch, t, tag, false, true)
+	// 预检整段持通道闸门:与发布同一把 ⇒ 预检不会读到"发布改到一半"的工作区。
+	unlock, lerr := m.lockChannelLocal(ctx, channelID)
+	if lerr != nil {
+		return nil, lerr
+	}
+	defer unlock()
+	dir, cleanup, err := m.ensureRepoLocked(ctx, ch)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	rep, err := m.publishOne(ctx, ch, t, dir, tag, false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -664,11 +725,37 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 	if len(in.Tags) == 0 {
 		return nil, errors.New("Tags 至少需要一个")
 	}
+	// --- 同通道执行权:**同步占位** ---
+	//
+	// 原来的保护只有 `HasRunningByChannel`(查 DB 有没有在跑的 run),那是
+	// **check-then-act**:两个并发请求可以同时查到"没有",然后各建一条 run
+	// 各跑一遍 —— 克隆目录竞争 + 推 main 互相回退。
+	// 占位必须发生在**创建 run 记录之前**,竞争窗口才为零。
+	releaseReserve, reserved := m.reserveChannel(channelID)
+	if !reserved {
+		return nil, errors.New("该通道有执行中的任务,请稍后再试")
+	}
+	// 跨实例:配 redis 时抢分布式锁,被别的实例占用即忙碌(不排队)。
+	releaseRemote, acquired, lerr := m.tryLockRemote(ctx, channelID)
+	if !acquired {
+		releaseReserve()
+		if lerr != nil {
+			return nil, lerr
+		}
+		return nil, errors.New("该通道正在其它实例执行,请稍后再试")
+	}
+
+	// DB 里的"有在跑的 run"仍然查一遍:覆盖**进程重启后遗留的僵尸 run**
+	// 与多实例部署里本进程看不到的那部分(占位只在进程内有效)。
 	running, err := m.runs.HasRunningByChannel(channelID)
 	if err != nil {
+		releaseRemote()
+		releaseReserve()
 		return nil, err
 	}
 	if running {
+		releaseRemote()
+		releaseReserve()
 		return nil, errors.New("该通道有执行中的任务,请稍后再试")
 	}
 
@@ -684,6 +771,8 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 		Steps:          "[]",
 	}
 	if err := m.runs.Create(run); err != nil {
+		releaseRemote()
+		releaseReserve()
 		return nil, errors.Wrap(err, "create mirror run failed")
 	}
 
@@ -693,6 +782,9 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 	async.GoSafe(func() {
 		defer m.svc.wg.Done()
 		defer cancel()
+		// 执行权在**整段 run 结束**后才释放 —— 不是"创建完 run 记录"就释放。
+		defer releaseRemote()
+		defer releaseReserve()
 		m.execute(runCtx, run.ID, ch, t, in)
 	})
 	return run, nil
@@ -705,6 +797,21 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 			m.failRun(runID, fmt.Sprintf("内部错误: %v", r))
 		}
 	}()
+
+	// 整段 run 持通道闸门(进程内串行)。
+	//
+	// 必须覆盖到**推送结束**:ensureRepo 的增量 fetch 会 `git reset --hard`
+	// 改工作区,而发布正是从工作区取材 ⇒ fetch 与发布交错会把发布内容改花。
+	//
+	// 注意这里只取**本地闸门**:跨实例锁已在 ExecuteMirrorRun 持有,
+	// 再抢一次会因"自己已持有"而被判为占用 ⇒ 反而死锁。
+	unlock, lerr := m.lockChannelLocal(ctx, ch.ID)
+	if lerr != nil {
+		slog.Error("mirror run 等待通道闸门失败", "run", runID, "channel", ch.ID, "error", lerr)
+		m.failRun(runID, fmt.Sprintf("等待通道锁失败: %v", lerr))
+		return
+	}
+	defer unlock()
 
 	run, err := m.runs.FindByID(runID)
 	if err != nil {
@@ -741,8 +848,10 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 }
 
 // executePublish 逐 tag 调用 core Publish,行级结果互不阻塞。
+//
+// 调用方(execute)已持有通道闸门 ⇒ 这里用 ensureRepoLocked(不再嵌套加锁)。
 func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun, ch *model.MirrorChannel, t *model.MirrorTarget, in ExecuteMirrorRunInput) error {
-	dir, cleanup, err := m.ensureRepo(ctx, ch)
+	dir, cleanup, err := m.ensureRepoLocked(ctx, ch)
 	if err != nil {
 		return err
 	}
@@ -768,7 +877,7 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 		run.Steps = marshalSteps(steps)
 		_ = m.runs.Update(run)
 
-		rep, tagErr := m.publishOne(ctx, ch, t, tag, in.AllowOverwrite, false)
+		rep, tagErr := m.publishOne(ctx, ch, t, dir, tag, in.AllowOverwrite, false)
 		idx := len(steps) - 1
 		if tagErr != nil {
 			if isDivergentError(tagErr) {
@@ -803,12 +912,11 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 }
 
 // publishOne 组装 core Options 执行单个 tag。
-func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel, t *model.MirrorTarget, tag string, allowOverwrite, dryRun bool) (*mirror.TagReport, error) {
-	dir, cleanup, err := m.ensureRepo(ctx, ch)
-	if err != nil {
-		return nil, err
-	}
-	_ = cleanup
+//
+// dir 是**已准备好**的源仓库工作目录(调用方负责 prepare 与加锁):
+// 之前这里自己调 ensureRepo ⇒ 每个 tag 都会重新 fetch 一次(同一轮 run 里 N+1 次),
+// 而且会和调用方持有的通道闸门嵌套(死锁)。
+func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel, t *model.MirrorTarget, dir, tag string, allowOverwrite, dryRun bool) (*mirror.TagReport, error) {
 	// 预检/发布都要先把目标仓库接为本地克隆的远端
 	if err := m.ensureTargetRemote(ctx, dir, t, gitbackend.AuthConfig{Type: gitbackend.AuthNone}); err != nil {
 		return nil, fmt.Errorf("配置目标远端失败: %w", err)
@@ -826,7 +934,9 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 		return nil, err
 	}
 	rep2, err := mirror.Publish(ctx, mirror.Options{
-		RepoDir:        dir,
+		RepoDir: dir,
+		// 与全系统其余部分同一个后端(生产配置 git.backend=gogit)
+		BackendType:    m.svc.backendType(),
 		Mapping:        mirror.Mapping{Source: ch.Module, Target: t.TargetModule},
 		Tags:           []string{tag},
 		Remote:         t.Remote,

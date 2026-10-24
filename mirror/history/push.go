@@ -32,6 +32,11 @@ type PushOptions struct {
 	Branch string
 	// Auth 认证配置。
 	Auth gitbackend.AuthConfig
+	// BackendType git 后端类型(native|gogit);空=自动选择。
+	//
+	// 与全系统其余部分保持同一个后端(生产配置是 gogit)——
+	// 这里硬编码 Options{} 会让"同一份配置、两套后端"。
+	BackendType string
 	// Force 强推。
 	//
 	// 历史同步是幂等的:同一输入两次移植产生同一批提交(hash 相同),
@@ -76,7 +81,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 		return nil, fmt.Errorf("读取分支 %s 失败: %w", branch, err)
 	}
 
-	backend, err := gitbackend.NewGitBackend(gitbackend.Options{})
+	backend, err := gitbackend.NewGitBackend(gitbackend.Options{Type: opts.BackendType})
 	if err != nil {
 		return nil, fmt.Errorf("初始化 git backend 失败: %w", err)
 	}

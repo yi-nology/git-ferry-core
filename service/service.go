@@ -233,6 +233,18 @@ func (s *Service) doStop() {
 	}
 }
 
+// backendType 返回配置的 git 后端类型(native|gogit);空=自动选择(native 优先)。
+//
+// 镜像发布 / 历史推送这两条路径此前硬编码 Options{} ⇒ 实际走 native,
+// 与全系统其余部分(按 cfg.Git.Backend 建)不是同一个后端 ——
+// 同一份配置下两套后端,行为差异(可改写判定、超时、错误类型)就不可比了。
+func (s *Service) backendType() string {
+	if s == nil || s.config == nil {
+		return ""
+	}
+	return s.config.Git.Backend
+}
+
 func (s *Service) GetTempDir(taskKey string) string {
 	return filepath.Join(s.config.Git.TempDir, taskKey)
 }
