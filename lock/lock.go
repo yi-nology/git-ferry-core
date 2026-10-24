@@ -70,9 +70,28 @@ func NewRedisClient(addr, password string, db int, opts ...Option) *redis.Client
 	return redis.NewClient(o)
 }
 
+// ⚠️ **WithMaxAutoRenew 的「最大生命周期安全网」现已可用**:
+// 上游在 redisx v0.10.3 修了「计时器 Stop 绑在 startAutoRenew 函数级 defer ⇒
+// 派发完 goroutine 就当场 Stop ⇒ 安全网分支是死代码」的缺陷
+// (上游 issue: oekit/redisx#39)。本仓已钉 redisx v0.10.3,该安全网真实生效。
+//
+// 本仓的两个用法仍然不受它影响:
+//   - 通道锁:要的就是「一直续期到 Unlock」(TTL 30 分钟只是兜底);
+//   - 任务锁:显式传 WithMaxAutoRenew(-1)(不限制)。
+//
+// 降级到 v0.10.2 及更早时,这个安全网形同虚设 —— 别的地方要用它先确认版本。
+//
 // NewLocker 构造跨实例互斥锁,key 前缀固定为 LockKeyPrefix;续期等策略由调用方按场景追加。
+//
+// **默认开启自动续期**:锁的持有时长由业务决定(一次克隆+推送可能几十分钟),
+// 而 TTL 是固定的 —— 不续期的话,操作进行到一半锁就过期了,
+// 另一个实例能进同一通道,两边的哈希链会分叉。
+// 调用方仍可追加 WithAutoRenew 之外的选项覆盖。
 func NewLocker(client redis.UniversalClient, opts ...distlock.RedisLockerOption) *distlock.RedisLocker {
-	all := append([]distlock.RedisLockerOption{distlock.WithPrefix(LockKeyPrefix)}, opts...)
+	all := append([]distlock.RedisLockerOption{
+		distlock.WithPrefix(LockKeyPrefix),
+		distlock.WithAutoRenew(),
+	}, opts...)
 	return distlock.NewRedisLocker(client, all...)
 }
 
