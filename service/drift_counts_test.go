@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -109,4 +110,50 @@ func TestDetectDrift_ComputesRealAheadBehind(t *testing.T) {
 	assert.Equal(t, 0, item.LocalAhead, "本地没有独有提交")
 	assert.Contains(t, item.Message, "source ahead", "判词要说明是谁领先: %s", item.Message)
 	assert.Equal(t, 1, rep.Drifted)
+}
+
+// TestDetectDrift_RespectsBudget 漂移检测必须有**总预算**。
+//
+// 回归背景:每个漂移任务都要 fetch 一次源端才能算出 ahead/behind,
+// 耗时与"漂移任务数 × 单次 fetch 耗时"成正比。上游慢、任务多时
+// (200 个漂移任务 × 30s 拨号超时)整轮能跑到几十分钟,而调用方早已超时 ——
+// 服务端还在空转。预算耗尽后剩下的任务要如实标"未检查"。
+func TestDetectDrift_RespectsBudget(t *testing.T) {
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(t.TempDir(), "drift2.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Platform{}, &model.Repo{}, &model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}))
+
+	repoDAO, err := dao.NewRepoDAO(db)
+	require.NoError(t, err)
+	platformDAO, err := dao.NewPlatformDAO(db)
+	require.NoError(t, err)
+	mgr := sdkprov.NewManager(30 * 1e9)
+
+	svc := &Service{
+		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},
+		repos:     NewRepoService(repoDAO, platformDAO, mgr),
+		platforms: NewPlatformService(platformDAO, repoDAO, mgr),
+		tasks: NewTaskService(
+			dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db),
+			dao.NewSyncRunStepDAO(db), repoDAO,
+		),
+	}
+
+	// 至少要有一个任务,循环才会走到预算判定
+	require.NoError(t, db.Create(&model.SyncTask{
+		Key: "t-budget", Name: "budget", SourceRepoKey: "acme/none",
+		TargetRepoKey: "acme/none", SourceBranch: "main", TargetBranch: "main", Enabled: true,
+	}).Error)
+
+	// 预算已经耗尽的 ctx ⇒ 立刻如实报"未检查",不去碰网络
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
+	time.Sleep(2 * time.Millisecond)
+
+	rep, err := svc.DetectDrift(ctx, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, rep.Warnings, "预算耗尽必须如实报出来")
+	assert.Contains(t, rep.Warnings[0], "预算")
 }

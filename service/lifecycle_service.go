@@ -122,6 +122,16 @@ type DriftReport struct {
 	Warnings  []string    `json:"warnings,omitempty"`
 }
 
+// DriftDetectBudget 漂移检测的**总**预算。
+//
+// 每个漂移任务都要 fetch 一次源端才能算出 ahead/behind(见 fetchDriftSource),
+// 耗时与"漂移任务数 × 单次 fetch 耗时"成正比。上游慢、任务多时(200 个漂移任务
+// × 30s 拨号超时)整轮能跑到几十分钟,而调用方(HTTP/健康评分)早超时了 ——
+// 服务端还在空转。
+//
+// 预算耗尽后,剩下的任务标为"未检查"如实报出,而不是继续跑或假装检查过。
+const DriftDetectBudget = 30 * time.Second
+
 // DetectDrift 检测本地 workdir 与目标远端的分支漂移。
 // 用于发现「镜像声称同步成功但 refs 实际不一致」的静默故障。
 // taskKeys 为空时扫描全部启用任务。
@@ -150,7 +160,16 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 		}
 	}
 
+	// 整轮检测有总预算(见 DriftDetectBudget):超了就如实标"未检查"。
+	ctx, cancel := context.WithTimeout(ctx, DriftDetectBudget)
+	defer cancel()
+
 	for _, t := range tasks {
+		if ctx.Err() != nil {
+			rep.Warnings = append(rep.Warnings,
+				"漂移检测预算("+DriftDetectBudget.String()+")已用尽,剩余任务未检查")
+			break
+		}
 		item := DriftItem{TaskKey: t.Key, Branch: t.SourceBranch, TargetBranch: t.TargetBranch, RepoKey: t.TargetRepoKey}
 		repo, rerr := s.GetRepoByKey(t.TargetRepoKey)
 		if rerr != nil || repo == nil {
