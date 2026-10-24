@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.19.0] - 2026-10-25
+
+### Fixed
+
+- **元数据备份只采集 open PR，且只取第 1 页**（`service/metadata_service.go`）：
+  列表端点按状态过滤，不传状态 = 只返回 open（GitHub/Gitea/Forgejo 的默认）
+  ⇒ **已合并/已关闭的 PR 被静默丢弃**，而真实仓里那是绝大多数。
+  后果：① 快照不完整（灾备回灌缺历史）；② 回灌侧的「PR 状态跟着回灌」
+  根本无从触发 —— 快照里压根没有 closed/merged 的 PR，那个修复等于永远走不到。
+  另外原来一次性 `PerPage: max_items` 会被 SDK 截成 100 且不翻页
+  ⇒「上限 500」实际只拿到 100 条，且没有任何告警。
+  修法：open 与 closed 两侧都查再合并（平台没有 "all" 这个过滤值；
+  closed 一侧在 GitHub/Gitea 上同时覆盖「已关闭」与「已合并」——
+  合并态在数据模型里就是 state=closed + merged=true）；分页拉取；
+  合并后按更新时间倒序再截断（否则「open 侧就顶满上限」会把 closed 侧整批挤掉）；
+  一侧失败要告警（静默少一半比报错更坏）。
+
 ## [v0.18.0] - 2026-10-25
 
 ### Fixed
