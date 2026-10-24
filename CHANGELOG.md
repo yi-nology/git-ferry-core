@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.16.1] - 2026-10-25
+
+### Fixed
+
+- **已存在的 pending 审批必须刷新到当前目标状态**： 见到同
+  task+branch 已有 pending 就跳过 ⇒ 目标侧此后又变了（独有提交从 1 个变成 50 个）时，
+  旧 pending 仍挂着、绑的还是**旧状态** ⇒ 运维批的是一份过期的描述。
+  修法：已有 pending 时刷新它（reason / target_ref / created_at）。
+
 ## [v0.16.0] - 2026-10-25
 
 ### Fixed
