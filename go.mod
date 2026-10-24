@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/oekit/concurrency v0.20.4
 	github.com/oekit/logx v0.7.1
-	github.com/oekit/pkg v0.24.0
+	github.com/oekit/pkg v0.25.0
 	github.com/oekit/redisx v0.10.4
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
