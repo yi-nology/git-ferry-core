@@ -2,6 +2,28 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.17.0] - 2026-10-25
+
+### Fixed
+
+三条「公开化静默失败」缺陷（复审 histsync apply/push、mirror publish、metadata restore 时发现）：
+
+- **同一行多处命中时痕迹替换错位**（`mirror/scrub.go`）：替换循环把**原始下标**用在
+  **已被改动的行**上 ⇒ ①第二处及以后的痕迹没清干净（残留），②中间文本被吃掉，
+  ③三处以上直接越界 panic（壳层 Recovery 收成 500，但 apply 记录停在 running
+  且产物目录泄漏）。内置的 `StripInternalHost` 规则没有 Replacement（默认=删除），
+  「用户只填 pattern」这个最常见配置正好落在删除语义上。
+  修法：命中报告与替换都基于同一份快照，一次性替换所有命中（字面量替换）。
+- **二进制/超限 blob 完全跳过痕迹清理**（`mirror/gitobj.go`）：走「原样保留」路径，
+  只查 module path 残留 ⇒ 二进制里的密钥（`ghp_xxx` 等）原样进公开 module，
+  而密钥类（mandatory）规则一次都不会触发 —— 规则形同虚设。
+  修法：不能改写 ≠ 可以不管 —— 对这类 blob 仍跑一遍 mandatory 规则，命中即中止发布。
+- **merged 裁决绕过身份改写**（`mirror/history/apply.go`）：merged 裁决的内容是
+  人工/AI 给的**原文**，此前整体替换了已改写的源内容 ⇒ 身份改写与 gofmt 都被跳过。
+  裁决内容里写一句「详见 git.enjoye.top/enjoydream/app/internal」，内网 module path
+  就原样进公开仓 —— 而门禁全绿（注释既不是 gofmt 违规也不是类型错误）。
+  修法：裁决内容也走同一条发布形态管线（身份改写 → gofmt → 痕迹清理）。
+
 ## [v0.16.2] - 2026-10-25
 
 ### Fixed
