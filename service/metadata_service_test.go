@@ -187,12 +187,29 @@ func (f *fakeEngineProv) DeleteMilestone(context.Context, string, string, string
 
 // --- ChangeRequestManager ---
 
-func (f *fakeEngineProv) ListCRs(_ context.Context, _ sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error) {
+func (f *fakeEngineProv) ListCRs(_ context.Context, opts sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error) {
 	if f.prsErr != nil {
 		return nil, nil, f.prsErr
 	}
 	total := len(f.prs)
-	return f.prs, &total, nil
+	// **必须分页**:越界返回空页(真实平台的终止语义)。
+	// 不分页的话调用方每次都拿到同一页 ⇒ 翻页终止条件永远不成立,
+	// 只能靠页预算兜底 ⇒ 每次都产生"page budget exhausted"告警。
+	// (状态过滤由 stateFilterCRProv 那个桩专门覆盖。)
+	page := opts.Page
+	if page <= 0 {
+		page = 1
+	}
+	perPage := opts.PerPage
+	if perPage <= 0 {
+		perPage = 20
+	}
+	start := (page - 1) * perPage
+	if start >= len(f.prs) {
+		return nil, &total, nil
+	}
+	end := min(start+perPage, len(f.prs))
+	return f.prs[start:end], &total, nil
 }
 
 func (f *fakeEngineProv) CreateCR(context.Context, sdkprov.CreateCROptions) (*sdkprov.ChangeRequest, error) {

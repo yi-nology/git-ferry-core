@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -333,18 +334,79 @@ func (s *Service) collectPullRequests(ctx context.Context, prov sdkprov.Provider
 	if !ok {
 		return
 	}
-	prs, _, perr := cm.ListCRs(ctx, sdkprov.ListCROptions{
-		Owner: repo.PlatformOwner, Repo: repo.PlatformRepo, PerPage: maxItems,
-	})
-	if perr != nil {
-		snap.Warnings = append(snap.Warnings, "pull_requests: "+perr.Error())
-		return
+	// **open 与 closed 都要捞回来**。
+	//
+	// 列表端点按状态过滤,不传状态 = 只返回 open(GitHub/Gitea/Forgejo 的默认),
+	// 于是**已合并/已关闭的 PR 被静默丢弃** —— 真实仓里那是绝大多数,
+	// 快照因此既不完整(灾备回灌缺历史),也让回灌侧的「PR 状态跟着回灌」
+	// 根本无从触发(快照里压根没有 closed/merged 的 PR)。
+	//
+	// 平台没有 "all" 这个过滤值(SDK 的 mapListState 只映射 open/closed),
+	// 所以分两次取再合并;closed 一侧在 GitHub/Gitea 上同时覆盖"已关闭"与"已合并"
+	// (合并态在数据模型里就是 state=closed + merged=true)。
+	var all []*sdkprov.ChangeRequest
+	seen := map[string]bool{}
+	for _, st := range []sdkprov.CRState{sdkprov.CRStateOpened, sdkprov.CRStateClosed} {
+		prs, lerr := listCRs(ctx, cm, repo, st, maxItems)
+		if lerr != nil {
+			// 一侧失败要**告警**:静默少一半比报错更坏(快照看着是成功的)。
+			snap.Warnings = append(snap.Warnings, "pull_requests("+string(st)+"): "+lerr.Error())
+			continue
+		}
+		for _, pr := range prs {
+			if pr == nil || pr.Number == "" || seen[pr.Number] {
+				continue
+			}
+			seen[pr.Number] = true
+			all = append(all, pr)
+		}
 	}
-	if len(prs) > maxItems {
-		prs = prs[:maxItems]
+	// 两侧各自按各自的顺序返回 ⇒ 合并后按更新时间倒序再截断,
+	// 否则「open 侧就顶满上限」会把 closed 侧整批挤掉。
+	sort.SliceStable(all, func(i, j int) bool { return all[i].UpdatedAt.After(all[j].UpdatedAt) })
+	if maxItems > 0 && len(all) > maxItems {
+		all = all[:maxItems]
 	}
-	writeSnapshotPart(snap, "pull_requests.json", prs)
-	snap.Counts["pull_requests"] = int32(len(prs))
+	writeSnapshotPart(snap, "pull_requests.json", all)
+	snap.Counts["pull_requests"] = int32(len(all))
+}
+
+// listCRs 分页拉取指定状态的 PR(上限 max 条)。
+//
+// **必须分页**:列表端点的每页上限是 100(SDK 的 MaxPerPage),
+// 而 max_items 默认 500 —— 一次性 PerPage=max 会被截成 100 且只拿第 1 页,
+// 于是"上限 500"实际只拿到 100 条。
+func listCRs(ctx context.Context, cm sdkprov.ChangeRequestManager, repo *model.Repo,
+	state sdkprov.CRState, max int) ([]*sdkprov.ChangeRequest, error) {
+	const perPage = 50
+	// 页预算 = 拉满 max 所需页 +1 页空页观测(空页终止语义)。
+	maxPages := (max + perPage - 1) / perPage
+	if maxPages < 1 {
+		maxPages = 1
+	}
+	var batch []*sdkprov.ChangeRequest
+	err := sdkprov.EachBounded(ctx,
+		func(ctx context.Context, page int) ([]*sdkprov.ChangeRequest, error) {
+			items, _, lerr := cm.ListCRs(ctx, sdkprov.ListCROptions{
+				Owner:   repo.PlatformOwner,
+				Repo:    repo.PlatformRepo,
+				State:   state,
+				Page:    page,
+				PerPage: perPage,
+			})
+			return items, lerr
+		}, maxPages+1,
+		func(pr *sdkprov.ChangeRequest) error {
+			if len(batch) >= max {
+				return sdkprov.ErrStopIteration
+			}
+			batch = append(batch, pr)
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return batch, nil
 }
 
 func (s *Service) collectReleases(ctx context.Context, prov sdkprov.Provider, repo *model.Repo,
