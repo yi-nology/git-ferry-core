@@ -6,32 +6,27 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
-	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/pkg/cache"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/githubapp"
 )
 
-// ghAppTokenCache 缓存 installation token（有效期约 1h）。
+// ghAppTokenInner 缓存 installation token（有效期约 1h）。
 //
 // TTL 取 55min：token 本身有效 1h，到期前 5min 刷新。
 // 实现委托 oekit/pkg/cache.LocalCache（TTL 判定 / 并发安全 / 惰性过期回收
 // 只有上游一份实现）；NoBackgroundSweep 置 true——库级全局缓存不为回收额外
 // 起常驻 goroutine，过期条目在读路径惰性删除。
-var ghAppTokenCache = cache.NewLocalCache[string](cache.LocalConfig[string]{
+var ghAppTokenInner = cache.NewLocalCache[string](cache.LocalConfig[string]{
 	TTL:               55 * time.Minute,
 	NoBackgroundSweep: true,
 })
 
-// ghAppTokenFlight 同一 platform 的并发 token 解析只回源一次。
+// ghAppTokenCache 在内层缓存上叠一层单飞：同一 key 的并发未命中只回源一次。
 //
 // installation token 每次都要拿 JWT 向 GitHub 换发（一次网络往返 + GitHub 侧
-// 配额），并发重复换发既浪费又会被 GitHub 限流。单飞原语取自
-// oekit/concurrency/singleflight，缓存取自 oekit/pkg/cache.LocalCache——
-// pkg/cache 侧只有「固定 Source」的 Cache-Aside 入口，回源函数拿不到 key，
-// 按 key 的单飞只能用 concurrency/singleflight 组合（上游对应诉求见
-// oekit/pkg#77，仍 OPEN）。
-var ghAppTokenFlight = singleflight.New[string]()
+// 配额），并发重复换发既浪费又会被 GitHub 限流。
+var ghAppTokenCache = cache.NewSingleFlightCache(ghAppTokenInner)
 
 // MintGitHubAppJWT 用 App 私钥签发 JWT(RS256),iss=app_id,有效期最长 10 分钟。
 // 这是 GitHub App 调 API 的第一层凭证,再换 installation access token。
@@ -81,30 +76,28 @@ func (s *Service) ResolvePlatformToken(p *model.Platform) (string, error) {
 func githubAppToken(p *model.Platform) (string, error) {
 	cacheKey := fmt.Sprintf("%s|%d", p.Key, p.GitHubInstallationID)
 	ctx := context.Background()
-	if tok, err := ghAppTokenCache.Get(ctx, cacheKey); err == nil && tok != nil {
-		return *tok, nil
-	}
 
-	token, err := ghAppTokenFlight.Do(ctx, cacheKey, func(ctx context.Context) (string, error) {
-		// 二次检查：拿到单飞槽位时可能其它 goroutine 已经写好缓存。
-		if tok, err := ghAppTokenCache.Get(ctx, cacheKey); err == nil && tok != nil {
-			return *tok, nil
-		}
-		token, err := FetchGitHubInstallationToken(15*time.Second, p.APIURL,
+	// 回源函数在调用点注入：换发 installation token 需要本次调用的 platform
+	// 字段（app id / 私钥 / api url），构造期固定的 Source 拿不到它们。
+	// 上游的按 key 单飞保证同一 platform 的并发调用只换发一次。
+	token, err := ghAppTokenCache.GetOrLoadWithSource(ctx, cacheKey, func(context.Context, string) (*string, error) {
+		fetched, err := FetchGitHubInstallationToken(15*time.Second, p.APIURL,
 			p.GitHubAppID, p.GitHubInstallationID, p.GitHubPrivateKey)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		_ = ghAppTokenCache.Set(ctx, cacheKey, &token)
-		return token, nil
+		return &fetched, nil
 	})
 	if err != nil {
 		return "", err
 	}
-	return token, nil
+	if token == nil {
+		return "", errors.New("empty installation token")
+	}
+	return *token, nil
 }
 
 // ClearGitHubAppTokenCache 清空缓存(测试用)。
 func ClearGitHubAppTokenCache() {
-	ghAppTokenCache.Clear()
+	ghAppTokenInner.Clear()
 }
