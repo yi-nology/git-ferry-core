@@ -68,7 +68,7 @@ func (s *Service) CleanupExpiredBackups() (removed int, err error) {
 	}
 	dir := s.config.Sync.BackupDir
 	if dir == "" {
-		return 0, errBackupDisabled
+		return 0, ErrBackupDisabled
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
 	all, err := executor.ListBundles(dir, "")

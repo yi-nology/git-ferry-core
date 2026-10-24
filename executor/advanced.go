@@ -78,14 +78,16 @@ func isDivergent(err error) bool {
 // checkDivergencePolicy 按显式策略做分歧保护。
 // backupDir 非空且 policy=backup_on_demand 时,覆盖前写入回滚快照。
 // 策略: allow=放行 | block=拒绝覆盖(可经 Approver 放行) | backup_on_demand=先快照再覆盖。
-func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string, repo *model.Repo, platform *model.Platform) error {
+// checkDivergencePolicy 按显式策略做分歧保护。
+// 第二个返回值 usedApproval = 本次是否**用掉了**一次人工放行(调用方据此兑现"一次性")。
+func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string, repo *model.Repo, platform *model.Platform) (bool, error) {
 	// 未 force 时 git 自己会拒绝非快进,无需额外检查
 	if !force {
-		return nil
+		return false, nil
 	}
 	switch policy {
 	case "allow":
-		return nil
+		return false, nil
 	case "block", "backup_on_demand", "":
 		// 继续检测分歧
 	default:
@@ -109,10 +111,10 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		// 反过来:本地**有**这个 ref,说明目标仓确实存在这个分支,只是这次没连上 ——
 		// 这种情况下不能放行,必须报错让人工介入,否则会覆盖目标侧独有提交。
 		if _, rerr := e.backend.RevParse(ctx, dir, targetRef); rerr == nil {
-			return errors.Wrapf(err,
+			return false, errors.Wrapf(err,
 				"cannot verify divergence for %q: target fetch failed while the target branch is known to exist", targetBranch)
 		}
-		return nil
+		return false, nil
 	}
 	// 原实现:git rev-list --right-only --count source...targetRef,
 	// 取的是右端(target)独有提交数 —— 即相对 source 的 behind。
@@ -121,10 +123,10 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	_, behind, err := e.backend.GetBranchSyncInfo(ctx, dir, sourceBranch, RemoteTarget+"/"+targetBranch)
 	if err != nil {
 		// ref 不存在等:保守放行,交给 push 决定
-		return nil
+		return false, nil
 	}
 	if behind == 0 {
-		return nil
+		return false, nil
 	}
 	count := fmt.Sprintf("%d", behind)
 	// 列出目标独有提交(最多 5 条,便于日志)。
@@ -135,19 +137,21 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		snap := filepath.Join(backupDir,
 			fmt.Sprintf("predemote-%s-%s.bundle", strutil.SanitizeFileToken(targetBranch), time.Now().Format("20060102-150405")))
 		if _, berr := e.gitOutput(ctx, dir, "bundle", "create", snap, targetRef); berr != nil {
-			return errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
+			return false, errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
 		}
-		return nil
+		return false, nil
 	}
 	// block 策略：若已有审批放行则放行；否则登记 pending 并拒绝
 	if e.Approver != nil {
 		if e.Approver.IsForcePushApproved(taskKey, targetBranch) {
-			return nil
+			// 放行通过 —— 标记"用掉了":本次强推成功后要把这条放行消费掉,
+			// 否则一次人工放行会变成该任务+分支上的常驻后门。
+			return true, nil
 		}
 		e.Approver.RequestApproval(taskKey, targetBranch,
 			fmt.Sprintf("divergent target has %s unique commits", count))
 	}
-	return &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
+	return false, &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
 }
 
 // maxDivergentLog 与原 `log --oneline -5` 的条数上限一致。

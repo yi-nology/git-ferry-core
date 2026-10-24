@@ -148,7 +148,7 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 	return true, nil
 }
 
-// IsForcePushApproved 查询任务+分支是否已放行（executor 分歧保护回调）。
+// IsForcePushApproved 查询任务+分支是否已放行**且尚未被用掉**（executor 分歧保护回调）。
 func (st *ForcePushStore) IsForcePushApproved(taskKey, branch string) bool {
 	ok, err := st.dao.IsApproved(taskKey, branch)
 	if err != nil {
@@ -156,4 +156,21 @@ func (st *ForcePushStore) IsForcePushApproved(taskKey, branch string) bool {
 		return false
 	}
 	return ok
+}
+
+// ConsumeForcePushApproval 消费掉一次放行（放行是一次性的）。
+//
+// 契约:"Admin 一次性放行后允许**本次** force" —— 用掉之后,同一任务同一分支
+// 再出现分歧必须重新审批。记录保留（标 consumed_at）,留住审计线索。
+func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	found, err := st.dao.ConsumeApproved(taskKey, branch, time.Now().UTC())
+	if err != nil {
+		slog.Error("consume force-push approval failed", "error", err, "taskKey", taskKey, "branch", branch)
+		return
+	}
+	if found {
+		slog.Info("force-push approval consumed", "taskKey", taskKey, "branch", branch)
+	}
 }

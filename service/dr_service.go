@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -30,7 +31,7 @@ type ManifestVerifyResult = executor.ManifestVerifyResult
 func (s *Service) RunDRDrill(ctx context.Context, name string) (*DrillReport, error) {
 	dir := s.config.Sync.BackupDir
 	if dir == "" {
-		return nil, errBackupDisabled
+		return nil, ErrBackupDisabled
 	}
 	if !pathx.IsSafeFileName(name) {
 		return nil, errInvalidName
@@ -46,7 +47,7 @@ func (s *Service) RunDRDrill(ctx context.Context, name string) (*DrillReport, er
 func (s *Service) BatchDRDrill(ctx context.Context, names []string, max int) ([]*DrillReport, map[string]any, error) {
 	dir := s.config.Sync.BackupDir
 	if dir == "" {
-		return nil, nil, errBackupDisabled
+		return nil, nil, ErrBackupDisabled
 	}
 	var paths []string
 	if len(names) == 0 {
@@ -91,7 +92,7 @@ func (s *Service) VerifyDrillChain() (bool, int, string) {
 func (s *Service) BuildBackupManifest() (*executor.BackupManifest, error) {
 	dir := s.config.Sync.BackupDir
 	if dir == "" {
-		return nil, errBackupDisabled
+		return nil, ErrBackupDisabled
 	}
 	m, err := executor.BuildManifest(dir)
 	if err != nil {
@@ -107,7 +108,16 @@ func (s *Service) BuildBackupManifest() (*executor.BackupManifest, error) {
 func (s *Service) VerifyBackupManifest() (*executor.ManifestVerifyResult, error) {
 	dir := s.config.Sync.BackupDir
 	if dir == "" {
-		return nil, errBackupDisabled
+		return nil, ErrBackupDisabled
+	}
+	// 还没有清单(没做过冷备)不是"错误" —— 返回"没东西可校验"的可读结果。
+	// 否则调用方拿到的是 500 "load manifest: no such file or directory",
+	// 看不出是"还没做冷备"还是"真出事了"。
+	if _, err := os.Stat(filepath.Join(dir, "backup-manifest.json")); err != nil {
+		return &executor.ManifestVerifyResult{
+			OK:      false,
+			Message: "尚无冷备完整性清单(还没做过冷备):先跑一次冷备生成清单,再回来校验",
+		}, nil
 	}
 	return executor.VerifyManifest(dir)
 }
@@ -143,7 +153,7 @@ type RPOReport struct {
 func (s *Service) RPOReport(rpoMaxSeconds int64) (*RPOReport, error) {
 	dir := s.config.Sync.BackupDir
 	if dir == "" {
-		return nil, errBackupDisabled
+		return nil, ErrBackupDisabled
 	}
 	all, err := executor.ListBundles(dir, "")
 	if err != nil {

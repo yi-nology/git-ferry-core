@@ -51,8 +51,9 @@ var (
 	// "sync.backup_dir not configured"），保持逐字契约。
 	ErrMetadataValidation = errors.New("metadata validation")
 
-	// errBackupDisabled 冷备目录未配置。
-	errBackupDisabled = errors.New("backup dir not configured (sync.backup_dir)")
+	// ErrBackupDisabled 冷备未启用(没配 sync.backup_dir)。
+	// 导出以便壳层把它映射成"可读提示"而不是笼统的 500。
+	ErrBackupDisabled = errors.New("backup dir not configured (sync.backup_dir)")
 
 	// errInvalidName 文件名非法(含路径分隔符)。
 	errInvalidName = errors.New("invalid file name")
@@ -94,7 +95,7 @@ func Classify(err error) ErrorClass {
 		return ErrorClassConflict
 	case errors.Is(err, ErrTaskDisabled):
 		return ErrorClassValidation
-	case errors.Is(err, errBackupDisabled), errors.Is(err, errInvalidName),
+	case errors.Is(err, ErrBackupDisabled), errors.Is(err, errInvalidName),
 		errors.Is(err, ErrMetadataValidation),
 		errors.Is(err, ErrTemplateCycle):
 		return ErrorClassValidation

@@ -65,6 +65,9 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 		maxRetries = cfg.Sync.RetryCount
 	}
 	var retries int
+	// usedApproval 提到闭包外:重试循环里最后一次尝试用掉的放行,
+	// 要在循环结束后(推送成功时)兑现"一次性"。
+	var usedApproval bool
 	err := retry.Do(ctx, retry.Config{
 		Attempts: maxRetries,
 		Delay:    time.Duration(model.RetryBackoffMs) * time.Millisecond,
@@ -74,7 +77,8 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 			retries = attempt - 1
 			rc.logf("retry attempt %d/%d...\n", attempt, maxRetries)
 		}
-		pushErr := rc.Exec.push(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID])
+		var pushErr error
+		usedApproval, pushErr = rc.Exec.push(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID])
 		if pushErr != nil && attempt < maxRetries {
 			rc.logf("push failed, retrying fetch...\n")
 			if ferr := rc.Exec.fetchRepo(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, rc.Platforms[rc.SourceRepo.PlatformID]); ferr != nil {
@@ -85,6 +89,12 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 	})
 	rc.Run.RetryTotal = retries
 	if err == nil {
+		// 放行是**一次性**的:本次强推成功 ⇒ 把这条放行用掉,
+		// 下次同一任务同一分支再出现分歧必须重新审批
+		// (契约:"Admin 一次性放行后允许本次 force")。
+		if usedApproval && rc.Exec.Approver != nil {
+			rc.Exec.Approver.ConsumeForcePushApproval(rc.Task.Key, rc.Task.TargetBranch)
+		}
 		// git_tags=true:tag 单独推(不覆盖已存在的 tag)。
 		// 失败只记警告 —— 分支已经推成功,不该因为一个同名 tag 冲突把整次同步判失败。
 		if rc.Task.GitTags {

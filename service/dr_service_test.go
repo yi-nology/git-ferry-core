@@ -52,7 +52,7 @@ func TestRPOReport(t *testing.T) {
 
 	// 未配置 backup_dir
 	_, err = newBackupService("", 0, false).RPOReport(1)
-	require.ErrorIs(t, err, errBackupDisabled)
+	require.ErrorIs(t, err, ErrBackupDisabled)
 
 	// 空目录
 	empty, err := newBackupService(filepath.Join(dir, "none"), 0, false).RPOReport(1)
@@ -136,7 +136,7 @@ func TestBackupManifest(t *testing.T) {
 
 	// 未配置 backup_dir
 	_, err = newBackupService("", 0, false).BuildBackupManifest()
-	require.ErrorIs(t, err, errBackupDisabled)
+	require.ErrorIs(t, err, ErrBackupDisabled)
 	_, err = newBackupService("", 0, false).VerifyBackupManifest()
-	require.ErrorIs(t, err, errBackupDisabled)
+	require.ErrorIs(t, err, ErrBackupDisabled)
 }

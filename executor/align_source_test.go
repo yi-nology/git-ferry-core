@@ -87,7 +87,7 @@ func TestFetchRepo_IncrementalSync_AdvancesLocalBranch(t *testing.T) {
 	// 第一次同步:克隆源端 → 推送到目标端
 	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
-	require.NoError(t, exec.push(ctx, work, task, dstRepo, nil))
+	require.NoError(t, mustPush(t, exec, ctx, work, task, dstRepo, nil))
 	require.Equal(t, firstSHA, gitOut(t, dstBare, "rev-parse", "main"),
 		"首次同步应把源端内容推到目标端")
 
@@ -97,7 +97,7 @@ func TestFetchRepo_IncrementalSync_AdvancesLocalBranch(t *testing.T) {
 
 	// 第二次同步(增量):fetch 后目标侧必须前进到新提交
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
-	require.NoError(t, exec.push(ctx, work, task, dstRepo, nil))
+	require.NoError(t, mustPush(t, exec, ctx, work, task, dstRepo, nil))
 	require.Equal(t, secondSHA, gitOut(t, dstBare, "rev-parse", "main"),
 		"增量同步后目标侧必须拿到源端新提交(fetch 之后本地分支要推进到 origin/<branch>)")
 }
@@ -166,7 +166,7 @@ func TestPushTags_DeliversTagsToTarget(t *testing.T) {
 
 	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
-	require.NoError(t, exec.push(ctx, work, task, dstRepo, nil))
+	require.NoError(t, mustPush(t, exec, ctx, work, task, dstRepo, nil))
 	require.NoError(t, exec.pushTags(ctx, work, task, dstRepo, nil))
 
 	// 目标端必须能看到这个 tag
@@ -193,7 +193,7 @@ func TestPushTags_SkippedWhenDisabled(t *testing.T) {
 
 	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
-	require.NoError(t, exec.push(ctx, work, task, dstRepo, nil))
+	require.NoError(t, mustPush(t, exec, ctx, work, task, dstRepo, nil))
 	require.NoError(t, exec.pushTags(ctx, work, task, dstRepo, nil))
 
 	require.NotContains(t, gitOut(t, dstBare, "tag", "--list"), "v9.9.9",
@@ -241,7 +241,7 @@ func TestPushTags_ConflictingTagDoesNotBlockOthers(t *testing.T) {
 
 	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
-	require.NoError(t, exec.push(ctx, work, task, dstRepo, nil))
+	require.NoError(t, mustPush(t, exec, ctx, work, task, dstRepo, nil))
 
 	// 冲突的 v1.0.0 推不过去(应当报错),但 v2.0.0 必须送达
 	err = exec.pushTags(ctx, work, task, dstRepo, nil)
@@ -250,4 +250,11 @@ func TestPushTags_ConflictingTagDoesNotBlockOthers(t *testing.T) {
 
 	out := gitOut(t, dstBare, "tag", "--list")
 	require.Contains(t, out, "v2.0.0", "没冲突的 tag 必须送达(不能被一个冲突的 tag 连坐)")
+}
+
+// mustPush 调 exec.push 并只关心错误(忽略"是否用掉放行"的返回)。
+func mustPush(t *testing.T, exec *Executor, ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
+	t.Helper()
+	_, err := exec.push(ctx, dir, task, repo, platform)
+	return err
 }

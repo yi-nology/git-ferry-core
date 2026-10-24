@@ -23,7 +23,7 @@ func TestClassifySentinels(t *testing.T) {
 		{ErrTaskRunning, ErrorClassConflict},
 		{ErrTooManyConcurrent, ErrorClassConflict},
 		{ErrTaskDisabled, ErrorClassValidation},
-		{errBackupDisabled, ErrorClassValidation},
+		{ErrBackupDisabled, ErrorClassValidation},
 		{errInvalidName, ErrorClassValidation},
 		{errLegalHold, ErrorClassConflict},
 		{newMetadataError("sync.backup_dir not configured", nil), ErrorClassValidation},

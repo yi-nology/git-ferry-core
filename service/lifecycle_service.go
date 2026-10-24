@@ -173,8 +173,22 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			item.Message = "in sync"
 		default:
 			item.Drifted = true
-			item.Message = "diverged"
-			item.LocalAhead, item.RemoteAhead = revListCounts(ctx, gitDir, localRef, remoteRef)
+			a, b, ok := revListCounts(ctx, gitDir, localRef, remoteRef)
+			item.LocalAhead, item.RemoteAhead = a, b
+			switch {
+			case !ok:
+				// 远端提交不在本地对象库里(没 fetch 过)⇒ rev-list 算不出数量。
+				// 旧实现静默给 0/0,于是"漂移了多少"变成"不知道"却看着像"没有"。
+				item.Message = "drifted (remote commit not in local object store; ahead/behind unknown)"
+			case a > 0 && b > 0:
+				item.Message = "diverged (both sides have unique commits)"
+			case a > 0:
+				item.Message = "local ahead (target behind)"
+			case b > 0:
+				item.Message = "remote ahead (target ahead)"
+			default:
+				item.Message = "drifted (refs differ; ahead/behind not resolvable)"
+			}
 			rep.Drifted++
 		}
 		rep.Checked++
@@ -251,14 +265,22 @@ func gitLsRemote(ctx context.Context, dir, remote, ref string) string {
 // 后者未必等于本地的 refs/remotes/* 跟踪引用),GetBranchSyncInfo 只接受
 // refs/heads/<branch> + refs/remotes/<upstream> 的组合、语义对不上,
 // 因此保留原 `rev-list --count a..b` 命令,经 RunRaw 收口执行。
-func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int) {
-	if out, err := runGitQuiet(ctx, dir, "rev-list", "--count", a+".."+b); err == nil {
-		_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &bAhead)
+// 第三个返回值 ok = 两侧的数量都算出来了。
+// 远端 SHA 来自 ls-remote,若那个提交没被 fetch 进本地对象库,rev-list 直接失败;
+// 此时不能返回 0/0 —— 那会把"算不出来"说成"没有差异"。
+func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int, ok bool) {
+	out1, err1 := runGitQuiet(ctx, dir, "rev-list", "--count", a+".."+b)
+	out2, err2 := runGitQuiet(ctx, dir, "rev-list", "--count", b+".."+a)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
 	}
-	if out, err := runGitQuiet(ctx, dir, "rev-list", "--count", b+".."+a); err == nil {
-		_, _ = fmt.Sscanf(strings.TrimSpace(out), "%d", &aAhead)
+	if _, err := fmt.Sscanf(strings.TrimSpace(out1), "%d", &bAhead); err != nil {
+		return 0, 0, false
 	}
-	return
+	if _, err := fmt.Sscanf(strings.TrimSpace(out2), "%d", &aAhead); err != nil {
+		return 0, 0, false
+	}
+	return aAhead, bAhead, true
 }
 
 // runGitQuiet 只读 git 命令。优先走 backend.RunRaw(与 executor 侧同一收口),

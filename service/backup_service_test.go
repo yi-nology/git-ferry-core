@@ -104,6 +104,6 @@ func TestCleanupExpiredBackups_Guards(t *testing.T) {
 	// backup_dir 未配置 → 明确报错（区别于"没到期"）
 	nodir := newBackupService("", 7, false)
 	removed, err = nodir.CleanupExpiredBackups()
-	require.ErrorIs(t, err, errBackupDisabled)
+	require.ErrorIs(t, err, ErrBackupDisabled)
 	assert.Equal(t, 0, removed)
 }

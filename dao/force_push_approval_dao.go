@@ -1,6 +1,9 @@
 package dao
 
 import (
+	"errors"
+	"time"
+
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -58,13 +61,36 @@ func (d *ForcePushApprovalDAO) PendingExists(taskKey, branch string) (bool, erro
 	return n > 0, err
 }
 
-// IsApproved 同 task+branch 是否已放行。
+// IsApproved 同 task+branch 是否已放行**且尚未被用掉**。
+//
+// 放行是一次性的:用掉之后(consumed_at 非空)不再算数 ——
+// 否则一次人工放行会变成该任务+分支上的常驻后门。
 func (d *ForcePushApprovalDAO) IsApproved(taskKey, branch string) (bool, error) {
 	var n int64
 	err := d.db.Model(&model.ForcePushApproval{}).
-		Where("task_key = ? AND branch = ? AND approved = ?", taskKey, branch, true).
+		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL", taskKey, branch, true).
 		Count(&n).Error
 	return n > 0, err
+}
+
+// ConsumeApproved 把同 task+branch 的放行标记为已用掉(一次性放行的兑现)。
+// 没有可用放行时返回 found=false。
+func (d *ForcePushApprovalDAO) ConsumeApproved(taskKey, branch string, at time.Time) (found bool, err error) {
+	a := &model.ForcePushApproval{}
+	q := d.db.Model(&model.ForcePushApproval{}).
+		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL", taskKey, branch, true).
+		Order("created_at DESC").First(a)
+	if q.Error != nil {
+		if errors.Is(q.Error, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, q.Error
+	}
+	a.ConsumedAt = &at
+	if err := d.db.Save(a).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // PendingCount 未放行条数。

@@ -122,3 +122,38 @@ func TestForcePushStore_JSONContract(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(b2), "approved_by")
 }
+
+// TestForcePushStore_ConsumeForcePushApproval 放行是**一次性**的:
+// 用掉之后同任务同分支不再算数。
+//
+// 回归背景:契约写的是"Admin 一次性放行后允许**本次** force",
+// 但实现只查 approved 标志 ⇒ 一次人工放行变成该任务+分支上的**常驻后门**,
+// 之后每次覆盖目标侧独有提交都无人复核。
+func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
+	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
+
+	st.RequestApproval("t1", "main", "divergent target has 1 unique commits")
+	id := st.List()[0].ID
+	found, err := st.Approve(id, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, st.IsForcePushApproved("t1", "main"), "放行后应当生效")
+
+	// 用掉
+	st.ConsumeForcePushApproval("t1", "main")
+	assert.False(t, st.IsForcePushApproved("t1", "main"),
+		"放行被用掉后不再算数(否则一次人工放行 = 常驻后门)")
+
+	// 记录保留(审计线索:谁批的、什么时候批的、什么时候用的)
+	list := st.List()
+	require.Len(t, list, 1, "记录要保留,不能删")
+	assert.NotNil(t, list[0].ConsumedAt, "要标出放行被用掉的时间")
+	assert.Equal(t, "admin", list[0].ApprovedBy, "谁批的要留着")
+	assert.True(t, list[0].Approved, "放行事实不变")
+
+	// 用掉之后,同任务同分支可以重新申请并重新走审批
+	st.RequestApproval("t1", "main", "again divergent")
+	list = st.List()
+	require.Len(t, list, 2, "用掉之后应能再产生新 pending")
+	assert.False(t, list[1].Approved)
+}

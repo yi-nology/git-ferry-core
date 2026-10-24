@@ -45,7 +45,7 @@ func TestCheckDivergencePolicy_ErrorReportsRealCount(t *testing.T) {
 	commitToSrc(t, src, "v2", "c2")
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has 1 commit(s) not in source",
 		"错误文案里的独有提交数必须是真实数量(目标侧只有 1 个独有提交)")
@@ -81,7 +81,7 @@ func TestCheckDivergencePolicy_TargetHasUniqueCommits_Blocks(t *testing.T) {
 	commitToSrc(t, src, "v2", "c2")
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err, "目标侧有独有提交时 block 策略必须拦下")
 }
 
@@ -117,7 +117,7 @@ func TestCheckDivergencePolicy_TargetUnreachable_FailsClosed(t *testing.T) {
 	// 把 target remote 指向不存在的路径 ⇒ 这次 fetch 必然失败
 	gitRun(t, work, "remote", "set-url", "target", filepath.Join(t.TempDir(), "does-not-exist.git"))
 
-	err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err, "连不上目标时不能当作无分歧放行,必须报错")
 	require.Contains(t, err.Error(), "cannot verify divergence")
 }
@@ -142,5 +142,67 @@ func TestCheckDivergencePolicy_FirstPush_NoTargetBranch_Allows(t *testing.T) {
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
 
 	// 目标仓是空仓(没有 main 分支)⇒ 首次推送,无分歧风险
-	require.NoError(t, exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil))
+	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	require.NoError(t, err)
+}
+
+// stubApprover 记录 executor 对审批器的调用。
+type stubApprover struct {
+	approved bool
+	consumed int
+}
+
+func (s *stubApprover) IsForcePushApproved(taskKey, branch string) bool { return s.approved }
+func (s *stubApprover) RequestApproval(taskKey, branch, reason string)  {}
+
+// ConsumeForcePushApproval 镜像真实 store 的语义:用掉之后不再算已放行。
+func (s *stubApprover) ConsumeForcePushApproval(taskKey, branch string) {
+	s.consumed++
+	s.approved = false
+}
+
+// TestCheckDivergencePolicy_ReportsApprovalUsage 分歧保护命中人工放行时,
+// 必须把"用掉了这一次放行"如实报给调用方 —— 调用方据此在推送成功后兑现"一次性"。
+//
+// 回归背景:契约是"Admin 一次性放行后允许**本次** force";
+// 若检查只放行不报使用情况,调用方无从消费 ⇒ 放行变成常驻后门。
+func TestCheckDivergencePolicy_ReportsApprovalUsage(t *testing.T) {
+	src, srcBare, dstBare := newLocalSyncLab(t)
+	work := filepath.Join(t.TempDir(), "work")
+	commitToSrc(t, src, "v1", "c1")
+
+	// 目标侧有独有提交 ⇒ 会走分歧分支
+	dstWork := filepath.Join(t.TempDir(), "dstwork")
+	gitRun(t, t.TempDir(), "clone", "-q", srcBare, dstWork)
+	require.NoError(t, os.WriteFile(filepath.Join(dstWork, "y.txt"), []byte("y"), 0o640))
+	gitRun(t, dstWork, "add", ".")
+	gitRun(t, dstWork, "commit", "-m", "target-only")
+	gitRun(t, dstWork, "push", "-q", dstBare, "main")
+
+	svc := newMockService()
+	exec, err := NewExecutor(svc)
+	require.NoError(t, err, "NewExecutor failed")
+
+	task := &model.SyncTask{Key: "approval-usage", SourceBranch: "main", TargetBranch: "main"}
+	srcRepo := &model.Repo{CloneURL: srcBare}
+	dstRepo := &model.Repo{CloneURL: dstBare}
+	ctx := context.Background()
+
+	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
+	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
+	commitToSrc(t, src, "v2", "c2")
+	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
+
+	// 没有放行 ⇒ 拦下
+	used, err := exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	require.Error(t, err)
+	require.False(t, used, "没放行时不该报'用掉了放行'")
+
+	// 有放行 ⇒ 放行通过,且如实上报"用掉了"
+	ap := &stubApprover{approved: true}
+	exec.Approver = ap
+	used, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	require.NoError(t, err, "有放行时应当放行")
+	require.True(t, used, "用了放行必须上报(调用方据此兑现一次性)")
+	require.Equal(t, 0, ap.consumed, "检查阶段不消费放行 —— 消费发生在推送成功之后")
 }

@@ -2,6 +2,33 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **强推放行改为一次性**（`executor` / `service` / `dao` / `model`）：契约写的是
+  「Admin **一次性**放行后允许**本次** force」，但实现只查 `approved` 标志 ⇒
+  一次人工放行变成该任务+分支上的**常驻后门**，之后每次覆盖目标侧独有提交都无人复核。
+  修法：放行记录加 `consumed_at`；分歧检查把「用掉了这次放行」如实报给调用方，
+  推送**成功后**由调用方消费掉。下次同任务同分支再出现分歧，必须重新审批。
+  （`ForcePushApprover` 接口新增 `ConsumeForcePushApproval` —— 外部实现方需同步。）
+- **失败时不再一律删掉工作区**（`executor`）：失败即删 ⇒ 下一次执行被迫全量克隆，
+  「增量 fetch」（大仓的主要成本）收益在第一次失败后归零；而失败常与本地状态无关
+  （推送被分歧保护拦下、鉴权失败、网络抖动）。修法：工作区**可用**就保留（下次增量 fetch），
+  **坏了**（克隆没成功/被中断，HEAD 解析不出来）才删。
+- **漂移检测的判词与计数**（`service/lifecycle_service.go`）：此前只要两端 ref 不等
+  就一律报 `diverged`，且 ahead/behind 用 `rev-list` 算 —— 远端提交没 fetch 进本地对象库时
+  该命令直接失败，静默给出 0/0，于是「漂移了多少」变成「不知道」却看着像「没有」。
+  修法：区分 `diverged` / `local ahead` / `remote ahead`；算不出数量时明说
+  「ahead/behind unknown」而不是给 0/0。
+
+### Changed
+
+- `ErrBackupDisabled` 导出（原 `errBackupDisabled`）：壳层据此把「冷备未启用」映射成
+  可读提示，而不是笼统的 500。
+- `VerifyBackupManifest`：还没有冷备清单时返回可读结果（`ok:false` + 说明该先做冷备），
+  不再是 500 `load manifest: no such file or directory`。
+
 ## [v0.13.0] - 2026-10-24
 
 ### Fixed

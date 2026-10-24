@@ -61,6 +61,10 @@ type ForcePushApprover interface {
 	IsForcePushApproved(taskKey, branch string) bool
 	// RequestApproval 产生一条 pending 审批（best-effort，失败不影响主流程）。
 	RequestApproval(taskKey, branch, reason string)
+	// ConsumeForcePushApproval 消费掉一次放行。
+	// 放行是**一次性**的:一次成功的强推之后就要用掉,下次同任务同分支
+	// 再出现分歧必须重新审批(否则一次人工放行变成常驻后门)。
+	ConsumeForcePushApproval(taskKey, branch string)
 }
 
 func NewExecutor(svc Service) (*Executor, error) {
@@ -119,10 +123,21 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 
 	workDir := rc.WorkDir
 	defer func() {
-		if run.Status != model.StatusSuccess {
-			if rmErr := os.RemoveAll(workDir); rmErr != nil {
-				slog.Error("failed to cleanup temp dir", "error", rmErr, "dir", workDir)
-			}
+		if run.Status == model.StatusSuccess {
+			return
+		}
+		// 失败时**不总是**删掉工作区:
+		//  - 工作区本身是坏的(克隆没成功/被中断)⇒ 留着只会让下一次执行
+		//    在坏仓库上继续失败,直接删;
+		//  - 工作区是好的(失败发生在推送/鉴权/网络这类与本地状态无关的环节)
+		//    ⇒ 保留,下一次走增量 fetch —— 全量克隆是大仓的主要成本,
+		//    "失败一次就退回全量克隆"等于把增量收益清零。
+		if e.workdirUsable(ctx, rc.RepoDir) {
+			slog.Info("keep workdir after failed run; next run will fetch incrementally", "dir", rc.RepoDir)
+			return
+		}
+		if rmErr := os.RemoveAll(workDir); rmErr != nil {
+			slog.Error("failed to cleanup temp dir", "error", rmErr, "dir", workDir)
 		}
 	}()
 
@@ -435,6 +450,7 @@ func (e *Executor) alignSourceBranches(ctx context.Context, dir, sourceBranch st
 // 两条命令按"HEAD 在不在该分支上"分流:
 //   - HEAD 在该分支上 ⇒ reset --hard(ref 与工作区一起更新,不留脏状态);
 //   - 否则 ⇒ update-ref 只动 ref(不动 HEAD 与工作区,避免把别的分支带偏)。
+//
 // 两者都不在平台 git 子命令白名单里,gitOutput 会回落到裸 git ——
 // 与 excludeRefs 用 update-ref 的做法一致。
 func (e *Executor) alignSourceBranch(ctx context.Context, dir, branch string) error {
@@ -516,7 +532,21 @@ func defaultBranchOf(repo *model.Repo) string {
 	return model.DefaultBranch
 }
 
-func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
+// workdirUsable 工作区是不是一个可用的 git 仓库(有 .git 且 HEAD 能解析)。
+// 用于失败后的清理决策:坏工作区要删,好工作区要留(留给下一次增量 fetch)。
+func (e *Executor) workdirUsable(ctx context.Context, dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return false
+	}
+	if _, err := e.backend.RevParse(ctx, dir, "HEAD"); err != nil {
+		return false
+	}
+	return true
+}
+
+// push 推送分支到目标端。
+// 第二个返回值 usedApproval = 本次是否用掉了一次人工放行(调用方负责在成功后兑现"一次性")。
+func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) (bool, error) {
 	// 分歧保护:按 ForcePushPolicy(block/backup_on_demand/allow)处理
 	policy := task.ForcePushPolicy
 	if policy == "" {
@@ -530,14 +560,15 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	if cfg := e.service.GetConfig(); cfg != nil {
 		backupDir = cfg.Sync.BackupDir
 	}
-	if err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key, repo, platform); err != nil {
-		return err
+	usedApproval, err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key, repo, platform)
+	if err != nil {
+		return false, err
 	}
 
 	// LFS 对象先推,避免代码分支推上去了大文件缺失
 	if task.GitLFS {
 		if err := e.syncLFS(ctx, dir, RemoteTarget, false); err != nil {
-			return err
+			return usedApproval, err
 		}
 	}
 
@@ -560,16 +591,16 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 			}
 		}
 		if len(refSpecs) == 0 {
-			return fmt.Errorf("no local branches match %q", task.SourceBranch)
+			return usedApproval, fmt.Errorf("no local branches match %q", task.SourceBranch)
 		}
 	} else {
 		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
-			return fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+			return usedApproval, fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
 		}
 		refSpecs = []string{fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch)}
 	}
 
-	_, err := e.backend.Push(ctx, gitbackend.PushOptions{
+	_, err = e.backend.Push(ctx, gitbackend.PushOptions{
 		RepoPath: dir,
 		Remote:   RemoteTarget,
 		RefSpecs: refSpecs,
@@ -577,14 +608,14 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		Auth:     e.authConfig(ctx, repo, platform),
 	})
 	if err != nil {
-		return err
+		return usedApproval, err
 	}
 
 	// 推送侧 prune:目标上源已删除的同名分支一并删掉(仅单分支任务,语义清晰)
 	if task.GitPushPrune && !multi {
-		return e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform)
+		return usedApproval, e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform)
 	}
-	return nil
+	return usedApproval, nil
 }
 
 // pushTags 把源端的 tag 推到目标端。
