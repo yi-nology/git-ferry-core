@@ -119,7 +119,8 @@ func Resolve(ctx context.Context, opts Options, plan *Plan) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		res, err := resolveOne(replayer, srcRepo, tgtRepo, srcHist, tgtHist, f, opts.ConflictRules)
+		res, err := resolveOne(replayer, srcRepo, tgtRepo, srcCommit, tgtCommit,
+			srcHist, tgtHist, f, opts.ConflictRules)
 		if err != nil {
 			return err
 		}
@@ -138,21 +139,33 @@ func Resolve(ctx context.Context, opts Options, plan *Plan) error {
 //	第二层:目标侧当前内容出现在源侧的历史版本里 → 源侧已前进,取源侧;
 //	第三层:两边都前进过 → 找共同基点,做三向合并(无冲突则自动合并,否则冲突)。
 func resolveOne(replayer *mirror.Rewriter, srcRepo, tgtRepo *git.Repository,
+	srcCommit, tgtCommit *object.Commit,
 	srcHist, tgtHist map[string][]fileHistory, f FilePlan,
 	rules []ConflictRuleConfig) (Resolution, error) {
 
 	res := Resolution{Path: f.Path}
 
-	oursBytes, err := blobAtPath(tgtRepo, "HEAD", f.Path)
+	// 取**解析出的那个 commit** 的内容,不是 HEAD ——
+	// 通道配了 source_branch 时,HEAD 与计划用的那棵树可能不是同一棵,
+	// 冲突卷宗里的对照材料必须是计划那棵树的内容。
+	oursBytes, err := blobAtPath(tgtRepo, tgtCommit.Hash.String(), f.Path)
 	if err != nil {
 		return res, err
 	}
-	theirsBytes, err := blobAtPath(srcRepo, "HEAD", f.SourcePath)
+	theirsBytes, err := blobAtPath(srcRepo, srcCommit.Hash.String(), f.SourcePath)
 	if err != nil {
 		return res, err
 	}
 	ours := string(oursBytes)
-	theirs := string(replayer.Rewrite(theirsBytes))
+	// 源侧内容**改写 + gofmt 归一化**,与计划阶段的处理路径一致。
+	//
+	// 只做改写会让解法阶段拿到「未格式化」的源侧内容:
+	// 身份改写会改变 import 的字典序位置,归一化后的内容与目标树里
+	// 已归一化的内容才是同一个坐标系。
+	// 后果是实打实的:取源侧的内容会被原样写进目标树 →
+	// 目标树出现 import 排序错乱 → gofmt 门禁红。
+	// (实测反向回合:3 个文件因 import 组内排序错乱违规。)
+	theirs := string(replayer.PublishForm(f.SourcePath, theirsBytes))
 	res.Ours = ours
 	res.Theirs = theirs
 
@@ -170,7 +183,7 @@ func resolveOne(replayer *mirror.Rewriter, srcRepo, tgtRepo *git.Repository,
 		if err != nil {
 			continue
 		}
-		rewritten := string(replayer.Rewrite(content))
+		rewritten := string(replayer.PublishForm(f.SourcePath, content))
 		srcVersions = append(srcVersions, rewritten)
 		srcBlobs[gitBlobHash([]byte(rewritten))] = struct{}{}
 	}
@@ -225,8 +238,21 @@ func resolveOne(replayer *mirror.Rewriter, srcRepo, tgtRepo *git.Repository,
 		// 合并干净:**优先用合并结果**。
 		// 判据只在合并解不了时兜底 —— 否则会把「能干净合并」的文件
 		// 降级成「保留目标侧」,丢掉源侧的非冲突改动。
+		//
+		// **但合并干净也要过一遍判据**:合并算法按 diff 的对齐划分区域,
+		// 内容重复时对齐可能与 git 不同(实测:3000 组随机用例里 git 判冲突
+		// 而本实现判干净的有 38 组 —— 差异在粒度,不在内容丢失)。
+		// 万一某处真被漏判,判据是最后一道防线:
+		// 源侧把脱敏域名换回真实域名,不能就这么进公开仓。
+		if hit, ruleName, reason := applyConflictRules(rules, ours, theirs); hit {
+			res.Verdict = ResolutionConflict
+			res.Reason = fmt.Sprintf("合并无冲突,但规则「%s」判定仍需人工:%s", ruleName, reason)
+			return res, nil
+		}
 		res.Verdict = ResolutionMergeClean
-		res.Content = merged
+		// 合并结果也归一化:diff3 按 hunk 拼装,拼出来的 import 块
+		// 未必还是 gofmt 的字典序(两侧都干净 ≠ 拼完干净)。
+		res.Content = string(mirror.GofmtNormalize(f.SourcePath, []byte(merged)))
 		res.Reason = "两边均改动但不重叠,三向合并无冲突"
 	default:
 		// 合并有冲突 → 试冲突判据(有些「冲突」其实是机械可判的:

@@ -18,6 +18,7 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -54,9 +55,35 @@ type Options struct {
 	// Auth 是访问镜像远端用的凭据;零值(AuthNone)时 native 后端以
 	// 本机 git 默认凭据(ssh-agent、credential helper)推送。
 	Auth gitbackend.AuthConfig
-	// AllowOverwrite 允许覆盖镜像远端上 tree 不一致的同名 tag。
+	// ScrubRules 痕迹清理规则:发布前把内容里的内网痕迹清掉。
+	//
+	// **为什么镜像发布也需要它**:身份改写只管 **module path**,
+	// 而内容里还有别���内网标识 —— 内网 registry 地址、部署代号、令牌。
+	// 它们原样进**公开 module** 就是泄漏(历史同步侧早有这套规则)。
+	//
+	// 语义与历史同步侧**同一套原语**(mirror.ScrubRule):
+	//   - auto:按 Replacement 替换(为空则删除命中内容);
+	//   - mandatory:命中即**中止发布**(密钥类不进公开仓),不做自动替换。
+	ScrubRules []ScrubRule
+	// AllowOverwrite 允许覆盖镜像远端上 **tree 不一致**的同名 tag。
 	// false 时检测到不一致直接报错,保护已发布版本不被误覆盖。
+	//
+	// ⚠️ **覆盖 = 同一个公开版本号出现两个不同的 h1**:
+	// Go 的 checksum DB 对一个版本号只保留**首次**见到的 hash,
+	// 之后任何拿到新 zip 的消费者都会得到 checksum mismatch,
+	// 而且**无法通过重试自愈**(proxy 也会按版本永久缓存旧 zip)。
+	// 这是「对外可见的公开 module」上最不可逆的一类破坏 ——
+	// 所以它必须显式开启,且报告里必须打出「该版本号的 h1 将变化」。
 	AllowOverwrite bool
+	// AllowUnverifiedPush 远端不可达/认证失败时**盲推**(跳过一致性检查)。
+	//
+	// 与 AllowOverwrite 是两件事,必须分开授权:
+	//   - AllowOverwrite:「我知道内容会变,确认覆盖」;
+	//   - AllowUnverifiedPush:「我连不上远端,查不了状态,先推了再说」。
+	//
+	// 原实现里 AllowOverwrite 顺带允许了后者(文档没写),已拆开 ——
+	// 一个开关同时管「覆盖」与「盲推」,等于把两个风险捆在一起授权。
+	AllowUnverifiedPush bool
 	// DryRun 为 true 时执行到远端一致性检查为止(校验、身份改写、门禁、
 	// 远端比对),不合成 commit/tag、不推送;用于发布前预检。
 	DryRun bool
@@ -68,8 +95,11 @@ type TagReport struct {
 	SourceCommit string
 	Tree         string
 	Commit       string
-	// ReplacedFiles 是发生了身份改写的文件(仓库内相对路径)。
+	// ReplacedFiles 是**内容真的被身份改写**的文件(仓库内相对路径)。
 	ReplacedFiles []string
+	// ResidualFiles 是**仍带着内网标识**的文件:规则本该改写,却因为
+	// 二进制/超限而原样保留。非空即意味着本次发布被中止(未推送)。
+	ResidualFiles []string
 	// VerifyCmd 是发布后建议执行的验证命令。
 	VerifyCmd string
 
@@ -80,6 +110,24 @@ type TagReport struct {
 	TreeMatchedRemote bool
 	// OverwroteDivergent 表示在 tree 不一致且 AllowOverwrite 下完成了覆盖。
 	OverwroteDivergent bool
+	// ScrubHits 本次发布清理掉的痕迹命中(逐条带规则名与行号)。
+	//
+	// 密钥类(mandatory)的命中**不回显原文**,只标记位置。
+	ScrubHits []ScrubHit
+	// TagAlreadyPublished 表示远端已有**同内容**的同名 tag,本次未重推。
+	//
+	// 幂等重跑不该改写对外可见的 tag 对象:tag 的 hash 变了,
+	// 已经 pin 了 pseudo-version(形如 v0.0.0-<时间>-<commit12>)的消费者
+	// 就拉不到那个版本了。内容一致时**什么都不动**才是真幂等。
+	TagAlreadyPublished bool
+	// H1WillChange 表示本次发布**改写了已发布版本的内容**:
+	// 同一个公开版本号将出现两个不同的 h1,已发布过该版本的消费者
+	// 会 checksum mismatch 且无法自愈。
+	//
+	// 报告里必须显式带出这一条 —— 覆盖是唯一会造成这种不可逆后果的动作。
+	H1WillChange bool
+	// Warning 面向人的提醒(覆盖/盲推这类「用户可能没意识到的后果」)。
+	Warning string
 }
 
 // Report 是整次发布的报告。
@@ -215,14 +263,44 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	report.SourceCommit = srcCommit.Hash.String()
 
 	// --- 读源树并全量身份改写(只读 canonical,写临时仓库) ---
-	b := &builder{repo: p.repo, storer: p.workRepo.Storer, mapping: p.opts.Mapping}
+	b, err := newBuilder(p.repo, p.workRepo.Storer, p.opts.Mapping, p.opts.ScrubRules)
+	if err != nil {
+		return nil, fmt.Errorf("编译身份规则失败: %w", err)
+	}
 	treeHash, err := b.rewriteTree(srcCommit.TreeHash, "")
 	if err != nil {
 		return nil, err
 	}
 	report.ReplacedFiles = b.replaced
+	report.ResidualFiles = b.residual
+	report.ScrubHits = b.scrubHits
+	// **强制人工处理的痕迹命中 ⇒ 中止发布**。
+	//
+	// 密钥类不做自动替换(自动替换可能留下半吊子状态,比留痕更危险),
+	// 但「留痕」不等于「可以发布」—— 密钥进公开 module 就是泄漏。
+	// 历史同步侧的处理是「该文件不发布」;镜像发布是整棵树,
+	// 所以只能整棵中止。
+	if len(b.mandatoryHits) > 0 {
+		return report, fmt.Errorf("内容命中强制人工处理的痕迹规则(%d 处),已中止(未推送):%s"+
+			" —— 密钥类不做自动替换,请人工清理后再发布",
+			len(b.mandatoryHits), strings.Join(b.mandatoryHits, ", "))
+	}
 	report.Tree = treeHash.String()
-	slog.Info("mirror: 身份改写完成", "tag", tag, "tree", treeHash.String(), "files", len(b.replaced))
+	slog.Info("mirror: 身份改写完成", "tag", tag, "tree", treeHash.String(),
+		"files", len(b.replaced), "residual", len(b.residual))
+
+	// **有残留就中止,不推送**。
+	//
+	// 残留 = 规则本该改写、却因为二进制/超限而原样保留的内网标识。
+	// 把它原样发到公开仓,等于这个工具的核心职责(公开化)没做到。
+	// 与其发出去再让人发现,不如在这里停住并把文件列出来。
+	if len(b.residual) > 0 {
+		// **把报告一起返回**:残留清单在 report 里,
+		// 只报错不给清单的话,调用方无从知道该处理哪些文件。
+		return report, fmt.Errorf("身份改写后仍有内网标识残留(%d 个文件),已中止(未推送):%s"+
+			" —— 这些文件是二进制或超过 %d 字节的大小上限,无法安全改写;请人工处理后再发布",
+			len(b.residual), strings.Join(b.residual, ", "), maxRewriteSize)
+	}
 
 	// --- 编译门禁:改写后必须可编译才允许推送 ---
 	buildDir, err := os.MkdirTemp("", "gomirror-build-*")
@@ -241,14 +319,26 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	// --- 远端一致性检查:同名 tag 已存在且 tree 不一致时默认中止 ---
 	res, existed, overwrote, err := p.checkRemoteTag(ctx, tag, treeHash)
 	if err != nil {
-		// 远端为空仓库是首次发布的正常状态(无内容可覆盖),安全跳过
-		if strings.Contains(err.Error(), "empty") {
+		// 远端为空仓库是首次发布的正常状态(无内容可覆盖),安全跳过。
+		//
+		// **必须精确判空**:旧实现用 `strings.Contains(err.Error(), "empty")` ——
+		// 任何含 "empty" 的错误都被当成空仓库,于是
+		// "empty git-upload-pack given"、"cred session: empty secret"
+		// 这类错误会把「一致性检查失败」降级成「空仓库,跳过」,
+		// 于是可能覆盖已发布的同名 tag,而报告说「没覆盖」。
+		if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 			slog.Info("mirror: 远端为空仓库(首次发布),跳过一致性检查", "tag", tag)
-		} else if !p.opts.AllowOverwrite {
-			// 网络故障/认证失败时无法确认远端状态,拒绝盲推防覆盖已发布版本
-			return nil, fmt.Errorf("远端一致性检查失败(拒绝盲推,防覆盖已发布版本;确认覆盖请设置 AllowOverwrite): %w", err)
+		} else if !p.opts.AllowUnverifiedPush {
+			// 网络故障/认证失败时无法确认远端状态,拒绝盲推防覆盖已发布版本。
+			//
+			// **盲推由 AllowUnverifiedPush 单独授权** —— 原实现里它被
+			// AllowOverwrite 顺带放行(文档没写),等于把「覆盖已发布版本」
+			// 与「查不到远端状态」捆成一个开关。
+			return nil, fmt.Errorf("远端一致性检查失败(拒绝盲推,防覆盖已发布版本;"+
+				"确认要盲推请设置 AllowUnverifiedPush): %w", err)
 		} else {
-			slog.Warn("mirror: 远端一致性检查不可用,AllowOverwrite 已开启,继续推送", "tag", tag, "error", err)
+			slog.Warn("mirror: 远端一致性检查不可用,AllowUnverifiedPush 已开启,继续推送", "tag", tag, "error", err)
+			report.Warning = "远端一致性检查不可用(远端不可达),本次推送未核对远端已有版本"
 		}
 	}
 	report.RemoteTagExisted = existed
@@ -257,6 +347,15 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	if res == compareMismatched && !overwrote {
 		return nil, fmt.Errorf(
 			"镜像远端已存在同名 tag %s 且内容(tree)与本次合成结果不一致,拒绝覆盖已发布版本;确认要覆盖请设置 AllowOverwrite", tag)
+	}
+	if overwrote {
+		// **覆盖的不可逆后果必须显式带出**:
+		// 同一个公开版本号将出现两个不同的 h1,已发布过该版本的消费者
+		// 会 checksum mismatch 且无法自愈(checksum DB 对一个版本号
+		// 只保留首次见到的 hash,proxy 也按版本永久缓存)。
+		report.H1WillChange = true
+		report.Warning = "覆盖已发布的同名 tag:该版本号的内容 h1 将变化," +
+			"已发布过该版本的消费者会 checksum mismatch 且无法自愈;正确做法是发新版本号"
 	}
 
 	// --- 合成孤儿 commit 与附注 tag(身份/时间戳继承源 commit,保证幂等) ---
@@ -277,23 +376,107 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	}
 	report.Commit = commitHash.String()
 
-	// --- 推送:同名 tag + main 快照,--force 仅为幂等重跑(同 tag tree 一致) ---
-	if _, err = p.backend.Push(ctx, gitbackend.PushOptions{
+	// --- 推送:先推 tag(对外可见的 module 版本),再 best-effort 推 main 快照 ---
+	//
+	// **必须拆成两次推**。一次 push 带两个 refspec 时,公开仓保护默认分支
+	// (GitHub 默认分支保护 / 组织策略)会拒掉 main 那个 ref ——
+	// 而没有 --atomic 时,**tag 其实已经推上去了**,core 却返回失败,
+	// 壳层把它记成「发布失败」。报告与事实相反,比失败本身更危险:
+	// 运营会以为没发出去,改配置重发。
+	//
+	// main 快照该指向谁,**在推 tag 之前**就算好 ——
+	// 推完再算,远端已经有本次这个 tag,判断会失真。
+	updateMain := p.shouldUpdateMain(ctx, tag)
+
+	// **内容一致就不推 tag**。
+	//
+	// 幂等重跑不该改写对外可见的 tag 对象:tag 的 hash 变了,
+	// 已经 pin 了 pseudo-version 的消费者就拉不到那个版本了。
+	// (module 的 zip/h1 只由 tree 决定,所以内容确实没变 ——
+	//  但 tag 对象变了,对外就是「这个 tag 被替换过」。)
+	if res == compareMatched {
+		report.TagAlreadyPublished = true
+		slog.Info("mirror: 远端已有同内容的同名 tag,本次不重推(保持 tag 对象稳定)", "tag", tag)
+	} else if _, err = p.backend.Push(ctx, gitbackend.PushOptions{
 		RepoPath: p.tmpRepo,
 		Remote:   p.remote,
-		RefSpecs: []string{
-			"refs/tags/" + tag + ":refs/tags/" + tag,
-			"refs/heads/main:refs/heads/main",
-		},
-		Force: true,
-		Auth:  p.opts.Auth,
+		RefSpecs: []string{"refs/tags/" + tag + ":refs/tags/" + tag},
+		Force:    true,
+		Auth:     p.opts.Auth,
 	}); err != nil {
-		return nil, fmt.Errorf("推送镜像远端 %s 失败: %w", mirrorURL, err)
+		return nil, fmt.Errorf("推送镜像远端 %s 的 tag %s 失败: %w", mirrorURL, tag, err)
+	}
+	if updateMain {
+		if _, err = p.backend.Push(ctx, gitbackend.PushOptions{
+			RepoPath: p.tmpRepo,
+			Remote:   p.remote,
+			RefSpecs: []string{"refs/heads/main:refs/heads/main"},
+			Force:    true,
+			Auth:     p.opts.Auth,
+		}); err != nil {
+			// main 推失败**不影响发布结论**:tag 已经公开了。
+			// 报「发布失败」是假的 —— 只记警告,并在报告里说明。
+			slog.Warn("mirror: main 快照推送失败(tag 已发布)", "tag", tag, "error", err)
+			report.Warning = appendWarning(report.Warning,
+				"main 快照推送失败(不影响本次 tag 的发布):"+err.Error())
+		}
+	} else {
+		slog.Info("mirror: 本次 tag 不比远端已有版本新,main 快照保持不动", "tag", tag)
 	}
 
 	report.VerifyCmd = "go list -m " + p.opts.Mapping.Target + "@" + tag
 	slog.Info("mirror: 已发布", "module", p.opts.Mapping.Target, "tag", tag, "commit", report.Commit)
 	return report, nil
+}
+
+// shouldUpdateMain 判断本次发布是否应当更新远端 main 快照。
+//
+// main 是公开仓的默认分支(git clone 公开仓、`go get module@main` 拿的是它),
+// 所以它必须**始终指向最新发布的版本**。
+//
+// 原实现是「main ← 本次发布的 tag」—— 于是**补发历史版本会把默认分支回退**:
+// 实测先发 v1.0.0 再补发 v0.9.0 ⇒ main 变成 v0.9.0 的快照,
+// 任何 clone 公开仓的人拿到的是过期代码。
+func (p *publisher) shouldUpdateMain(ctx context.Context, tag string) bool {
+	best := p.remoteHighestVersion(ctx)
+	if best == "" {
+		return true // 远端还没有任何版本 ⇒ 首次发布
+	}
+	return compareVersions(tag, best) > 0
+}
+
+// remoteHighestVersion 返回远端已有 tag 中的最高版本(空 = 远端还没有版本)。
+func (p *publisher) remoteHighestVersion(ctx context.Context) string {
+	rem, err := p.workRepo.Remote(p.remote)
+	if err != nil {
+		return ""
+	}
+	refs, err := rem.List(&git.ListOptions{Auth: p.auth, InsecureSkipTLS: p.opts.Auth.InsecureSkipTLS})
+	if err != nil {
+		return ""
+	}
+	best := ""
+	for _, ref := range refs {
+		name := ref.Name().Short()
+		if !strings.HasPrefix(name, "v") {
+			continue
+		}
+		if best == "" || compareVersions(name, best) > 0 {
+			best = name
+		}
+	}
+	return best
+}
+
+// appendWarning 往报告的提醒里追加一条(去重,按插入顺序)。
+func appendWarning(cur, msg string) string {
+	if msg == "" {
+		return cur
+	}
+	if cur == "" {
+		return msg
+	}
+	return cur + ";" + msg
 }
 
 // compareResult 描述远端同名 tag 与本次合成 tree 的比对结论。
@@ -314,7 +497,7 @@ func (p *publisher) checkRemoteTag(ctx context.Context, tag string, treeHash plu
 	if err != nil {
 		return compareUnknown, false, false, err
 	}
-	refs, err := rem.List(&git.ListOptions{Auth: p.auth})
+	refs, err := rem.List(&git.ListOptions{Auth: p.auth, InsecureSkipTLS: p.opts.Auth.InsecureSkipTLS})
 	if err != nil {
 		return compareUnknown, false, false, err
 	}
@@ -337,10 +520,11 @@ func (p *publisher) checkRemoteTag(ctx context.Context, tag string, treeHash plu
 	// 取到 refs/mirror-check/<tag>,避免覆盖随后要写入的本地 tag 引用
 	checkRef := plumbing.ReferenceName("refs/mirror-check/" + tag)
 	err = p.workRepo.FetchContext(ctx, &git.FetchOptions{
-		RemoteName: p.remote,
-		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/tags/" + tag + ":" + string(checkRef))},
-		Auth:       p.auth,
-		Force:      true,
+		RemoteName:      p.remote,
+		RefSpecs:        []config.RefSpec{config.RefSpec("+refs/tags/" + tag + ":" + string(checkRef))},
+		Auth:            p.auth,
+		Force:           true,
+		InsecureSkipTLS: p.opts.Auth.InsecureSkipTLS,
 	})
 	if err != nil {
 		return compareUnknown, existed, false, err

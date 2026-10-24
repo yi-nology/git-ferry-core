@@ -28,6 +28,8 @@ type fileSpec struct {
 	path string
 	data string
 	exec bool
+	// linkTo 非空则创建符号链接(指向 linkTo),而不是普通文件。
+	linkTo string
 }
 
 // commitFiles 在 dir 写入文件并提交,返回仓库与 commit。
@@ -36,6 +38,10 @@ func commitFiles(t *testing.T, dir string, files []fileSpec) (*git.Repository, p
 	for _, f := range files {
 		p := filepath.Join(dir, f.path)
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		if f.linkTo != "" {
+			require.NoError(t, os.Symlink(f.linkTo, p))
+			continue
+		}
 		require.NoError(t, os.WriteFile(p, []byte(f.data), 0o644))
 		if f.exec {
 			require.NoError(t, os.Chmod(p, 0o755))
@@ -72,12 +78,12 @@ func makeCanonical(t *testing.T) (dir, mirrorDir string) {
 	require.NoError(t, err)
 
 	r, h := commitFiles(t, dir, []fileSpec{
-		{"go.mod", "module example.com/foo\n\ngo 1.21\n", false},
-		{"main.go", "package main\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/foo/sub\"\n)\n\nfunc main() { fmt.Println(sub.Hello()) }\n", false},
-		{"sub/sub.go", "package sub\n\nfunc Hello() string { return \"hello\" }\n", false},
-		{"README.md", "# foo\n\n用法: go get example.com/foo@latest,子路径见 example.com/foo/llm。\n", false},
-		{"bin.dat", "example.com/foo\x00payload", false},
-		{"run.sh", "#!/bin/sh\necho example.com/foo\n", true},
+		{path: "go.mod", data: "module example.com/foo\n\ngo 1.21\n", exec: false},
+		{path: "main.go", data: "package main\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/foo/sub\"\n)\n\nfunc main() { fmt.Println(sub.Hello()) }\n", exec: false},
+		{path: "sub/sub.go", data: "package sub\n\nfunc Hello() string { return \"hello\" }\n", exec: false},
+		{path: "README.md", data: "# foo\n\n用法: go get example.com/foo@latest,子路径见 example.com/foo/llm。\n\n克隆: git clone https://example.com/foo.git\n", exec: false},
+		{path: "bin.dat", data: "binary\x00payload", exec: false},
+		{path: "run.sh", data: "#!/bin/sh\necho example.com/foo\n", exec: true},
 	})
 	annotatedTag(t, r, "v0.0.1", h)
 	_, err = r.CreateRemote(&config.RemoteConfig{
@@ -181,7 +187,17 @@ func TestPublishEndToEndAndIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	binData, err := readBlobFile(binFile)
 	require.NoError(t, err)
-	assert.Equal(t, "example.com/foo\x00payload", string(binData))
+	assert.Equal(t, "binary\x00payload", string(binData))
+
+	// **克隆 URL(带 .git 后缀)必须整体改写**:
+	// ".git" 是 git 协议后缀,不是 module path 的延续。
+	// 不特判的话边界不成立 → 整条克隆 URL 原样进公开仓。
+	readmeFile, err := blobAt(t, mirror, plumbing.NewTagReferenceName("v0.0.1"), "README.md")
+	require.NoError(t, err)
+	readmeData, err := readBlobFile(readmeFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(readmeData), "git clone https://example.org/bar.git")
+	assert.NotContains(t, string(readmeData), "example.com/foo")
 
 	shFile, err := blobAt(t, mirror, plumbing.NewTagReferenceName("v0.0.1"), "run.sh")
 	require.NoError(t, err)
@@ -243,8 +259,8 @@ func TestPublishBuildGateAbortsBeforePush(t *testing.T) {
 
 	// 改写后仍引用 example.org/bar/nope,但该包不存在 → 门禁失败
 	r, h := commitFiles(t, dir, []fileSpec{
-		{"go.mod", "module example.com/foo\n\ngo 1.21\n", false},
-		{"main.go", "package main\n\nimport _ \"example.com/foo/nope\"\n\nfunc main() {}\n", false},
+		{path: "go.mod", data: "module example.com/foo\n\ngo 1.21\n", exec: false},
+		{path: "main.go", data: "package main\n\nimport _ \"example.com/foo/nope\"\n\nfunc main() {}\n", exec: false},
 	})
 	annotatedTag(t, r, "v0.9.9", h)
 	_, err = r.CreateRemote(&config.RemoteConfig{Name: "github", URLs: []string{mirrorDir}})
@@ -282,8 +298,8 @@ func TestPublishDivergentRemoteGuard(t *testing.T) {
 	other := filepath.Join(t.TempDir(), "other")
 	require.NoError(t, os.MkdirAll(other, 0o755))
 	r2, h2 := commitFiles(t, other, []fileSpec{
-		{"go.mod", "module other.com/x\n\ngo 1.21\n", false},
-		{"a.txt", "divergent\n", false},
+		{path: "go.mod", data: "module other.com/x\n\ngo 1.21\n", exec: false},
+		{path: "a.txt", data: "divergent\n", exec: false},
 	})
 	annotatedTag(t, r2, "v0.0.1", h2)
 	_, err = r2.CreateRemote(&config.RemoteConfig{Name: "github", URLs: []string{mirrorDir}})

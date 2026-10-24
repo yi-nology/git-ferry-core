@@ -26,6 +26,12 @@ func (d *HistoryChannelDAO) Update(ch *model.HistoryChannel) error {
 	return d.db.Save(ch).Error
 }
 
+// UpdateLastEntryHash 更新链尾锚点(只动这一列,不动整行)。
+func (d *HistoryChannelDAO) UpdateLastEntryHash(id uint, hash string) error {
+	return d.db.Model(&model.HistoryChannel{}).Where("id = ?", id).
+		Update("last_entry_hash", hash).Error
+}
+
 // FindAll 分页列出通道。
 func (d *HistoryChannelDAO) FindAll(page Pagination) ([]*model.HistoryChannel, int64, error) {
 	var channels []*model.HistoryChannel
@@ -121,6 +127,41 @@ func (d *HistoryRunDAO) Create(run *model.HistoryRun) error {
 // Update 更新执行记录。
 func (d *HistoryRunDAO) Update(run *model.HistoryRun) error {
 	return d.db.Save(run).Error
+}
+
+// ListPendingProductDirs 返回「还没推送成功」的 apply 记录各自的产物路径。
+//
+// 产物清理要用它兜底:apply 与 push 是两次独立调用,中间可能隔很久
+// (人工流程、值班交接)。只看「目录多旧」就删,会把**还没推送**的产物删掉
+// —— 推送必然失败,而且产物不可恢复(重做 apply 也会因为基线变了而得到不同的 head)。
+//
+// **一条 SQL 搞定**:待推送 = apply 记录,且没有成功的 push 记录指向它。
+//
+// 旧实现先全表捞 apply 记录(整行都读出来),再捞一次 push 记录,在内存里做差集。
+// 而 history_runs 每 apply/push 一次就涨一行,这条查询又挂在
+// **每次 apply 与每次 push 的热路径上** —— 于是「待推送产物清单」这条
+// 最频繁的查询恰好是全表扫描(实测 1 万行时 EXPLAIN 给出 SCAN history_runs)。
+// 现在:一条带 NOT IN 子查询的 SQL + Pluck(只取需要的列)+ 复合索引。
+func (d *HistoryRunDAO) ListPendingProductDirs() ([]string, error) {
+	// 已推送成功的 apply 记录:有 push 记录指向它且状态为 success。
+	pushed := d.db.Model(&model.HistoryRun{}).
+		Select("pushed_run_id").
+		Where("kind = ? AND status = ? AND pushed_run_id <> 0",
+			model.HistoryRunKindPush, model.HistoryRunSuccess)
+
+	var out []string
+	if err := d.db.Model(&model.HistoryRun{}).
+		Where("kind = ? AND work_repo_path <> ''", model.HistoryRunKindApply).
+		Where("id NOT IN (?)", pushed).
+		Pluck("work_repo_path", &out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Delete 删除执行记录(链尾截断的模拟与运维清理用)。
+func (d *HistoryRunDAO) Delete(id uint) error {
+	return d.db.Delete(&model.HistoryRun{}, id).Error
 }
 
 // FindByID 按 ID 取执行记录。

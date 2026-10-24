@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -146,6 +147,32 @@ type MirrorTargetInput struct {
 	// token→token 值;ssh_key→私钥 PEM。存储前整体加密。
 	Credential string `json:"credential"`
 	Username   string `json:"username"`
+	// InsecureSkipTLS 跳过 TLS 校验(SSH 下等价于跳过主机密钥校验)。
+	InsecureSkipTLS bool `json:"insecureSkipTLS"`
+	// HostKeyFingerprint 期望的 SSH 主机公钥指纹("SHA256:xxx" 或裸 base64)。
+	// 设置后连接时校验公钥指纹必须一致,否则拒绝(防 MITM)。
+	HostKeyFingerprint string `json:"hostKeyFingerprint"`
+	// KnownHostsPath 指定 known_hosts 文件(空 = 用 ~/.ssh/known_hosts)。
+	KnownHostsPath string `json:"knownHostsPath"`
+}
+
+// MirrorScrubRuleInput 是一条痕迹清理规则的入参。
+//
+// 形状与历史同步侧一致(见 service.ScrubRuleDTO)。
+type MirrorScrubRuleInput struct {
+	// Name 规则名(出现在命中报告里)。
+	Name string `json:"name"`
+	// Category 类别分组(如 "internal-host" / "secret"),仅用于展示。
+	Category string `json:"category"`
+	// Pattern 正则源码。
+	Pattern string `json:"pattern"`
+	// Severity 处理强度:auto / mandatory,默认 auto。
+	//
+	// mandatory(密钥类)命中即**中止发布** —— 不做自动替换,
+	// 也不允许它进公开 module。
+	Severity string `json:"severity"`
+	// Replacement 命中后的替换文本;auto 且为空表示删除。
+	Replacement string `json:"replacement"`
 }
 
 type CreateMirrorChannelInput struct {
@@ -153,6 +180,45 @@ type CreateMirrorChannelInput struct {
 	Mode    string              `json:"mode"`
 	RepoKey string              `json:"repoKey"`
 	Targets []MirrorTargetInput `json:"targets"`
+	// ScrubRules 痕迹清理规则:发布前把内容里的内网痕迹清掉。
+	//
+	// 身份改写只管 module path;内网 registry / 部署代号 / 令牌
+	// 原样进公开 module 就是泄漏。
+	ScrubRules []MirrorScrubRuleInput `json:"scrubRules"`
+}
+
+// compileScrubRules 把痕迹规则入参编译成可执行的规则。
+//
+// 正则编不过就报错 —— 错误规则留在配置里,只会在发布那一刻炸。
+func compileScrubRules(in []MirrorScrubRuleInput) ([]mirror.ScrubRule, error) {
+	out := make([]mirror.ScrubRule, 0, len(in))
+	for i, r := range in {
+		pattern, err := regexp.Compile(r.Pattern)
+		if err != nil {
+			return nil, errors.Wrapf(err, "第 %d 条痕迹规则的 pattern 非法", i+1)
+		}
+		severity := mirror.ScrubAuto
+		if r.Severity == "mandatory" {
+			severity = mirror.ScrubMandatory
+		}
+		out = append(out, mirror.ScrubRule{
+			Name: r.Name, Category: r.Category, Pattern: pattern,
+			Severity: severity, Replacement: r.Replacement,
+		})
+	}
+	return out, nil
+}
+
+// channelScrubRules 取通道的痕迹规则(已编译)。
+func channelScrubRules(ch *model.MirrorChannel) ([]mirror.ScrubRule, error) {
+	if ch == nil || ch.ScrubRules == "" {
+		return nil, nil
+	}
+	var in []MirrorScrubRuleInput
+	if err := json.Unmarshal([]byte(ch.ScrubRules), &in); err != nil {
+		return nil, errors.Wrap(err, "通道的痕迹规则配置损坏")
+	}
+	return compileScrubRules(in)
 }
 
 // ---------- 通道 CRUD ----------
@@ -182,6 +248,18 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		Name:    in.Name,
 		Mode:    in.Mode,
 		RepoKey: in.RepoKey,
+	}
+	if len(in.ScrubRules) > 0 {
+		// 规则在**创建时**就要校验(正则编不过就别落库),
+		// 否则错误会推迟到发布时才暴露。
+		if _, err := compileScrubRules(in.ScrubRules); err != nil {
+			return nil, err
+		}
+		raw, err := json.Marshal(in.ScrubRules)
+		if err != nil {
+			return nil, errors.Wrap(err, "marshal scrub rules failed")
+		}
+		ch.ScrubRules = string(raw)
 	}
 	if in.Mode == model.MirrorModePublish {
 		dir, cleanup, err := m.ensureRepo(ctx, ch)
@@ -226,6 +304,11 @@ func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetIn
 		TargetModule: in.TargetModule,
 		CredType:     in.CredType,
 		Username:     in.Username,
+		// SSH 主机密钥钉扎:配了就必须**存下来** ——
+		// 钉扎信息丢了等于没钉(重启后悄悄退化成不校验)。
+		InsecureSkipTLS:    in.InsecureSkipTLS,
+		HostKeyFingerprint: in.HostKeyFingerprint,
+		KnownHostsPath:     in.KnownHostsPath,
 	}
 	if in.Credential != "" {
 		enc, err := m.cm.Encrypt(in.Credential)
@@ -278,6 +361,9 @@ func (m *MirrorService) UpdateMirrorTarget(ctx context.Context, targetID uint, i
 	t.TargetModule = in.TargetModule
 	t.CredType = in.CredType
 	t.Username = in.Username
+	t.InsecureSkipTLS = in.InsecureSkipTLS
+	t.HostKeyFingerprint = in.HostKeyFingerprint
+	t.KnownHostsPath = in.KnownHostsPath
 	if in.Credential != "" {
 		enc, err := m.cm.Encrypt(in.Credential)
 		if err != nil {
@@ -380,6 +466,7 @@ func (m *MirrorService) ensureRepo(ctx context.Context, ch *model.MirrorChannel)
 		if err = m.backend.Clone(ctx, gitbackend.CloneOptions{URL: repo.CloneURL, Path: dir, Auth: auth}); err != nil {
 			return "", cleanup, fmt.Errorf("re-clone 失败: %w", err)
 		}
+		return dir, cleanup, nil
 	}
 	return dir, cleanup, nil
 }
@@ -437,7 +524,14 @@ func (m *MirrorService) targetAuth(t *model.MirrorTarget) (gitbackend.AuthConfig
 			// 走 SSH 认证失败而不是悄悄降级成匿名)。
 			return gitbackend.AuthConfig{Type: gitbackend.AuthSSH}, nil
 		}
-		return gitbackend.NewSSHKeyContentAuth(plain, ""), nil
+		auth := gitbackend.NewSSHKeyContentAuth(plain, "")
+		// **SSH 主机密钥钉扎**:目标侧之前没法钉 ——
+		// 于是同一次发布里「检查路径」fail-closed、「推送路径」TOFU。
+		// 现在两个路径都从这一份 AuthConfig 走,配了就都校验。
+		auth.HostKeyFingerprint = t.HostKeyFingerprint
+		auth.KnownHostsPath = t.KnownHostsPath
+		auth.InsecureSkipTLS = t.InsecureSkipTLS
+		return auth, nil
 	default:
 		return gitbackend.AuthConfig{}, fmt.Errorf("不支持的凭据类型: %s", t.CredType)
 	}
@@ -643,6 +737,10 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 	if err != nil {
 		return nil, err
 	}
+	scrubRules, err := channelScrubRules(ch)
+	if err != nil {
+		return nil, err
+	}
 	rep2, err := mirror.Publish(ctx, mirror.Options{
 		RepoDir:        dir,
 		Mapping:        mirror.Mapping{Source: ch.Module, Target: t.TargetModule},
@@ -651,6 +749,9 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 		Auth:           auth,
 		AllowOverwrite: allowOverwrite,
 		DryRun:         dryRun,
+		// 痕迹清理:身份改写只管 module path;
+		// 内网 registry / 部署代号 / 令牌得靠规则清。
+		ScrubRules: scrubRules,
 	})
 	if err != nil {
 		return nil, err

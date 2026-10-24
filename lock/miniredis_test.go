@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -138,4 +139,46 @@ func TestSemaphore_RenewDoesNotResurrectExpiredSlot_miniredis(t *testing.T) {
 	ok, err = sem.Acquire(ctx, "b")
 	require.NoError(t, err)
 	require.True(t, ok, "b should acquire the freed slot")
+}
+
+// TestNewLocker_AutoRenew 钉住「锁在持有期间不会自己过期」这条性质。
+//
+// 通道锁的持有时长由业务决定(一次克隆+推送可能几十分钟),而 TTL 是固定的 ——
+// 不续期的话,操作进行到一半锁就过期了,另一个实例能进同一通道,
+// 两边的哈希链会分叉(实测症状:prev_hash mismatch)。
+//
+// 续期 goroutine 由 Unlock 停止:解锁后不该再把已删的键续活。
+//
+// 用**真 Redis**测:miniredis 的时钟是虚拟的(靠 FastForward 推进),
+// 而续期的 ticker 走真实时间,两者对不上,测不出真问题。
+func TestNewLocker_AutoRenew(t *testing.T) {
+	client := getTestRedisClient(t)
+	defer closeClient(t, client)
+	ctx := context.Background()
+
+	locker := NewLocker(client)
+	const ttl = 2 * time.Second
+	key := fmt.Sprintf("task:renew:%d", time.Now().UnixNano())
+	ownerID, err := locker.TryLock(ctx, key, ttl)
+	require.NoError(t, err)
+	require.NotEmpty(t, ownerID)
+
+	// 等过 TTL(续期间隔是 ttl/2,真 Redis 上是真实过期)。
+	time.Sleep(ttl + 700*time.Millisecond)
+
+	// 锁还在 → 续期生效。
+	require.True(t, client.Exists(ctx, "git-sync:lock:"+key).Val() > 0,
+		"锁在持有期间不能自己过期(自动续期失效)")
+
+	// 另一个持有者仍拿不到。
+	_, err = locker.TryLock(ctx, key, ttl)
+	require.ErrorIs(t, err, distlock.ErrLockNotAcquired)
+
+	// 解锁后键消失,且续期停止(不会把键续活)。
+	require.NoError(t, locker.Unlock(ctx, key, ownerID))
+	require.False(t, client.Exists(ctx, "git-sync:lock:"+key).Val() > 0,
+		"解锁后锁键必须消失")
+	time.Sleep(ttl)
+	require.False(t, client.Exists(ctx, "git-sync:lock:"+key).Val() > 0,
+		"解锁后不能被续期续活")
 }

@@ -44,7 +44,54 @@ type builder struct {
 	repo     *git.Repository
 	storer   storer.EncodedObjectStorer
 	mapping  Mapping
+	replayer *Rewriter
+	// replaced 是**内容真的被改写**的文件(仓库内相对路径)。
 	replaced []string
+	// residual 是**仍带着内网标识**的文件:规则本该改写,却因
+	// 二进制/超限而原样保留。发布阶段会因此中止。
+	residual []string
+	// scrubRules 是痕迹清理规则(见 Options.ScrubRules)。
+	scrubRules []ScrubRule
+	// scrubHits 是痕迹清理的命中(逐条带规则名与行号)。
+	scrubHits []ScrubHit
+	// mandatoryHits 是**强制人工处理**的命中(密钥类)——
+	// 发布阶段会因此中止(密钥不进公开 module)。
+	mandatoryHits []string
+}
+
+// newBuilder 建一个改写用的 builder。
+//
+// 编译失败直接报错:规则非法时宁可不发,也不发一棵没改干净的树。
+func newBuilder(repo *git.Repository, st storer.EncodedObjectStorer, m Mapping, rules []ScrubRule) (*builder, error) {
+	rw, err := NewRewriter([]IdentityRule{{
+		Source: m.Source,
+		Target: m.Target,
+		Kind:   KindModule,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return &builder{repo: repo, storer: st, mapping: m, replayer: rw, scrubRules: rules}, nil
+}
+
+// scrub 对单个文件做痕迹清理,记录命中。
+//
+// **顺序在改写之后** —— 规则对改写后的内容生效(与历史同步侧一致)。
+// 强制人工处理的命中(密钥类)不改内容,但**必须中止发布**:
+// 留痕不等于可以发布 —— 密钥进公开 module 就是泄漏。
+func (b *builder) scrub(path string, data []byte) []byte {
+	if len(b.scrubRules) == 0 {
+		return data
+	}
+	res := ApplyScrub(data, b.scrubRules)
+	for _, h := range res.Hits {
+		b.scrubHits = append(b.scrubHits, h)
+		if h.Mandatory {
+			b.mandatoryHits = append(b.mandatoryHits,
+				fmt.Sprintf("%s:%d(%s)", path, h.Line, h.Rule))
+		}
+	}
+	return res.Content
 }
 
 // rewriteTree 递归改写以 srcHash 为根的子树,prefix 是仓库内相对路径前缀
@@ -71,11 +118,20 @@ func (b *builder) rewriteTree(srcHash plumbing.Hash, prefix string) (plumbing.Ha
 			if err != nil {
 				return plumbing.ZeroHash, err
 			}
-			if len(data) > maxRewriteSize ||
-				bytes.IndexByte(data, 0) >= 0 ||
-				!bytes.Contains(data, []byte(b.mapping.Source)) {
-				// 二进制/超限/无引用:原样保留,并把对象复制进临时仓库,
-				// 保证物化与推送时对象完整
+			// **「原样保留」不等于「里面没有内网标识」**。
+			//
+			// 二进制/超限的 blob 走原样保留路径,但它照样可能写着内网
+			// module path —— 原样保留 = 把内网标识发到公开仓。
+			// 所以残留判据不能是「文件大不大」,而是
+			// 「**规则本该改写这里,却没改写**」(replayer.Pending)。
+			oversized := len(data) > maxRewriteSize
+			binary := bytes.IndexByte(data, 0) >= 0
+			if oversized || binary {
+				if b.replayer.Pending(data) {
+					// 记残留:发布阶段会因此中止并把文件列出来。
+					b.residual = append(b.residual, path)
+				}
+				// 把对象复制进临时仓库,保证物化与推送时对象完整。
 				if err := b.copyBlobObject(entry.Hash); err != nil {
 					return plumbing.ZeroHash, err
 				}
@@ -83,22 +139,50 @@ func (b *builder) rewriteTree(srcHash plumbing.Hash, prefix string) (plumbing.Ha
 			}
 			// 模块路径边界改写:旧实现 bytes.ReplaceAll 会把 github.com/a/b-extra
 			// 中的 github.com/a/b 也替换为 github.com/x/y(产生错误路径)。
-			// 改用正则:源路径后必须跟非 Go 模块路径字符(或文本末尾)才替换,
+			// 改用统一改写器:源路径后必须跟非 Go 模块路径字符(或文本末尾)才替换,
 			// 使 github.com/a/b/pkg 仍被正确改写(子包),但 b-extra 不被误改。
-			rewritten := rewriteModulePath(data, b.mapping.Source, b.mapping.Target)
+			// **发布形态 = 改写 + gofmt 归一化**(与历史同步同源):
+			// 两条链路曾对同一份源码发布出不同的字节(import 顺序),
+			// 公开仓的 gofmt CI 会挂,而类型门禁看不出来。
+			rewritten := b.replayer.PublishForm(path, data)
+			// **痕迹清理在改写之后**(规则对改写后的内容生效),
+			// 顺序与历史同步侧一致:rewrite → gofmt → scrub。
+			rewritten = b.scrub(path, rewritten)
 			h, err := b.writeBlob(rewritten)
 			if err != nil {
 				return plumbing.ZeroHash, err
 			}
 			entries[i].Hash = h
-			b.replaced = append(b.replaced, path)
+			// **只把「内容真的变了」的文件记成改写过**。
+			// 旧实现无条件记账:一个因为边界不成立而原样保留的文件
+			// 也会被列进「已改写」—— 报告说改了,实际没改。
+			if !bytes.Equal(rewritten, data) {
+				b.replaced = append(b.replaced, path)
+			}
 		default:
 			// symlink 需要其目标 blob;gitlink(子模块)指向外部仓库,
 			// git 推送本就不携带子模块对象
 			if entry.Mode == filemode.Symlink {
-				if err := b.copyBlobObject(entry.Hash); err != nil {
+				// **symlink 目标也要过改写**:目标是一个路径串,
+				// 里面同样可能写着内网 module path(指向内网目录的软链)。
+				// 不改写 = 内网标识照样进公开仓。
+				data, err := b.blobBytes(entry.Hash)
+				if err != nil {
 					return plumbing.ZeroHash, err
 				}
+				rewritten := b.replayer.PublishForm(path, data)
+				if bytes.Equal(rewritten, data) {
+					if err := b.copyBlobObject(entry.Hash); err != nil {
+						return plumbing.ZeroHash, err
+					}
+					continue
+				}
+				h, err := b.writeBlob(rewritten)
+				if err != nil {
+					return plumbing.ZeroHash, err
+				}
+				entries[i].Hash = h
+				b.replaced = append(b.replaced, path)
 			}
 		}
 	}

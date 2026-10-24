@@ -86,7 +86,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 		if target.Name == "" || target.URL == "" {
 			return nil, fmt.Errorf("推送目标的 Name 与 URL 都不能为空")
 		}
-		if err := ensureRemote(repo, target); err != nil {
+		if err := EnsureRemote(repo, target.Name, target.URL); err != nil {
 			return nil, err
 		}
 		if _, err := backend.Push(ctx, gitbackend.PushOptions{
@@ -108,30 +108,35 @@ func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 	return report, nil
 }
 
-// ensureRemote 确保工作仓库里有该远端且 URL 一致。
-func ensureRemote(repo *git.Repository, target PushTarget) error {
+// EnsureRemote 确保工作仓库里有该远端且 URL 一致;URL 变了就改写它
+// (远端换地址是正常运维场景)。
+//
+// **单一实现**:服务层(预检的影响面检查、回滚的强推)也用它 ——
+// 两份实现漂移过一次(服务侧那份对「URLs 为空」的处理与这里不同),
+// 同一个远端在两条路径上行为不一致。
+func EnsureRemote(repo *git.Repository, name, url string) error {
 	remotes, err := repo.Remotes()
 	if err != nil {
 		return fmt.Errorf("读取远端列表失败: %w", err)
 	}
 	for _, r := range remotes {
-		if r.Config().Name == target.Name {
-			if r.Config().URLs[0] == target.URL {
-				return nil
-			}
-			// URL 变了:更新它(远端换了地址是正常运维场景)。
-			if err := repo.DeleteRemote(target.Name); err != nil {
-				return fmt.Errorf("删除远端 %s 失败: %w", target.Name, err)
-			}
-			break
+		if r.Config().Name != name {
+			continue
 		}
+		if len(r.Config().URLs) > 0 && r.Config().URLs[0] == url {
+			return nil
+		}
+		// URL 变了(或远端没记 URL):更新它。
+		if err := repo.DeleteRemote(name); err != nil {
+			return fmt.Errorf("删除远端 %s 失败: %w", name, err)
+		}
+		break
 	}
-	_, err = repo.CreateRemote(&config.RemoteConfig{
-		Name: target.Name,
-		URLs: []string{target.URL},
-	})
-	if err != nil {
-		return fmt.Errorf("创建远端 %s 失败: %w", target.Name, err)
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: name,
+		URLs: []string{url},
+	}); err != nil {
+		return fmt.Errorf("创建远端 %s 失败: %w", name, err)
 	}
 	return nil
 }

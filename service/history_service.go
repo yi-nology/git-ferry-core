@@ -118,18 +118,37 @@ func jsonString(v any) string {
 type HistoryChannelInput struct {
 	// Name 通道名(唯一)。
 	Name string `json:"name"`
+	//
+	// 下面这些字段用**指针**:区分「未指定」(nil)与「显式给值」
+	// (含显式清空 —— 指向空串)。
+	//
+	// 为什么必须区分:更新是**部分更新**语义。用普通 string 的话,
+	// 「只改一下目录」会把没提到的字段一起抹成空 ——
+	// 身份映射(module_source/module_target)被抹掉后,
+	// 执行时就没有任何身份规则,内网 module path 会**原样**进公开仓。
+	// 这不是理论风险:只传目录的更新请求就能造成。
+	//
+	// 线上格式不变:指针与值序列化出来是同一个 JSON,
+	// 缺字段 → nil,给了空串 → 指向空串。
+	//
 	// SourceRepoKey / TargetRepoKey 两侧仓库 key(取自 Repo 表)。
-	SourceRepoKey string `json:"source_repo_key"`
-	TargetRepoKey string `json:"target_repo_key"`
+	SourceRepoKey *string `json:"source_repo_key"`
+	TargetRepoKey *string `json:"target_repo_key"`
 	// SourceDir / TargetDir 本地路径直连(与 repo key 二选一)。
-	SourceDir string `json:"source_dir"`
-	TargetDir string `json:"target_dir"`
-	// ModuleSource / ModuleTarget 身份映射(必填)。
-	ModuleSource string `json:"module_source"`
-	ModuleTarget string `json:"module_target"`
+	SourceDir *string `json:"source_dir"`
+	TargetDir *string `json:"target_dir"`
+	// ModuleSource / ModuleTarget 身份映射(创建时必填)。
+	ModuleSource *string `json:"module_source"`
+	ModuleTarget *string `json:"module_target"`
 	// HostSource / HostTarget 主机名映射(可选)。
-	HostSource string `json:"host_source"`
-	HostTarget string `json:"host_target"`
+	HostSource *string `json:"host_source"`
+	HostTarget *string `json:"host_target"`
+	// AuthorName / AuthorEmail 目标侧新提交的作者身份(公开形态)。
+	//
+	// 留空则用中性的公开身份。**不继承源提交的作者** ——
+	// 源侧作者是内网开发者,继承等于把内网人员信息发到公开仓。
+	AuthorName  *string `json:"author_name"`
+	AuthorEmail *string `json:"author_email"`
 	// PathRules 路径规则。
 	PathRules []PathRuleDTO `json:"path_rules"`
 	// ScrubRules 痕迹规则。
@@ -137,8 +156,8 @@ type HistoryChannelInput struct {
 	// ConflictRules 冲突自动判据;空 = 不启用。
 	ConflictRules []history.ConflictRuleConfig `json:"conflict_rules,omitempty"`
 	// SourceBranch / TargetBranch 分支。
-	SourceBranch string `json:"source_branch"`
-	TargetBranch string `json:"target_branch"`
+	SourceBranch *string `json:"source_branch"`
+	TargetBranch *string `json:"target_branch"`
 	// Enabled 是否启用。
 	//
 	// 用指针区分「未指定」(nil:创建时默认启用,更新时保持原值)
@@ -197,6 +216,16 @@ type HistoryRunDTO struct {
 	Commits     string `json:"commits"`
 	Files       string `json:"files"`
 	Skipped     string `json:"skipped"`
+	// ScrubReport 痕迹检测报告(JSON 字符串)。
+	//
+	// 形状:{"hits":[{rule,category,line,text,mandatory}...],
+	//       "mandatory":[{...}...]}
+	//   - hits:本次发布涉及的全部痕迹命中(含已自动清理的);
+	//   - mandatory:其中**强制人工处理**的子集(密钥类)。
+	//
+	// 两者必须分开:自动清理类的命中**已随内容发布**,
+	// 强制人工类的命中意味着**这个文件没有被发布**。
+	// 混在一起会让人以为密钥已处理。
 	ScrubReport string `json:"scrub_report"`
 	GateReport  string `json:"gate_report"`
 	RefsBefore  string `json:"refs_before"`
@@ -218,6 +247,31 @@ type HistoryPushDTO struct {
 	Pushed []string `json:"pushed"`
 	// Heads 各远端推送后的 HEAD。
 	Heads map[string]string `json:"heads"`
+	// Error 推送失败的原因(成功时为空)。
+	//
+	// 推送失败时**仍然要带回这条**:
+	// 「移植成功、推送失败」是最需要人接手的局面 ——
+	// 产物已经在本地,重试推送靠的就是它。
+	Error string `json:"error,omitempty"`
+}
+
+// HistoryPushOptions 是推送的选项。
+type HistoryPushOptions struct {
+	// Force 强制推送:即使远端与本次移植的基线已分叉也照样覆盖。
+	//
+	// 默认不强制 —— 强推会把远端的提交**静默丢掉**
+	// (实测:远端别人的提交被丢弃后只剩 0 条)。
+	// 要强制,必须由人明确指定。
+	Force bool `json:"force,omitempty"`
+	// ForceApprovedBy 强制推送的批准者标识。
+	//
+	// **强制推送必须有批准者**:入口层校验角色是 admin 后把批准者填进来,
+	// core 只认「有人批准过」这个事实。
+	//
+	// 为什么要下沉到 core:入口有三条(HTTP / MCP / AI 助手),
+	// 任何一条忘了判角色,闸门就形同虚设 —— 放在 core 才能一劳永逸。
+	// (实测:MCP 端点只判了「能写」,operator 就能强推覆盖远端提交。)
+	ForceApprovedBy string `json:"force_approved_by,omitempty"`
 }
 
 // HistoryRollbackDTO 是回滚的结果。
@@ -359,6 +413,12 @@ func (s *Service) HistoryApply(ctx context.Context, channelID uint) (*HistoryRun
 // HistoryPush 按通道推送最近一次执行记录的产物。
 func (s *Service) HistoryPush(ctx context.Context, channelID uint) (*HistoryPushDTO, error) {
 	return s.history.HistoryPush(ctx, channelID)
+}
+
+// HistoryPushWithOptions 按通道推送(可指定强制推送)。
+func (s *Service) HistoryPushWithOptions(ctx context.Context, channelID uint,
+	opts HistoryPushOptions) (*HistoryPushDTO, error) {
+	return s.history.HistoryPushWithOptions(ctx, channelID, opts)
 }
 
 // HistoryPushRun 推送指定执行记录的产物。

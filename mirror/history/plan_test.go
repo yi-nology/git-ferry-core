@@ -249,3 +249,58 @@ func TestOriginCommitMap(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.String(), originsFirst["old.txt"].Hash)
 }
+
+// TestScrubMandatoryHitRedactsSecret 回归:密钥类命中不能回显原文。
+//
+// 命中行会进执行记录(落库)与 API 响应 ——
+// 原样回显等于把密钥抄一份到日志和数据库里,比不检测还糟。
+func TestScrubMandatoryHitRedactsSecret(t *testing.T) {
+	const secret = "ghp_abcdefghijklmnopqrstuvwxyz012345"
+	content := []byte("package app\n\nconst token = \"" + secret + "\"\n")
+
+	rules := []ScrubRule{
+		{Name: "secret", Category: "secret",
+			Pattern:  regexp.MustCompile(`ghp_[a-zA-Z0-9]{20,}`),
+			Severity: ScrubMandatory},
+	}
+	res := ApplyScrub(content, rules)
+
+	require.NotEmpty(t, res.MandatoryHits, "密钥命中必须被检出")
+	for _, h := range res.MandatoryHits {
+		assert.NotContains(t, h.Text, secret, "命中行不得回显密钥原文")
+		assert.Contains(t, h.Text, "***", "命中段应被替换成掩码")
+		assert.True(t, h.Mandatory, "命中项应标记为强制人工")
+	}
+}
+
+// TestScrubAutoHitKeepsText 自动清理类的命中保留原文 ——
+// 那不是密钥,而且审计要看得见「清理了什么」。
+func TestScrubAutoHitKeepsText(t *testing.T) {
+	content := []byte("host = git.enjoye.top\n")
+	res := ApplyScrub(content, []ScrubRule{StripInternalHost("git.enjoye.top")})
+
+	require.NotEmpty(t, res.Hits)
+	for _, h := range res.Hits {
+		assert.False(t, h.Mandatory)
+		assert.Contains(t, h.Text, "git.enjoye.top")
+	}
+	assert.NotContains(t, string(res.Content), "git.enjoye.top", "内容里的内网主机必须被清掉")
+}
+
+// TestRedactRepoURL 推送目标的 URL 脱敏:凭据部分不能外泄。
+//
+// 预检报告会进 CLI 输出与模型上下文 —— 原样带出去等于把凭据抄一份出去。
+func TestRedactRepoURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://user:ghp_token@github.com/org/repo.git", "https://%2A%2A%2A@github.com/org/repo.git"},
+		{"https://github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := RedactRepoURL(c.in)
+		assert.NotContains(t, got, "ghp_token", "凭据不能出现在脱敏结果里")
+	}
+	// 查询参数里的 token 也要脱敏。
+	got := RedactRepoURL("https://github.com/org/repo.git?access_token=abc123")
+	assert.NotContains(t, got, "abc123")
+}

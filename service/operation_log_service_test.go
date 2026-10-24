@@ -3,11 +3,15 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func setupOperationLogTestService(t *testing.T) *OperationLogService {
@@ -73,4 +77,46 @@ func TestOperationLogService_Stats(t *testing.T) {
 		t.Errorf("expected total >= 2, got %d", total)
 	}
 	t.Logf("Stats: today=%d, week=%d, total=%d", today, week, total)
+}
+
+// TestOperationLogChainSurvivesPrecisionChange 回归:把审计日志的时间精度
+// 从纳秒改成毫秒之后,**旧记录必须仍然验得过**。
+//
+// 改动时间精度后,新记录落库的是毫秒值,旧记录库里仍是纳秒值。
+// 链的哈希是「每条记录用它自己存的值算的」—— 两批记录各自算各自的,
+// 混在一起也应当接得上。
+//
+// 这条断言守的是「改了存储精度 ≠ 毁掉历史审计证据」。
+func TestOperationLogChainSurvivesPrecisionChange(t *testing.T) {
+	svc := setupOperationLogTestService(t)
+	ctx := context.Background()
+
+	// 第一条:模拟**旧记录**(纳秒精度,直接写库,绕开新的截断逻辑)。
+	old := &model.OperationLog{
+		Action: "sync", ResourceType: "repo", ResourceKey: "k",
+		Resource: "r", Actor: "u", IP: "127.0.0.1", Status: model.StatusSuccess,
+		Detail: "旧记录(纳秒)",
+		// 显式给纳秒时间戳 —— 这正是升级前写进去的形态。
+		CreatedAt: time.Now(),
+	}
+	old.EntryHash = model.ComputeEntryHash("", old)
+	require.NoError(t, svc.opLogDAO.Create(old))
+
+	// 后续记录走正常路径(毫秒精度)。
+	prev := old.EntryHash
+	for i := 0; i < 2; i++ {
+		entry := &model.OperationLog{
+			Action: "sync", ResourceType: "repo", ResourceKey: "k",
+			Resource: "r", Actor: "u", IP: "127.0.0.1", Status: model.StatusSuccess,
+			Detail: "新记录(毫秒)",
+		}
+		require.NoError(t, svc.Record(ctx, entry))
+		prev = entry.EntryHash
+	}
+	_ = prev
+
+	res, err := svc.VerifyAuditChain()
+	require.NoError(t, err)
+	assert.True(t, res.OK, "精度变更后旧记录必须仍然验得过:"+res.Message)
+	assert.Equal(t, 3, res.Checked)
 }

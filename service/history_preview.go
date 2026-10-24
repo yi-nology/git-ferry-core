@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
+	errors "github.com/cockroachdb/errors"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/mirror/history"
@@ -96,66 +99,113 @@ type PreviewReport struct {
 // **不推送、不改原始目标仓**:物化与门禁都在临时工作副本上进行。
 // 预检的结论必须与真正执行时的结论一致 —— 两者跑的是同一套代码路径。
 func (h *HistoryService) HistoryPreview(ctx context.Context, channelID uint) (*PreviewReport, error) {
-	ch, opts, err := h.channelAndOptions(ctx, channelID)
+	ch, opts, plan, err := h.planAndResolve(ctx, channelID)
 	if err != nil {
 		return nil, err
-	}
-	plan, err := history.BuildPlan(ctx, *opts)
-	if err != nil {
-		return nil, err
-	}
-	if err := history.Resolve(ctx, *opts, plan); err != nil {
-		return nil, err
-	}
-	if err := h.applyOverrides(ctx, channelID, plan); err != nil {
-		return nil, err
-	}
-
-	report := &PreviewReport{
-		ChannelID:        channelID,
-		ChannelName:      ch.Name,
-		Summary:          plan.Summary,
-		PendingConflicts: history.Dossiers(plan),
-		PlanMarkdown:     plan.Markdown(),
 	}
 
 	// 物化 + 门禁:回答「这次推出去能不能编译」。
+	//
+	// 预检的物化落在**临时目录**(看完即删);执行路径落在产物目录(推送要用)。
 	workDir, err := os.MkdirTemp("", "history-preview-*")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(workDir) }()
 
-	applyRes, err := history.Apply(ctx, history.ApplyOptions{
-		SourceDir:  opts.SourceDir,
-		TargetDir:  opts.TargetDir,
-		TargetRef:  opts.TargetRef,
+	res, err := h.materialize(ctx, *opts, plan, workDir, nil)
+	if err != nil {
+		return nil, fmt.Errorf("预演移植失败: %w", err)
+	}
+	gate := h.gateCheck(ctx, res.RepoPath, internalIdentifiers(ch)...)
+	return h.previewFrom(ctx, ch, plan, res, gate)
+}
+
+// planAndResolve 算计划、解冲突、应用人工裁决 —— **一次调用内只算一遍**。
+//
+// 单独调 preview / apply 时各算一次是对的:两次调用之间仓可能变了,
+// 必须按当下的仓重算。但**一次调用内**绝不能算两遍 ——
+// 一键同步原本 preview 算一遍、apply 又算一遍,等于把流水线跑两遍
+// (实仓上 plan+resolve≈65s、物化≈50s、类型门禁≈60s)。
+//
+// 更要紧的是**一致性**:两遍算出的 new_head 可能不同
+// (两次计算之间仓变了)⇒ 预检报告说的树不是真正要推的那棵树。
+func (h *HistoryService) planAndResolve(ctx context.Context, channelID uint) (
+	*model.HistoryChannel, *history.Options, *history.Plan, error) {
+	ch, opts, err := h.channelAndOptions(ctx, channelID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	plan, err := history.BuildPlan(ctx, *opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := history.Resolve(ctx, *opts, plan); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := h.applyOverrides(ctx, channelID, plan); err != nil {
+		return nil, nil, nil, err
+	}
+	return ch, opts, plan, nil
+}
+
+// materialize 把计划物化成工作仓(写盘 + 生成新提交)。
+//
+// workDir 决定产物落在哪:预检用临时目录(看完即删),
+// 执行用服务自己的产物目录(推送要用)。keepDirs 是要保留的产物目录
+// (还没推送成功的那些)。
+func (h *HistoryService) materialize(ctx context.Context, opts history.Options, plan *history.Plan,
+	workDir string, keepDirs []string) (*history.ApplyResult, error) {
+	h.materializeRuns.Add(1)
+	return history.Apply(ctx, history.ApplyOptions{
+		SourceDir: opts.SourceDir,
+		TargetDir: opts.TargetDir,
+		TargetRef: opts.TargetRef,
+		// 源 ref 要与计划一致(否则计划与写盘不是同一棵树)。
+		SourceRef:  opts.SourceRef,
 		Rules:      opts.Rules,
 		PathRules:  opts.PathRules,
 		ScrubRules: opts.ScrubRules,
 		Plan:       plan,
 		WorkDir:    workDir,
+		// **作者身份也要一致**:作者参与 commit hash ——
+		// 预检用默认公开作者算出的 new_head,与真实产物(配了作者)对不上,
+		// 用户按预检的 head 做事后核对必然对不上。
+		AuthorName:      opts.AuthorName,
+		AuthorEmail:     opts.AuthorEmail,
+		KeepProductDirs: keepDirs,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("预演移植失败: %w", err)
+}
+
+// previewFrom 从「已物化的结果 + 门禁结论」组装预检报告。
+//
+// **预览与执行共用同一份物化结果** —— 一键同步因此不必跑两遍流水线,
+// 而且报告说的就是真正要推的那棵树(报告里的 new_head 与推送的 head 逐字一致)。
+func (h *HistoryService) previewFrom(ctx context.Context, ch *model.HistoryChannel,
+	plan *history.Plan, res *history.ApplyResult, gate GateReport) (*PreviewReport, error) {
+
+	report := &PreviewReport{
+		ChannelID:        ch.ID,
+		ChannelName:      ch.Name,
+		Summary:          plan.Summary,
+		PendingConflicts: history.Dossiers(plan),
+		PlanMarkdown:     plan.Markdown(),
+		BaseHead:         res.BaseHead,
+		NewHead:          res.Head,
+		Commits:          res.Commits,
+		AppliedFiles:     res.AppliedFileList(),
+		SkippedFiles:     res.Skipped,
+		ScrubHits:        res.ScrubHits,
+		Gate:             gate,
 	}
-	report.BaseHead = applyRes.BaseHead
-	report.NewHead = applyRes.Head
-	report.Commits = applyRes.Commits
-	report.AppliedFiles = applyRes.AppliedFileList()
-	report.SkippedFiles = applyRes.Skipped
-	report.ScrubHits = applyRes.MandatoryHits
 	for _, f := range plan.Files {
 		if f.Disposition == history.DispositionPreserve {
 			report.ProtectedCount++
 		}
 	}
 
-	// 门禁:物化出来的那棵树,gofmt 干净吗?类型检查过吗?
-	report.Gate = h.gateCheck(ctx, applyRes.RepoPath)
-
 	// 推送影响面:各远端现在的 HEAD、与基线的关系、推送后会变成什么。
-	targets, err := h.targets.FindByChannel(channelID)
+	targets, err := h.targets.FindByChannel(ch.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +214,7 @@ func (h *HistoryService) HistoryPreview(ctx context.Context, channelID uint) (*P
 		branch = "main"
 	}
 	for _, t := range targets {
-		impact, err := h.checkTargetImpact(ctx, applyRes.RepoPath, applyRes.BaseHead, applyRes.Head, branch, t)
+		impact, err := h.checkTargetImpact(ctx, res.RepoPath, res.BaseHead, res.Head, branch, t)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +247,12 @@ func (h *HistoryService) HistoryPreview(ctx context.Context, channelID uint) (*P
 }
 
 // gateCheck 对物化出来的树跑门禁(gofmt + 全量类型检查)。
-func (h *HistoryService) gateCheck(ctx context.Context, dir string) GateReport {
+//
+// ids 是要脱敏的内网标识(见 internalIdentifiers):门禁错误会流进
+// 模型上下文(agent 调工具 → 错误进 prompt)与审计记录,
+// 而通道 DTO **不暴露** module_source / host_source ——
+// 错误文本就成了内网标识外流的口子。
+func (h *HistoryService) gateCheck(ctx context.Context, dir string, ids ...string) GateReport {
 	g := GateReport{OK: true}
 	g.GofmtViolations = history.CheckGofmt(dir)
 	if len(g.GofmtViolations) > 0 {
@@ -205,7 +260,7 @@ func (h *HistoryService) gateCheck(ctx context.Context, dir string) GateReport {
 	}
 	if err := mirror.TypeCheckGate(ctx, dir); err != nil {
 		g.OK = false
-		g.TypeCheckErr = err.Error()
+		g.TypeCheckErr = redactIdentifiers(err.Error(), ids)
 	}
 	switch {
 	case !g.OK && g.TypeCheckErr != "":
@@ -218,6 +273,48 @@ func (h *HistoryService) gateCheck(ctx context.Context, dir string) GateReport {
 	return g
 }
 
+// internalIdentifiers 列出通道的内网标识(按长度降序,长的先替换)。
+//
+// 为什么连「路径部分」一起脱敏:远端的报错原文里常见
+// "Cannot find repository: <org>/<repo>" —— 那是 module path 去掉主机段的部分。
+//
+// 为什么长���先替换:否则主机名会先把完整的 module path 拦腰截断,
+// 剩下 "/org/repo" 裸露在外,等于没脱敏。
+func internalIdentifiers(ch *model.HistoryChannel) []string {
+	if ch == nil {
+		return nil
+	}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		out = append(out, s)
+		if i := strings.Index(s, "/"); i >= 0 && i+1 < len(s) {
+			out = append(out, s[i+1:])
+		}
+	}
+	add(ch.ModuleSource)
+	add(ch.HostSource)
+	sort.Slice(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
+	return out
+}
+
+// redactIdentifiers 把内网标识从文本里抹成占位符。
+func redactIdentifiers(text string, ids []string) string {
+	if text == "" || len(ids) == 0 {
+		return text
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, id, "[内网标识已脱敏]")
+	}
+	return text
+}
+
 // checkTargetImpact 检查一个推送目标的影响面。
 //
 // 关键:远端当前 HEAD 与本地基线的关系 ——
@@ -228,7 +325,8 @@ func (h *HistoryService) checkTargetImpact(ctx context.Context, workRepoPath, ba
 	t *model.HistoryTarget) (TargetImpact, error) {
 
 	imp := TargetImpact{
-		Name: t.Name, RepoURL: t.RepoURL,
+		// URL 脱敏:预检报告会进 CLI 输出与模型上下文,而它可能内嵌凭据。
+		Name: t.Name, RepoURL: history.RedactRepoURL(t.RepoURL),
 		BaseHead: baseHead, NewHead: newHead,
 	}
 	auth, err := h.targetAuth(t)
@@ -239,7 +337,7 @@ func (h *HistoryService) checkTargetImpact(ctx context.Context, workRepoPath, ba
 	if err != nil {
 		return imp, fmt.Errorf("打开工作仓库失败: %w", err)
 	}
-	if _, err := ensureRemote(repo, t.Name, t.RepoURL); err != nil {
+	if err := history.EnsureRemote(repo, t.Name, t.RepoURL); err != nil {
 		return imp, err
 	}
 	// 拉取远端该分支的最新状态。
@@ -282,15 +380,36 @@ func (h *HistoryService) checkTargetImpact(ctx context.Context, workRepoPath, ba
 	return imp, nil
 }
 
-// isEmptyRemoteErr 判断拉取失败是否因为远端是空仓库(分支不存在)。
+// isEmptyRemoteErr 判断拉取失败是否只是因为「远端没有这条分支 / 远端是空仓」
+// —— 两者都是**首次发布的正常状态**,不是异常。
+//
+// **必须精确判空**(实测三种真实错误形态):
+//
+//	远端完全空(首次发布)  → "remote repository is empty"
+//	                        = transport.ErrEmptyRemoteRepository
+//	远端有内容但无该分支  → "couldn't find remote ref \"refs/heads/main\""
+//	远端不存在            → "repository not found"
+//
+// 旧实现用字符串匹配三个子句,**真正的空仓一个都没命中** ——
+// 于是首次发布到空远端时预检报「远端状态未知(不可达或空仓库),推送前请确认」,
+// 把正常状态说成了异常。而 "not found" + "refs/heads/" 那一支反过来会把
+// 「远端不存在 / 认证失败」误判成「空仓库(首次发布),推送会创建该分支」——
+// 让人以为可以放心首发。
+//
+// 镜像发布侧早已改用 errors.Is 判同一件事(见 mirror/mirror.go),
+// 这里跟着统一:**同一事实只有一处判定**。
 func isEmptyRemoteErr(err error) bool {
 	if err == nil {
 		return false
 	}
+	// 远端完全空:go-git 的哨兵错误(经 gitbackend 的包装后仍可 errors.Is 命中)。
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return true
+	}
+	// 远端有内容但没有这条分支:git 的标准措辞。
 	msg := err.Error()
 	return strings.Contains(msg, "couldn't find remote ref") ||
-		strings.Contains(msg, "remote ref does not exist") ||
-		strings.Contains(msg, "not found") && strings.Contains(msg, "refs/heads/")
+		strings.Contains(msg, "remote ref does not exist")
 }
 
 // isAncestorCommit 判断 anc 是否是 desc 的祖先。
@@ -394,6 +513,17 @@ type HistorySyncOptions struct {
 	ChannelID uint
 	// Force 有阻塞项时也继续(调用方仍应让用户确认)。
 	Force bool
+	// ForcePush 强制推送:远端与本次移植的基线已分叉也照样覆盖。
+	//
+	// 与 Force 分开:「忽略阻塞项继续」和「覆盖远端已有的提交」是两件事,
+	// 不该共用一个开关 —— 后者会丢掉远端别人的提交。
+	ForcePush bool
+	// ForcePushApprovedBy 强制推送的批准者标识(非空 = 已有人批准)。
+	//
+	// **强制推送必须有批准者**:入口层校验角色是 admin 后把批准者填进来,
+	// core 只认「有人批准过」这个事实。放在 core 才能一劳永逸 ——
+	// 入口有三条(HTTP / MCP / AI 助手),任何一条忘了判角色闸门就形同虚设。
+	ForcePushApprovedBy string
 }
 
 // HistorySyncReport 是一次同步的结果。
@@ -417,15 +547,53 @@ type HistorySyncReport struct {
 //
 // 这三件事都不是「程序能替用户决定的」—— 停下让人看,比推上去再回滚便宜。
 func (h *HistoryService) HistorySync(ctx context.Context, opts HistorySyncOptions) (*HistorySyncReport, error) {
-	pv, err := h.HistoryPreview(ctx, opts.ChannelID)
+	// 一次锁住整个通道:预检 → 移植 → 推送必须串行。
+	// (锁不可重入,所以下面走的是内部实现,不再各自取锁。)
+	release, err := h.lockChannel(ctx, opts.ChannelID)
 	if err != nil {
 		return nil, err
 	}
-	report := &HistorySyncReport{Preview: pv}
+	defer release()
 
-	if !pv.Gate.OK {
-		report.Blocked = append(report.Blocked, "门禁未通过:"+pv.Gate.Note)
+	// **整条流水线只跑一遍**:计划算一次、物化一次、门禁一次。
+	//
+	// 旧实现是「先 HistoryPreview(临时目录物化 + 门禁)再 applyRun(产物目录物化 + 门禁)」:
+	// 实仓上 plan+resolve≈65s、物化≈50s、类型门禁≈60s —— 等于把流水线跑两遍。
+	// 更要紧的是**一致性**:两遍算出的 new_head 可能不同
+	// (两次计算之间仓变了)⇒ 预检报告说的不是真正要推的那棵树。
+	ch, hopts, plan, err := h.planAndResolve(ctx, opts.ChannelID)
+	if err != nil {
+		return nil, err
 	}
+	out, err := h.applyWithPlan(ctx, ch, hopts, plan)
+	if err != nil {
+		return nil, err
+	}
+	report := &HistorySyncReport{Apply: out.Run}
+
+	if out.Res == nil {
+		// 物化就失败了:没有可预览的树。
+		report.Blocked = append(report.Blocked, "移植未成功:"+out.Run.Error)
+		return report, nil
+	}
+	pv, err := h.previewFrom(ctx, ch, plan, out.Res, out.Gate)
+	if err != nil {
+		return nil, err
+	}
+	report.Preview = pv
+
+	// **移植自己失败(如门禁未过)就不要再往下走**。
+	//
+	// applyWithPlan 把门禁结论写进执行记录,门禁不通过时状态就是 failed。
+	// 此时继续往下走等于「明知编译不过还去推」—— 推送侧也会独立核对并拒绝,
+	// 但没必要走到那一步才失败:报告里已经写明原因了。
+	//
+	// **这条不看 Force**:Force 是「忽略阻塞项继续」,不是「允许推编译不过的树」。
+	if out.Run.Status != model.HistoryRunSuccess {
+		report.Blocked = append(report.Blocked, "移植未成功:"+out.Run.Error)
+		return report, nil
+	}
+
 	if len(pv.PendingConflicts) > 0 {
 		report.Blocked = append(report.Blocked,
 			fmt.Sprintf("有 %d 个冲突待人工裁决", len(pv.PendingConflicts)))
@@ -437,15 +605,18 @@ func (h *HistoryService) HistorySync(ctx context.Context, opts HistorySyncOption
 		return report, nil
 	}
 
-	applyRes, err := h.HistoryApply(ctx, opts.ChannelID)
-	if err != nil {
-		return nil, err
+	// **强制推送的闸门放在 core**:没有批准者就不许强推。
+	// 入口层(HTTP/MCP/AI)负责校验「谁是批准者」(admin),core 只认这个事实。
+	if opts.ForcePush && opts.ForcePushApprovedBy == "" {
+		return report, fmt.Errorf("强制推送需要批准者(admin 角色):没有批准者就不能覆盖远端已有的提交")
 	}
-	report.Apply = applyRes
-
-	pushRes, err := h.HistoryPush(ctx, opts.ChannelID)
+	pushRes, err := h.pushChannelLatest(ctx, opts.ChannelID, opts.ForcePush)
 	if err != nil {
-		return nil, err
+		// **移植已经成功、推送失败**:把已完成的移植结果带回去。
+		// 直接返回 nil 会让调用方以为什么都没发生,产物路径也丢了 ——
+		// 而产物正是重试推送时唯一能用的东西。
+		report.Push = &HistoryPushDTO{Error: err.Error()}
+		return report, fmt.Errorf("移植成功但推送失败: %w", err)
 	}
 	report.Push = pushRes
 	return report, nil

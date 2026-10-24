@@ -156,3 +156,80 @@ func TestMirrorChannelCreateValidation(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "不支持的凭据类型")
 }
+
+// TestMirrorTargetSSHPinningRoundTrip 回归:SSH 主机密钥钉扎必须**落库并生效**。
+//
+// 背景:目标侧之前**没法钉**主机密钥 —— 于是同一次发布里
+// 「检查路径」无 known_hosts 就硬错(fail-closed)、「推送路径」却用 accept-new(TOFU),
+// **两套策略相反**。现在钉扎字段从入参落库,并进 AuthConfig。
+//
+// 还要盯住「钉扎信息不能丢」:它一旦丢失(没落库 / 标记成不持久),
+// 就等于重启后悄悄退化成不校验 —— 比没有这个功能更危险。
+func TestMirrorTargetSSHPinningRoundTrip(t *testing.T) {
+	m, repoDAO, db := setupMirrorServiceTest(t)
+	ctx := context.Background()
+	require.NoError(t, repoDAO.Create(&model.Repo{
+		Key: "github/acme/app", Name: "app", Platform: "github",
+		PlatformOwner: "acme", PlatformRepo: "app",
+		CloneURL: "https://github.com/acme/app.git",
+	}))
+
+	ch, err := m.CreateMirrorChannel(ctx, CreateMirrorChannelInput{
+		Name: "pin", Mode: model.MirrorModeBackup, RepoKey: "github/acme/app",
+		Targets: []MirrorTargetInput{{
+			Remote: "github", RepoURL: "https://github.com/acme/app-backup.git",
+			CredType: model.MirrorCredSSHKey, Credential: "-----BEGIN KEY-----\nfake\n-----END KEY-----\n",
+			HostKeyFingerprint: "SHA256:abcdefghijklmnop",
+			KnownHostsPath:     "/etc/ssh/known_hosts",
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, ch.Targets, 1)
+
+	// ① 落库:钉扎信息不能只在内存里。
+	var stored model.MirrorTarget
+	require.NoError(t, db.Where("id = ?", ch.Targets[0].ID).First(&stored).Error)
+	assert.Equal(t, "SHA256:abcdefghijklmnop", stored.HostKeyFingerprint,
+		"主机密钥指纹必须落库(丢了等于没钉)")
+	assert.Equal(t, "/etc/ssh/known_hosts", stored.KnownHostsPath)
+
+	// ② 生效:targetAuth 把它带进 AuthConfig(检查路径与推送路径同一份)。
+	auth, err := m.targetAuth(&stored)
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:abcdefghijklmnop", auth.HostKeyFingerprint)
+	assert.Equal(t, "/etc/ssh/known_hosts", auth.KnownHostsPath)
+}
+
+// TestChannelScrubRulesCompile 回归:通道配置的痕迹规则要能编译成可执行的规则。
+//
+// 镜像发布侧的关键防线:身份改写只管 module path,内容里的内网 registry /
+// 部署代号 / 令牌靠痕迹规则清。规则存在通道上(JSON),发布时编译。
+//
+// 两条必须成立:
+//   - 规则**编不过**要在发布前就报错(否则错误留到发布那一刻才炸);
+//   - mandatory(密钥类)要正确映射(它会中止发布)。
+func TestChannelScrubRulesCompile(t *testing.T) {
+	// ① 规则编不过 → 报错,且指到第几条。
+	_, err := compileScrubRules([]MirrorScrubRuleInput{
+		{Name: "ok", Pattern: `^ok$`},
+		{Name: "bad", Pattern: `([`},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "第 2 条")
+
+	// ② 通道里存的 JSON → 编译出的规则。
+	ch := &model.MirrorChannel{ScrubRules: `[{"name":"reg","category":"host","pattern":"registry\\.internal","severity":"mandatory"}]`}
+	rules, err := channelScrubRules(ch)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "reg", rules[0].Name)
+	assert.Equal(t, "registry\\.internal", rules[0].Pattern.String())
+	assert.True(t, rules[0].Mandatory(), "severity=mandatory 必须映射成强制人工处理")
+
+	// ③ 空配置 / 坏 JSON。
+	rules, err = channelScrubRules(&model.MirrorChannel{})
+	require.NoError(t, err)
+	assert.Empty(t, rules)
+	_, err = channelScrubRules(&model.MirrorChannel{ScrubRules: "{not json"})
+	require.Error(t, err)
+}

@@ -3,7 +3,11 @@ package mirror
 import (
 	"context"
 	"fmt"
+	"go/build"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -44,7 +48,49 @@ func TypeCheckGate(ctx context.Context, dir string) error {
 		}
 	})
 	if firstErr != nil {
-		return fmt.Errorf("类型检查失败: %w", firstErr)
+		// **报错里的本机绝对路径要抹掉**。
+		//
+		// go list 报错时会带上 module cache 的绝对路径:
+		//   ... in /Users/<用户名>/go/pkg/mod/cache/vcs/<hash>: exit status 128
+		// 那是本机目录布局 + 操作者用户名 —— 对定位问题毫无用处,
+		// 却会一路流进模型上下文与日志(门禁错误是 agent 工具的返回内容)。
+		//
+		// 只动路径:报错里的 file:line:col 位置保持原样 —— 那是诊断的关键。
+		return fmt.Errorf("类型检查失败: %s", sanitizeLocalPaths(firstErr.Error()))
 	}
 	return nil
+}
+
+// sanitizeLocalPaths 把门禁错误里的**本机绝对路径**抹成占位符。
+//
+// 判据是「本机路径前缀」(用户主目录、Go module 缓存)——
+// 不做泛化的绝对路径匹配:报错里也有 URL 与 file:line:col 位置,
+// 一刀切会把诊断信息也毁掉。
+func sanitizeLocalPaths(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	prefixes := localPathPrefixes()
+	// 长的先替换:否则先替换主目录,module cache 的前缀就匹配不到了。
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+	for _, p := range prefixes {
+		if p == "" || p == "/" {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, p, "[本机路径已脱敏]")
+	}
+	return msg
+}
+
+// localPathPrefixes 返回本机可能出现的路径前缀。
+func localPathPrefixes() []string {
+	var out []string
+	if home, err := os.UserHomeDir(); err == nil && home != "" && home != "/" {
+		out = append(out, home)
+		out = append(out, filepath.Join(home, "go", "pkg", "mod"))
+	}
+	if gp := build.Default.GOPATH; gp != "" {
+		out = append(out, filepath.Join(gp, "pkg", "mod"))
+	}
+	return out
 }

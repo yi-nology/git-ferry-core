@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -85,7 +86,10 @@ func Materialize(ctx context.Context, opts Options, plan *Plan, dir string) (*Ma
 			if err != nil {
 				return nil, err
 			}
-			target := filepath.Join(dir, filepath.FromSlash(f.Path))
+			target, err := safeJoin(dir, f.Path)
+			if err != nil {
+				return nil, err
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return nil, err
 			}
@@ -115,7 +119,10 @@ func Materialize(ctx context.Context, opts Options, plan *Plan, dir string) (*Ma
 				rep.HeldFiles = append(rep.HeldFiles, f.Path)
 				continue
 			}
-			target := filepath.Join(dir, filepath.FromSlash(f.Path))
+			target, err := safeJoin(dir, f.Path)
+			if err != nil {
+				return nil, err
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return nil, err
 			}
@@ -150,7 +157,7 @@ func portContent(srcRepo *git.Repository, srcFiles map[string]treeFile,
 	if err != nil {
 		return nil, err
 	}
-	return normalizeSource(f.SourcePath, replayer.Rewrite(content)), nil
+	return replayer.PublishForm(f.SourcePath, content), nil
 }
 
 // sourceFileIndex 展开源仓文件表。
@@ -259,4 +266,47 @@ func countFiles(dir string) int {
 		return nil
 	})
 	return n
+}
+
+// safeJoin 把**仓库内相对路径**安全地拼到目标目录下。
+//
+// 目标路径来自路径规则的 `To`,而规则是调用方给的 ——
+// `To` 里带 `..` 就会写到目录之外(实测能写到 out/../escaped/x.go)。
+//
+// 这里做两道闸:
+//  1. 路径必须是相对路径,不能是绝对路径、不能带 `..`;
+//  2. 拼完之后再确认它仍在目标目录内(防符号链接与编码差异)。
+func safeJoin(dir, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("仓库内路径不能为空")
+	}
+	slashed := filepath.ToSlash(rel)
+	if strings.HasPrefix(slashed, "/") {
+		return "", fmt.Errorf("仓库内路径必须是相对路径: %s", rel)
+	}
+	// **先按原文检查 `..`**:规范化会把 `..` 消掉,那样虽然不越界,
+	// 却是**静默改了路径语义**(用户以为写到 A,实际写到 B)—— 直接拒绝更诚实。
+	for _, seg := range strings.Split(slashed, "/") {
+		if seg == ".." {
+			return "", fmt.Errorf("仓库内路径不能含 ..: %s", rel)
+		}
+	}
+	clean := path.Clean("/" + slashed)
+	if clean == "/" {
+		return "", fmt.Errorf("非法的仓库内路径: %s", rel)
+	}
+	target := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
+	// 再确认一次:拼完仍在目标目录内。
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if absTarget != absDir && !strings.HasPrefix(absTarget, absDir+string(os.PathSeparator)) {
+		return "", fmt.Errorf("路径越界: %s", rel)
+	}
+	return target, nil
 }

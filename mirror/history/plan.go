@@ -18,9 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"go/format"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -30,6 +28,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/yi-nology/git-ferry-core/mirror"
+
+	"net/url"
 )
 
 // Disposition 单个文件的处置方式。
@@ -49,20 +49,6 @@ const (
 	// DispositionPreserve 仅目标侧存在,原样保留;移植时不得覆盖。
 	DispositionPreserve Disposition = "preserve"
 )
-
-// ScrubRule 一条痕迹检测与清理规则。
-type ScrubRule struct {
-	// Name 规则名,出现在计划的命中原因里。
-	Name string
-	// Category 类别分组(如 "internal-host" / "secret"),仅用于展示。
-	Category string
-	// Pattern 匹配模式。对**改写后**的内容生效。
-	Pattern *regexp.Regexp
-	// Severity 处理强度,默认 ScrubAuto。
-	Severity ScrubSeverity
-	// Replacement 命中后的替换文本。ScrubAuto 且为空表示**删除**命中内容。
-	Replacement string
-}
 
 // PathRule 一条路径规则。作用于源侧路径,决定它去哪个目标路径、还是被排除。
 type PathRule struct {
@@ -91,18 +77,11 @@ type Options struct {
 	ScrubRules []ScrubRule
 	// ConflictRules 冲突自动判据。只在确定性判定解不了时兜底。
 	ConflictRules []ConflictRuleConfig
-}
-
-// ScrubHit 一处痕迹命中。
-type ScrubHit struct {
-	// Rule 命中的规则名。
-	Rule string
-	// Category 命中的类别。
-	Category string
-	// Line 行号(1 起)。
-	Line int
-	// Text 命中所在行(截断到 200 字节)。
-	Text string
+	// AuthorName / AuthorEmail 目标侧新提交的作者身份(公开形态)。
+	//
+	// 留空则用 DefaultPublicAuthor —— **不继承源提交的作者**。
+	AuthorName  string
+	AuthorEmail string
 }
 
 // FilePlan 单个文件的处置计划。
@@ -360,7 +339,7 @@ func planFile(opts Options, replayer *mirror.Rewriter,
 		if err != nil {
 			return fp, err
 		}
-		rewritten := normalizeSource(srcPath, replayer.Rewrite(content))
+		rewritten := replayer.PublishForm(srcPath, content)
 		fp.ScrubHits = detectScrub(rewritten, opts.ScrubRules)
 		if len(fp.ScrubHits) > 0 {
 			fp.Disposition = DispositionPortWithScrub
@@ -394,7 +373,7 @@ func planFile(opts Options, replayer *mirror.Rewriter,
 	if err != nil {
 		return fp, err
 	}
-	rewritten := normalizeSource(srcPath, replayer.Rewrite(srcContent))
+	rewritten := replayer.PublishForm(srcPath, srcContent)
 	if bytes.Equal(rewritten, tgtContent) {
 		// 改写后一致 —— 这正是身份改写要达成的结果。
 		fp.Disposition = DispositionSame
@@ -425,28 +404,6 @@ func planFile(opts Options, replayer *mirror.Rewriter,
 	}
 	annotateOrigin(origins, &fp)
 	return fp, nil
-}
-
-// normalizeSource 对改写后的源内容做发布侧归一化。
-//
-// 目标侧有 gofmt 门禁(公开树 CI 的 quality.yml 有格式检查步骤),
-// 而身份改写会改变 import 的字典序位置——改写后的源内容会变成「未格式化」
-// (实测 review-service:改写后 50 个文件违反 gofmt,两棵树原始都是 0)。
-//
-// 不归一化就比对,每个引用了模块路径的文件都会留下一处 1 行的假差异,
-// 40 个文件凭空变成「待人工确认」。归一化后再比对,差异才是真实的内容差异。
-//
-// 只处理 .go。语法错误时原样返回:这类问题由类型门禁(GOWORK=off 下的
-// 全量类型检查)报错,不该在这里被吞掉。
-func normalizeSource(path string, data []byte) []byte {
-	if !strings.HasSuffix(path, ".go") {
-		return data
-	}
-	out, err := format.Source(data)
-	if err != nil {
-		return data
-	}
-	return out
 }
 
 // annotateOrigin 标注源侧最后一次修改该文件的提交(辅助信息,非主轴)。
@@ -705,4 +662,35 @@ func readBlob(repo *git.Repository, h plumbing.Hash) ([]byte, error) {
 	}
 	defer func() { _ = r.Close() }()
 	return io.ReadAll(r)
+}
+
+// RedactRepoURL 脱敏仓库 URL 里的凭据部分。
+//
+// 推送目标的 URL **可能内嵌凭据**(https://user:token@host/、?access_token=…)。
+// 预检报告会被 CLI 打印、被 MCP 工具送进模型上下文 ——
+// 原样带出去等于把凭据抄一份到日志和对话记录里。
+//
+// 只脱敏凭据部分,host 与路径保留 —— 用户还要靠它识别「推到哪个仓库」。
+func RedactRepoURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<unparsable-url>"
+	}
+	if u.User != nil {
+		u.User = url.User("***")
+	}
+	if u.RawQuery != "" {
+		q := u.Query()
+		for key := range q {
+			switch strings.ToLower(key) {
+			case "token", "access_token", "private_token", "password", "passwd", "secret", "api_key":
+				q.Set(key, "***")
+			}
+		}
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
 }

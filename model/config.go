@@ -86,6 +86,12 @@ type BackupDestinationConfig struct {
 type SyncConfig struct {
 	// BackupDir git bundle 冷备输出目录(空=禁用)
 	BackupDir string `yaml:"backup_dir" env:"GIT_SYNC_BACKUP_DIR"`
+	// HistoryWorkDir 历史同步的移植产物目录(apply 的工作副本)。
+	//
+	// 空 = 系统临时目录下的 git-ferry-history 子目录。
+	// **建议指到持久目录**:产物要活到「apply 之后的那次 push」,
+	// 放临时目录的话,系统清理临时文件会把待推送的产物删掉。
+	HistoryWorkDir string `yaml:"history_work_dir" env:"GIT_SYNC_HISTORY_WORK_DIR"`
 	// BackupKeep 每任务保留最近 N 份 bundle(0=不轮转,全部保留)
 	BackupKeep int `yaml:"backup_keep" env:"GIT_SYNC_BACKUP_KEEP"`
 	// BackupS3 bundle 异地冷备(S3 兼容);空配置=只存本地

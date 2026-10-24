@@ -42,6 +42,12 @@ type MirrorChannel struct {
 	RepoKey string `gorm:"size:128;not null;index" json:"repoKey"`
 	// Module 是源 module 身份(publish 模式,创建时从 go.mod 读出)。
 	Module string `gorm:"size:255" json:"module"`
+	// ScrubRules 痕迹清理规则(JSON 串):发布前把内容里的内网痕迹清掉。
+	//
+	// 身份改写只管 module path;内网 registry 地址、部署代号、令牌
+	// 这些**不在 module path 里**的标识,原样进公开 module 就是泄漏。
+	// 规则形状与历史同步侧一致{name,category,pattern,severity,replacement}。
+	ScrubRules string `gorm:"type:text" json:"scrubRules,omitempty"`
 
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
@@ -66,6 +72,16 @@ type MirrorTarget struct {
 	Credential    string `gorm:"size:2048" json:"-"`
 	Username      string `gorm:"size:128" json:"username"`
 	HasCredential bool   `gorm:"-" json:"hasCredential"`
+
+	// **SSH 主机密钥钉扎**(与源仓侧同一套字段):
+	// 之前目标侧没法钉 —— 于是「检查路径」无 known_hosts 就硬错(fail-closed)、
+	// 「推送路径」却用 accept-new(TOFU),同一次发布里两套策略相反。
+	// 现在两边都从同一份 AuthConfig 走,配了指纹就都校验。
+	//
+	// **必须落库**:这一项是「放宽安全」的开关,丢了等于悄悄放宽。
+	InsecureSkipTLS    bool   `gorm:"not null;default:false" json:"insecureSkipTLS,omitempty"`
+	HostKeyFingerprint string `gorm:"size:255" json:"hostKeyFingerprint,omitempty"`
+	KnownHostsPath     string `gorm:"size:512" json:"knownHostsPath,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

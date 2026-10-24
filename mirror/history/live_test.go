@@ -200,8 +200,49 @@ func TestLiveHistoryResolveThenVerify(t *testing.T) {
 		report.Materialize.FileCount, len(report.Materialize.AppliedFiles),
 		len(report.Materialize.ResolvedFiles), len(report.Materialize.KeptFiles),
 		len(report.Materialize.HeldFiles), report.Materialize.PreservedFiles)
+	// 基线:9 = 5 真冲突 + 4 无基点。
+	//
+	// 曾经断言 11(7 真冲突 + 4 无基点):那是合并算法**漏判**的产物 ——
+	// 「插入点落在对方改动边界上」被当成不重叠,于是 etc/config-dev.yaml 与
+	// etc/config-prod.yaml 被判成「合并干净」,源侧的真实域名(code-review.me)
+	// 覆盖了目标侧已脱敏的 review.example.com,真实域名会进公开仓。
+	//
+	// merge3 重写并与 git 逐字对拍后(见 merge3_fuzz_test.go / merge3_oracle_test.go),
+	// 本实现与 git 对这两个文件的判定一致,它们不再被漏判,
+	// 真冲突回到 5 个 —— 与设计稿记载的基线(5 真冲突 + 4 无基点)吻合。
 	assert.Len(t, report.Materialize.HeldFiles, 9,
 		"应用解法后仍待人工的应只剩 9 个(5 真冲突 + 4 无基点)")
+
+	// **集合侧的语义门禁**:那两个配置文件必须仍在「待人工」里。
+	//
+	// 条数会随实仓演进而变(依赖升级、提交历史都会动),所以条数断言只是
+	// 「基线漂移提醒」;真正稳定的门禁是这一条 ——
+	// 它们一旦被「合并干净」地写出去,源侧真实域名就跟着进公开仓。
+	for _, p := range []string{"etc/config-dev.yaml", "etc/config-prod.yaml"} {
+		assert.Contains(t, report.Materialize.HeldFiles, p,
+			"%s 必须在待人工集合里(被「合并干净」就意味着源侧真实域名会进公开仓)", p)
+	}
+
+	// **公开树里不能出现源侧的真实域名**(精确到那两个文件)。
+	//
+	// 这是审查发现 #1 的直接后果:合并算法漏判冲突时,
+	// etc/config-dev.yaml / etc/config-prod.yaml 会被「合并干净」——
+	// 源侧的真实域名(code-review.me)覆盖目标侧已脱敏的 review.example.com,
+	// 然后**跟着发布到公开仓**。
+	//
+	// 注意范围:目标仓自己就有 code-review.me(etc/config-local.yaml、
+	// internal/config/yaml.go 等)——那是公开仓自己的域名,合法。
+	// 要盯的是「源侧那两个文件里的域名不许渗进来」。
+	//
+	// 这条断言盯的是最终产物,不是中间结果。
+	for _, p := range []string{"etc/config-dev.yaml", "etc/config-prod.yaml"} {
+		data, rerr := os.ReadFile(filepath.Join(dir, p))
+		require.NoError(t, rerr, "物化产物里应该有 %s", p)
+		assert.NotContains(t, string(data), "code-review.me",
+			"%s 里出现了源侧真实域名(会随发布进公开仓)", p)
+		assert.Contains(t, string(data), "review.example.com",
+			"%s 应保持目标侧已脱敏的域名", p)
+	}
 
 	assert.Empty(t, report.Unformatted, "物化后的目标树存在未格式化文件")
 	assert.Empty(t, report.TypeCheckErr,
@@ -400,4 +441,29 @@ func TestLiveConflictRules(t *testing.T) {
 		}
 	}
 	assert.GreaterOrEqual(t, ruled, 8, "冲突应主要由规则判定并写明依据")
+}
+
+// scanTreeFor 扫目录树,返回包含给定子串的文件路径。
+func scanTreeFor(t *testing.T, root, needle string) []string {
+	t.Helper()
+	var hits []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if info.Size() > 2<<20 {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		if strings.Contains(string(data), needle) {
+			rel, _ := filepath.Rel(root, path)
+			hits = append(hits, rel)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return hits
 }

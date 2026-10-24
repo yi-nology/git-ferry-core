@@ -3,6 +3,8 @@ package service
 import (
 	"errors"
 
+	"gorm.io/gorm"
+
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -100,6 +102,10 @@ func Classify(err error) ErrorClass {
 		return ErrorClassValidation
 	case errors.Is(err, errLegalHold):
 		return ErrorClassConflict
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		// DAO 的「查无此条」= 404,不是 500。
+		// 不分类的话,客户端拿到 500 会去重试一个根本不存在的东西。
+		return ErrorClassNotFound
 	}
 
 	var perr *sdkprov.ProviderError

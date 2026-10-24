@@ -24,10 +24,18 @@ func (s *OperationLogService) Record(ctx context.Context, entry *model.Operation
 	if entry.Status == "" {
 		entry.Status = model.StatusSuccess
 	}
-	if entry.CreatedAt.IsZero() {
-		entry.CreatedAt = time.Now()
-	}
 	if entry.PrevHash == "" && entry.EntryHash == "" {
+		// 时间先归一到毫秒**再**算哈希:哈希输入与入库值必须是同一个值。
+		// (MySQL 的 datetime(3) 存不下纳秒,入库时被四舍五入 →
+		//  校验时从库里读回来重算的哈希对不上 → 整条链误报被篡改。)
+		//
+		// 注意哈希算法本身**不能改**:这条链是既有的,
+		// 改了算法会让历史记录全部对不上,等于毁掉过去的防篡改证据。
+		// 归一放在写入侧,历史数据原样保留。
+		if entry.CreatedAt.IsZero() {
+			entry.CreatedAt = time.Now()
+		}
+		entry.CreatedAt = model.TruncateDBTime(entry.CreatedAt)
 		prev, err := s.opLogDAO.Latest()
 		if err == nil && prev != nil {
 			entry.PrevHash = prev.EntryHash

@@ -2,6 +2,139 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- **历史同步的端到端门禁测试**（`service/history_e2e_test.go`）：core 层跑完整条流水线
+  —— 建通道 → 配目标 → 裁决 → 预检 → 移植 → 推送 → 公开仓真的前进 → 审计链完整 →
+  回滚 → 再推。含**冲突裁决路径**（内容级断言：产物里确实是裁决后的内容）与
+  **source_branch 路径**（发布内容来自指定分支而非 HEAD）。
+- **门禁守门人**（`service/history_gate_guard_test.go`）：编译不过的树不许推出去
+  （apply 状态 failed + 推送被拒 + 远端拿不到坏文件）；产物在 apply 之后被改动，
+  推送被拒。
+- **身份改写的残留与边界测试**（`mirror/residual_test.go`、`mirror/rewrite_git_test.go`、
+  `mirror/gate_test.go`）：二进制/超限文件里的内网标识 ⇒ 中止发布；symlink 目标过改写；
+  克隆 URL（`.git` 后缀）与 scp 形式克隆地址整体改写；`Rewriter.Pending` 判据。
+- **DAO 层索引回归测试**（`dao/history_dao_index_test.go`）：待推送产物清单必须走索引
+  （`EXPLAIN QUERY PLAN` 钉住，不许退回 `SCAN history_runs`），语义与旧实现逐条对齐。
+- **锁的续期守门人**（`lock/renew_test.go`）：钉住 `oekit/redisx` issue #33 的修复 ——
+  `Unlock` 后不留孤儿续期 goroutine、不打「锁丢了」的 WARN（真 Redis，不可用时 skip）。
+
+- **镜像发布支持痕迹清理**（`mirror.Options.ScrubRules` + `model.MirrorChannel.ScrubRules`）：
+  身份改写只管 **module path**，而内容里还有别的内网标识 —— 内网 registry 地址、
+  部署代号、令牌。它们原样进**公开 module** 就是泄漏（公开 module 任何人能 `go get`）。
+  历史同步侧早就有这套规则，镜像侧没有 —— 同一个仓、两条发布链路、两套公开化口径。
+  - 痕迹原语从 `mirror/history` **上提到 `mirror` 包**（`mirror/scrub.go`），
+    `history.ScrubRule` 等改为**类型别名** ⇒ 上层（model / service / 报告）零改动，
+    且不存在两份实现。改写顺序与历史同步侧一致：rewrite → gofmt → scrub。
+  - `auto` 规则按 Replacement 替换（为空则删除命中内容）；
+    `mandatory`（密钥类）**中止发布** —— 留痕不等于可以发布，密钥进公开 module 就是泄漏
+    （历史同步侧是「该文件不发布」，镜像发布是整棵树，只能整棵中止）。
+  - 报告里带 `ScrubHits`（密钥类不回显原文，只标记位置）。
+- **镜像目标支持 SSH 主机密钥钉扎**（`insecureSkipTLS` / `hostKeyFingerprint` /
+  `knownHostsPath`）：目标侧之前**没法钉** —— 于是同一次发布里
+  「检查路径」无 known_hosts 就硬错（fail-closed）、「推送路径」却用 accept-new（TOFU），
+  **两套策略相反**。现在两个路径都从同一份 `AuthConfig` 走，配了指纹就都校验。
+  钉扎信息**落库**（丢了等于没钉：重启后悄悄退化成不校验）。
+- **痕迹清理的发布侧守门人**（`mirror/scrub_publish_test.go`）：auto 规则清掉内网标识；
+  mandatory（密钥类）命中 ⇒ 中止发布且远端不留任何引用。
+
+### Changed
+
+- **一键同步（HistorySync）只跑一遍流水线**：plan/resolve 一次、物化一次、门禁一次。
+  旧实现是「先 `HistoryPreview`（临时目录物化 + 门禁）再 `applyRun`（产物目录物化 + 门禁）」
+  —— 实仓上 plan+resolve≈65s、物化≈50s、类型门禁≈60s，白跑一遍（一键同步时间翻倍）。
+  更要紧的是**一致性**：两遍算出的 head 可能不同（两次计算之间仓变了），
+  预检报告说的就不是真正要推的那棵树。现在预检报告与执行记录**出自同一份物化结果**。
+  - 新增 `planAndResolve` / `materialize` / `previewFrom` 三个共享步骤，
+    独立调用的 `preview` 与 `apply` 各自算一遍（两次调用之间仓可能变了，必须重算）。
+  - 新增 `HistoryService.MaterializeRuns()`（物化次数可观测性指标）。
+- **「发布形态」单一实现**（`mirror/rewrite.go` 的 `Rewriter.PublishForm` / `GofmtNormalize`）：
+  = 身份改写 + gofmt 归一化。镜像发布侧此前**只改写、不归一化**，历史同步侧改写后还要 gofmt
+  ⇒ 同一份源码经两条链路发布出**不同的字节**（import 顺序因 module path 改写而翻转）
+  ⇒ 公开仓的 gofmt CI 挂、`go get` 用户拿到未格式化代码，而**类型门禁看不出来**
+  （编译不看 import 顺序）。`mirror/history` 的 `normalizeSource` 已删除，改调公共实现。
+- **镜像发布：覆盖与盲推拆成两个开关**（`mirror.Options`）：
+  - `AllowOverwrite`：**只**允许覆盖 tree 不一致的同名 tag；
+  - `AllowUnverifiedPush`：远端不可达/认证失败时盲推（**新开关，默认关**）。
+  原实现里 `AllowOverwrite` 顺带放行了盲推（文档没写）——
+  一个开关同时管「覆盖已发布版本」与「查不到远端状态」，等于把两个风险捆在一起授权。
+- **镜像发布：tag 与 main 拆成两次推**（`mirror/mirror.go`）：一次 push 带两个 refspec 时，
+  公开仓保护默认分支会拒掉 main 那个 ref，而没有 `--atomic` 时
+  **tag 其实已经推上去了**，core 却返回失败、壳层把它记成「发布失败」——
+  报告与事实相反。现在先推 tag（对外可见的 module 版本），再 best-effort 推 main
+  （失败只记警告，不影响发布结论）。
+- **镜像发布：内容一致就不重推 tag**（`mirror/mirror.go`）：幂等重跑不该改写
+  对外可见的 tag 对象 —— tag 的 hash 变了，**已经 pin 了 pseudo-version**
+  （形如 `v0.0.0-<时间>-<commit12>`）的消费者就拉不到那个版本了。
+  触发场景：源仓「重打」同名 tag（内容不变、提交元数据变了）⇒ 本次合成的
+  commit 与远端已有的不同、但 tree 相同。现在这种情形**什么都不动**，
+  报告里用 `TagAlreadyPublished` 标注。
+- **镜像发布：main 快照不被补历史回退**：main 是公开默认分支
+  （`git clone` 公开仓 / `go get module@main` 拿的是它），必须始终指向最新发布的版本。
+  原实现是「main ← 本次发布的 tag」⇒ 先发 v1.0.0、再补发 v0.9.0 会把 main 回退到 v0.9.0。
+  现在只有本次 tag 比远端已有版本更新时才更新 main（`mirror/version.go` 的版本比较）。
+
+- **历史同步的门禁落在产物上**：`applyRun` 对**产物目录**跑真实门禁（gofmt + 全量类型
+  检查），结论以结构化形式写进执行记录（`gate_report`：`ok` / `head` / 失败细节）。
+  门禁不通过时 apply 状态为 `failed`（如实反映「这棵树推出去编译不过」）。
+- **推送前重新核对「门禁结论 + 产物路径 + 产物 HEAD」三者一致**（`verifyPushableProduct`）：
+  一致 ⇒ 门禁验过的就是即将推出去的那棵树；任一不一致 ⇒ 中止、不推送。
+  **该闸门不可绕过**：`Force`（忽略阻塞项）与 `ForcePush`（覆盖远端）都不越过它。
+- **门禁错误的内网标识与本机路径脱敏**：错误文本会流进模型上下文与日志，而通道 DTO
+  不暴露 `module_source` / `host_source` —— 错误文本就成了内网标识外流的口子。
+  内网标识（含 module path 去掉主机段的部分）替换为 `[内网标识已脱敏]`；
+  本机绝对路径（用户主目录、Go module 缓存）替换为 `[本机路径已脱敏]`。
+  定位信息（`file:line:col`）原样保留 —— 那是诊断的关键。
+- **module 规则额外编译 scp 变体**：`git@host:org/repo.git` 的路径分隔符是 `:`，
+  module 规则按 `/` 匹配压根碰不到它 ⇒ 内网组织名与仓库名原样进公开仓。
+  变体把源/目标的**第一个**分隔符换成 `:`（报告里不单列，执行时照常生效）。
+- **`history_runs` 补复合索引**（`model/history_channel.go`）：`(kind, status)` 与
+  `(channel_id, kind)`。待推送产物清单这条查询挂在**每次 apply 与每次 push 的热路径上**，
+  旧实现是全表扫描（1 万行时 `EXPLAIN` 给出 `SCAN history_runs`）。
+- **`ListPendingProductDirs` 改成一条 SQL**（`NOT IN` 子查询 + `Pluck`）：
+  旧实现全表捞整行、再在内存里做差集。
+- **身份镜像的空仓判定改用 `errors.Is(err, transport.ErrEmptyRemoteRepository)`**：
+  旧实现用 `strings.Contains(err.Error(), "empty")` —— 任何含 "empty" 的错误
+  （`empty git-upload-pack given`、`cred session: empty secret`）都被当成空仓库，
+  于是「一致性检查失败」被降级成「跳过」⇒ 可能覆盖已发布的同名 tag，而报告说「没覆盖」。
+- **`mirror.TagReport` 补 `ResidualFiles`**：仍带着内网标识的文件清单（非空即中止发布）。
+  `ReplacedFiles` 的语义收紧为「内容**真的**被改写」的文件。
+
+- **痕迹清理原语上提到 `mirror` 包**（`mirror/scrub.go`）：`mirror/history` 侧改为类型别名
+  （`history.ScrubRule` / `ScrubHit` / `ScrubResult` / `ScrubSummary` / `ApplyScrub` …），
+  **调用方零改动**，但不再有两份实现。
+
+### Fixed
+
+- **远端判定统一到一处**：① `ensureRemote` 在 `service` 与 `mirror/history` 各有一份
+  （URL 列表为空的处理还不一样）⇒ 导出 `history.EnsureRemote` 单一实现。
+  ② `isEmptyRemoteErr`（服务侧）用字符串匹配三个子句，**真正的空仓一个都没命中**
+  （实测：空仓 = `remote repository is empty` = `transport.ErrEmptyRemoteRepository`），
+  于是首次发布到空远端时预检报「远端状态未知」；
+  而 `"not found"` + `"refs/heads/"` 那一支反过来会把「远端不存在 / 认证失败」
+  误判成「空仓库(首次发布),推送会创建该分支」。现在按 `errors.Is` 精确判空，
+  与镜像发布侧同一套判定。
+
+- **历史同步两步法（apply → push）此前根本不跑类型门禁**（第四轮实测）：全仓唯一的门禁
+  调用点只有预检与身份镜像；apply 往执行记录里写的是一句占位文字，push 完全不看门禁 ——
+  于是「源仓里有编译不过的包」照样被推到公开仓，而报告看上去一切正常。
+  现在门禁跑在产物上、结论入记录、推送前核对（见上）。
+- **产物仓的 HEAD 一直是游离（detached）状态**（`mirror/history/apply.go`）：
+  go-git v5.19 的 `Checkout(Hash: ...)` 内部走 `setHEADToCommit`，而它**无条件把 HEAD
+  写成游离的 hash 引用**。于是产物仓里提交不会移动分支、`git status` 显示
+  "HEAD detached"、按 HEAD 取树的脚本取到的是游离态。apply 结束后恢复 HEAD 的符号引用。
+- **身份镜像发布后公开仓仍留内网标识**（第四轮实测）：
+  - `https://git.enjoye.top/enjoydream/app.git` 整条原样进公开仓（`.git` 被当成
+    module path 的延续字符 ⇒ 边界不成立），且是「半改半留」；
+  - >8MB 与含 NUL 的 blob 走「原样保留」路径时，内网标识原样保留，而报告写着
+    「二进制被排除在改写之外」；
+  - symlink 的目标从不改写。
+  现在：`.git` 后缀特判 + scp 变体、symlink 目标过改写、残留一律**中止发布**并列出文件。
+- **合并区域合成的方向性**（`mirror/history/merge.go`）：只在一侧插入、另一侧相同的情形下
+  双向合成，修复「一侧新增被另一侧吸收后内容丢失」。
+
 ## [v0.12.0] - 2026-10-23
 
 ### Added

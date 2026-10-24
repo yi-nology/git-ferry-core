@@ -43,7 +43,11 @@ func newHistoryTestService(t *testing.T) *HistoryService {
 	// 凭据加密需要 ENCRYPTION_KEY(与镜像中心同一套)。
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	db := newHistoryTestDB(t)
-	svc := &Service{db: db}
+	// 产物目录给测试自己的一份:默认会落到用户缓存目录,
+	// 跨用例/跨运行累积,既污染机器又让「产物不该堆积」的断言失去意义。
+	cfg := &Config{}
+	cfg.Sync.HistoryWorkDir = filepath.Join(t.TempDir(), "history-work")
+	svc := &Service{db: db, config: cfg}
 	h, err := NewHistoryService(svc, db)
 	require.NoError(t, err)
 	return h
@@ -55,15 +59,15 @@ func TestHistoryChannelCRUD(t *testing.T) {
 
 	in := HistoryChannelInput{
 		Name:         "code-review",
-		SourceDir:    "/tmp/src",
-		TargetDir:    "/tmp/tgt",
-		ModuleSource: "git.enjoye.top/enjoydream/code-review-service",
-		ModuleTarget: "github.com/yi-nology/code-review-service",
-		HostSource:   "git.enjoye.top",
-		HostTarget:   "github.com",
+		SourceDir:    strPtr(historyRepoDir(t, "src")),
+		TargetDir:    strPtr(historyRepoDir(t, "tgt")),
+		ModuleSource: strPtr("git.enjoye.top/enjoydream/code-review-service"),
+		ModuleTarget: strPtr("github.com/yi-nology/code-review-service"),
+		HostSource:   strPtr("git.enjoye.top"),
+		HostTarget:   strPtr("github.com"),
 		PathRules:    []PathRuleDTO{{From: "docs/internal", To: "docs/archive"}},
 		ScrubRules:   []ScrubRuleDTO{{Name: "internal-host", Pattern: `\.enjoye\.top$`}},
-		TargetBranch: "main",
+		TargetBranch: strPtr("main"),
 		Enabled:      boolPtr(true),
 	}
 	dto, err := h.CreateHistoryChannel(ctx, in)
@@ -78,7 +82,7 @@ func TestHistoryChannelCRUD(t *testing.T) {
 	// 缺 module 映射应被拒(身份改写是前提)。
 	bad := in
 	bad.Name = "另一个"
-	bad.ModuleTarget = ""
+	bad.ModuleTarget = strPtr("")
 	_, err = h.CreateHistoryChannel(ctx, bad)
 	require.Error(t, err)
 
@@ -93,7 +97,7 @@ func TestHistoryChannelCRUD(t *testing.T) {
 
 	// 更新。
 	got, err = h.UpdateHistoryChannel(ctx, dto.ID, HistoryChannelInput{
-		Name: "code-review-v2", TargetBranch: "main", Enabled: boolPtr(true),
+		Name: "code-review-v2", TargetBranch: strPtr("main"), Enabled: boolPtr(true),
 		ModuleSource: in.ModuleSource, ModuleTarget: in.ModuleTarget,
 	})
 	require.NoError(t, err)
@@ -116,19 +120,19 @@ func TestHistoryChannelOptionsRoundTrip(t *testing.T) {
 
 	dto, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
 		Name:         "rt",
-		SourceDir:    "/tmp/src",
-		TargetDir:    "/tmp/tgt",
-		ModuleSource: "git.enjoye.top/enjoydream/x",
-		ModuleTarget: "github.com/yi-nology/x",
-		HostSource:   "git.enjoye.top",
-		HostTarget:   "github.com",
+		SourceDir:    strPtr(historyRepoDir(t, "src")),
+		TargetDir:    strPtr(historyRepoDir(t, "tgt")),
+		ModuleSource: strPtr("git.enjoye.top/enjoydream/x"),
+		ModuleTarget: strPtr("github.com/yi-nology/x"),
+		HostSource:   strPtr("git.enjoye.top"),
+		HostTarget:   strPtr("github.com"),
 		PathRules:    []PathRuleDTO{{From: "docs/internal", To: "docs/archive"}},
 		ScrubRules: []ScrubRuleDTO{
 			{Name: "internal-host", Category: "internal-host", Pattern: `\.enjoye\.top$`},
 			{Name: "secret", Category: "secret", Pattern: `ghp_\w+`, Severity: "mandatory"},
 		},
-		SourceBranch: "main",
-		TargetBranch: "main",
+		SourceBranch: strPtr("main"),
+		TargetBranch: strPtr("main"),
 		Enabled:      boolPtr(true),
 	})
 	require.NoError(t, err)
@@ -162,8 +166,8 @@ func TestHistoryTargetCredential(t *testing.T) {
 	ctx := context.Background()
 
 	ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "cred", SourceDir: "/tmp/s", TargetDir: "/tmp/t",
-		ModuleSource: "a/b", ModuleTarget: "c/d", Enabled: boolPtr(true),
+		Name: "cred", SourceDir: strPtr(historyRepoDir(t, "s")), TargetDir: strPtr(historyRepoDir(t, "t")),
+		ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"), Enabled: boolPtr(true),
 	})
 	require.NoError(t, err)
 
@@ -202,8 +206,8 @@ func TestHistoryChannelDisabled(t *testing.T) {
 	ctx := context.Background()
 
 	ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "off", SourceDir: "/tmp/s", TargetDir: "/tmp/t",
-		ModuleSource: "a/b", ModuleTarget: "c/d", Enabled: boolPtr(false),
+		Name: "off", SourceDir: strPtr(historyRepoDir(t, "s")), TargetDir: strPtr(historyRepoDir(t, "t")),
+		ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"), Enabled: boolPtr(false),
 	})
 	require.NoError(t, err)
 
@@ -217,8 +221,8 @@ func TestHistoryServiceNeedsTargetRepo(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "half", SourceDir: "/tmp/s",
-		ModuleSource: "a/b", ModuleTarget: "c/d", Enabled: boolPtr(true),
+		Name: "half", SourceDir: strPtr(historyRepoDir(t, "s")),
+		ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"), Enabled: boolPtr(true),
 	})
 	require.Error(t, err, "两侧仓库至少各给一个")
 
@@ -237,8 +241,8 @@ func TestHistoryRunChain(t *testing.T) {
 	ctx := context.Background()
 
 	ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "chain", SourceDir: "/tmp/s", TargetDir: "/tmp/t",
-		ModuleSource: "a/b", ModuleTarget: "c/d", Enabled: boolPtr(true),
+		Name: "chain", SourceDir: strPtr(historyRepoDir(t, "s")), TargetDir: strPtr(historyRepoDir(t, "t")),
+		ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"), Enabled: boolPtr(true),
 	})
 	require.NoError(t, err)
 
@@ -288,8 +292,8 @@ func TestHistoryRunChainSkipsInflight(t *testing.T) {
 	ctx := context.Background()
 
 	ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "inflight", SourceDir: "/tmp/s", TargetDir: "/tmp/t",
-		ModuleSource: "a/b", ModuleTarget: "c/d", Enabled: boolPtr(true),
+		Name: "inflight", SourceDir: strPtr(historyRepoDir(t, "s")), TargetDir: strPtr(historyRepoDir(t, "t")),
+		ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"), Enabled: boolPtr(true),
 	})
 	require.NoError(t, err)
 
@@ -320,8 +324,8 @@ func TestHistoryRunChainIsolatedPerChannel(t *testing.T) {
 
 	mk := func(name string) uint {
 		ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-			Name: name, SourceDir: "/tmp/s", TargetDir: "/tmp/t",
-			ModuleSource: "a/b", ModuleTarget: "c/d", Enabled: boolPtr(true),
+			Name: name, SourceDir: strPtr(historyRepoDir(t, "s")), TargetDir: strPtr(historyRepoDir(t, "t")),
+			ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"), Enabled: boolPtr(true),
 		})
 		require.NoError(t, err)
 		return ch.ID
@@ -374,10 +378,10 @@ func TestHistoryPreview(t *testing.T) {
 	})
 
 	ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "preview", SourceDir: srcDir, TargetDir: tgtDir,
-		ModuleSource: "git.enjoye.top/enjoydream/app",
-		ModuleTarget: "github.com/yi-nology/app",
-		TargetBranch: "master", Enabled: boolPtr(true),
+		Name: "preview", SourceDir: strPtr(srcDir), TargetDir: strPtr(tgtDir),
+		ModuleSource: strPtr("git.enjoye.top/enjoydream/app"),
+		ModuleTarget: strPtr("github.com/yi-nology/app"),
+		TargetBranch: strPtr("master"), Enabled: boolPtr(true),
 	})
 	require.NoError(t, err)
 
@@ -463,4 +467,18 @@ func svcCommitSeq(t *testing.T, dir string, batches [][]svcFileSpec) []plumbing.
 		hashes = append(hashes, h)
 	}
 	return hashes
+}
+
+// strPtr 取字符串指针(通道入参用指针区分「未指定」与「显式清空」)。
+func strPtr(s string) *string { return &s }
+
+// historyRepoDir 造一个可用的 git 仓库目录。
+//
+// 通道的「本地路径直连」必须指向一个真实的 git 仓(见 validateHistoryRepoDir),
+// 所以配置类测试也得用真仓库,不能用 /tmp/xxx 这种占位路径。
+func historyRepoDir(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	makeHistoryRepo(t, dir, map[string]string{"README.md": "fixture\n"})
+	return dir
 }
