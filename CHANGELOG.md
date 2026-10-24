@@ -2,6 +2,50 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.18.0] - 2026-10-25
+
+### Fixed
+
+四条并发/回灌缺陷（复审 histsync apply/push、mirror publish、metadata restore 的第二批）：
+
+- **同通道并发发布没有真互斥**（`service/mirror_service.go`）：唯一的保护是
+  `HasRunningByChannel`（查 DB 有没有在跑的 run），那是 **check-then-act** ——
+  「查」与「建 run 记录」之间有窗口，两个并发请求可以同时查到"没有"，各跑一遍。
+  而真正提供互斥的通道锁 `lockChannel` **只在 `ensureRepo` 里持有**，
+  也就是只覆盖了克隆/fetch，**真正的「推 tag + 推 main」全程在锁外**。
+  修法：① 创建 run **之前**同步占位（try-acquire，占位持有到整段 run 结束）；
+  ② 整段 run 持通道闸门（ensureRepo 的增量 fetch 会 `git reset --hard` 改工作区，
+  而发布正是从工作区取材 ⇒ fetch 与发布交错会把发布内容改花）；
+  ③ 预检也走同一把闸门，不读到"发布改到一半"的工作区。
+- **并发发布会把 main 快照回退到旧版本**（`mirror/mirror.go`）：main 该指向谁
+  是在**推 tag 之前**算好的（推完再算，远端已经有本次这个 tag，判断会失真），
+  而「算」与「推」之间隔着一个网络往返 —— 并发发布者正好在这个窗口里发布了
+  更高版本，此时我们再强推 main 就是**把公开仓的默认分支回退**
+  （clone 公开仓 / `go get module@main` 的人拿到过期代码）。
+  修法：推 main 前**重读**远端 tag 列表（**排除本次已推的 tag**，否则它自己
+  就是"最高版本"，判断永远失真），发现远端已有更新版本就不动 main，
+  并在报告里说明（新增 `MainUpdated` / `MainSkipped`）。
+- **已合并/已关闭的 PR 回灌成"开着的 issue"**（`service/metadata_restore.go`）：
+  PR 分支只调 CreateIssue、从不看 state ⇒ 早已合并的 PR 回灌后看着像一条
+  待处理的请求（issues 分支本来就处理了 closed 状态）。
+  修法：PR 状态跟着回灌，merged/closed 的回灌完立刻关掉。
+- **overwrite 覆盖 label 颜色时不记账、不留痕**（`service/metadata_restore.go`）：
+  走的是 UpdateLabel，计数却记成 created ⇒ 报告说"新建了 N 条"，实际是
+  "改写了 N 条已存在的东西"（报告与事实相反）；颜色**一致**时也照写一次
+  （无意义写入，还会改动 label 的 updated_at、白白触发下游 label 事件）；
+  覆盖了目标侧的颜色（可能是人工改过的）却一声不吭。
+  修法：① 颜色一致不写；② 覆盖单独计 `updated`，明细 action=updated；
+  ③ 覆盖内容必须留痕（明细带"颜色 X→Y"，warnings 汇总点名改了哪些）；
+  ④ overwrite 对不支持覆盖的类型（milestones/issues/prs/releases）必须告警，
+     不能静默跳过（调用方以为覆盖了、实际没覆盖）。
+
+### Changed
+
+- **镜像发布与历史推送统一 git 后端**：此前硬编码 `gitbackend.Options{}` ⇒ 实际走
+  native，与全系统其余部分（按 `cfg.Git.Backend` 建，生产是 gogit）不是同一个后端 ——
+  同一份配置下两套后端，行为差异（可改写判定、超时、错误类型）就不可比。
+- **`RestoreKindStat` 新增 `updated`**：覆盖更新与新建分开计数。
+
 ## [v0.17.0] - 2026-10-25
 
 ### Fixed
