@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.16.2] - 2026-10-25
+
+### Fixed
+
+- **漂移检测加总预算**：每个漂移任务都要 fetch 一次源端才能算出 ahead/behind，
+  耗时与「漂移任务数 × 单次 fetch 耗时」成正比。上游慢、任务多时
+  （200 个漂移任务 × 30s 拨号超时）整轮能跑到几十分钟，而调用方（HTTP / 健康评分）
+  早已超时 —— 服务端还在空转。修法：整轮 30s 预算，耗尽后剩余任务如实标「未检查」。
+
 ## [v0.16.1] - 2026-10-25
 
 ### Fixed
