@@ -14,6 +14,13 @@ type ForcePushApproval struct {
 	Approved   bool       `json:"approved"`
 	ApprovedBy string     `gorm:"size:128" json:"approved_by,omitempty"`
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
+	// RevokedAt / RevokedBy 放行被**撤销**的时间与操作者。
+	//
+	// 撤销是"我批错了/情况变了,这条放行作废"——与"用掉"不同:
+	// 用掉 = 放行已经兑现过一次;撤销 = 放行还没兑现就被收回。
+	// 两者都会让放行不再生效(IsApproved 判两者)。
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	RevokedBy string     `gorm:"size:128" json:"revoked_by,omitempty"`
 	// ConsumedAt 放行被**用掉**的时间。
 	//
 	// 放行是**一次性**的(契约:"Admin 一次性放行后允许本次 force"):

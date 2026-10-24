@@ -157,3 +157,37 @@ func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
 	require.Len(t, list, 2, "用掉之后应能再产生新 pending")
 	assert.False(t, list[1].Approved)
 }
+
+// TestForcePushStore_Revoke 撤销后放行不再生效,且记录保留可查。
+//
+// 为什么需要撤销:放行是"人工授权覆盖目标侧独有提交",批错了要在**兑现之前**收回;
+// 没有撤销口子的话唯一的取消办法是等它被用掉 —— 而那正是最不该覆盖的时刻。
+func TestForcePushStore_Revoke(t *testing.T) {
+	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
+
+	st.RequestApproval("t1", "main", "divergent")
+	id := st.List()[0].ID
+	found, err := st.Approve(id, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, st.IsForcePushApproved("t1", "main"), "放行后应当生效")
+
+	// 撤销
+	found, err = st.Revoke(id, "admin2")
+	require.NoError(t, err)
+	require.True(t, found, "撤销应当找到这条记录")
+	assert.False(t, st.IsForcePushApproved("t1", "main"), "撤销后放行不再生效")
+
+	// 记录保留(审计线索:批了、又撤了)
+	list := st.List()
+	require.Len(t, list, 1, "记录要保留,不能删")
+	assert.Equal(t, "admin", list[0].ApprovedBy, "谁批的要留着")
+	assert.Equal(t, "admin2", list[0].RevokedBy, "谁撤的要留着")
+	assert.NotNil(t, list[0].RevokedAt, "要标出撤销时间")
+	assert.True(t, list[0].Approved, "放行事实不变(只是被撤销了)")
+
+	// 撤销不存在的记录
+	found, err = st.Revoke("no-such-id", "admin2")
+	require.NoError(t, err)
+	assert.False(t, found, "撤销不存在的记录应当 found=false")
+}

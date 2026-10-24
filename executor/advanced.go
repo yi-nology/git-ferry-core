@@ -63,10 +63,17 @@ type divergentError struct {
 	// 且不同 git 后端对"独有"的判定还不一致 ⇒ 用它当数量会报错数字。
 	Count int
 	Extra []string // 目标独有提交(展示用,可能截断)
+	// Note 追加说明(策略无法兑现时讲清楚为什么),例如
+	// "backup_on_demand 但没配 backup_dir,本次按 block 处理"。
+	Note string
 }
 
 func (e *divergentError) Error() string {
-	return fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, e.Count)
+	msg := fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, e.Count)
+	if e.Note != "" {
+		msg += " " + e.Note
+	}
+	return msg
 }
 
 // isDivergent 判断是否分歧保护错误。
@@ -128,6 +135,14 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	if behind == 0 {
 		return false, nil
 	}
+	// backup_on_demand 需要备份目录才能在覆盖前打回滚快照;没配 ⇒ 无法兑现该策略,
+	// 只能按 block 处理(安全方向)。但**必须说清楚为什么** ——
+	// 否则操作者以为自己配的是"先快照再覆盖",实际被拦下却看不出原因。
+	policyNote := ""
+	if policy == "backup_on_demand" && backupDir == "" {
+		policyNote = "(force_push_policy=backup_on_demand 要求先打回滚快照,但未配置 sync.backup_dir," +
+			"无法兑现该策略,本次按 block 处理;配好 backup_dir 后此策略才会生效)"
+	}
 	count := fmt.Sprintf("%d", behind)
 	// 列出目标独有提交(最多 5 条,便于日志)。
 	// 原实现:git log --oneline -5 source..targetRef → "hash subject"。
@@ -151,7 +166,7 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		e.Approver.RequestApproval(taskKey, targetBranch,
 			fmt.Sprintf("divergent target has %s unique commits", count))
 	}
-	return false, &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
+	return false, &divergentError{Branch: targetBranch, Count: behind, Extra: extra, Note: policyNote}
 }
 
 // maxDivergentLog 与原 `log --oneline -5` 的条数上限一致。

@@ -206,3 +206,41 @@ func TestCheckDivergencePolicy_ReportsApprovalUsage(t *testing.T) {
 	require.True(t, used, "用了放行必须上报(调用方据此兑现一次性)")
 	require.Equal(t, 0, ap.consumed, "检查阶段不消费放行 —— 消费发生在推送成功之后")
 }
+
+// TestCheckDivergencePolicy_BackupOnDemandWithoutBackupDir_ExplainsWhy
+// backup_on_demand 但没配 sync.backup_dir 时,错误文案必须**说清楚为什么**。
+//
+// 回归背景:此前静默按 block 处理 ⇒ 策略与实际行为不符(操作者以为会
+// "先快照再覆盖",实际被拦下),而且看不出原因,像是工具随机拦的。
+func TestCheckDivergencePolicy_BackupOnDemandWithoutBackupDir_ExplainsWhy(t *testing.T) {
+	src, srcBare, dstBare := newLocalSyncLab(t)
+	work := filepath.Join(t.TempDir(), "work")
+	commitToSrc(t, src, "v1", "c1")
+
+	dstWork := filepath.Join(t.TempDir(), "dstwork")
+	gitRun(t, t.TempDir(), "clone", "-q", srcBare, dstWork)
+	require.NoError(t, os.WriteFile(filepath.Join(dstWork, "y.txt"), []byte("y"), 0o640))
+	gitRun(t, dstWork, "add", ".")
+	gitRun(t, dstWork, "commit", "-m", "target-only")
+	gitRun(t, dstWork, "push", "-q", dstBare, "main")
+
+	svc := newMockService()
+	exec, err := NewExecutor(svc)
+	require.NoError(t, err, "NewExecutor failed")
+
+	task := &model.SyncTask{Key: "backup-on-demand", SourceBranch: "main", TargetBranch: "main"}
+	srcRepo := &model.Repo{CloneURL: srcBare}
+	dstRepo := &model.Repo{CloneURL: dstBare}
+	ctx := context.Background()
+
+	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
+	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
+	commitToSrc(t, src, "v2", "c2")
+	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
+
+	// backupDir 传空串 = 未配置 sync.backup_dir
+	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sync.backup_dir",
+		"backup_on_demand 兑现不了时,错误必须点名 backup_dir,否则看不出为什么被拦下")
+}

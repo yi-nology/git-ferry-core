@@ -2,6 +2,28 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+
+- **强推放行可撤销**（`service` / `dao` / `model`）：放行是"人工授权覆盖目标侧独有提交"，
+  批错了要在**兑现之前**收回；而且已经放行、但因别的原因还没推成功时，授权也不该继续挂着。
+  此前没有撤销口子 —— 唯一的"取消"办法是等它被用掉，而那正是最不该覆盖的时刻。
+  修法：放行记录加 `revoked_at` / `revoked_by`；`IsApproved` 同时排除已撤销与已用掉；
+  新增 `ForcePushStore.Revoke(id, actor)`。记录保留（谁批的、谁撤的、什么时候）可查。
+- **backup_on_demand 兑现不了时说清楚为什么**（`executor`）：该策略要求覆盖前先打回滚快照，
+  但没配 `sync.backup_dir` 就打不了。此前静默按 `block` 处理 ⇒ 策略与实际行为不符
+  （操作者以为配了"先快照再覆盖"，实际被拦下），且看不出原因，像是工具随机拦的。
+  修法：错误文案点名 `sync.backup_dir` 并说明"本次按 block 处理"。
+
+### Changed
+
+- go-git-platform 抬到 **v0.97.0**：gogit 后端的 http/https 传输加了
+  **拨号超时 30s / 响应头超时 60s / TLS 握手超时 15s**。
+  此前 go-git 的默认传输（`http.DefaultTransport`）**没有任何超时** ⇒ 上游"连不上/
+  连上不回"时 git 操作会一直挂着，调用方只能等自己 context 的超时兜底
+  （实测：GitHub 间歇性不可达时一次克隆卡到操作系统默认的 TCP 重试超时，约 2 分钟）。
+
 ## [v0.14.0] - 2026-10-24
 
 ### Fixed

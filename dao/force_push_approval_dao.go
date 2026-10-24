@@ -68,9 +68,29 @@ func (d *ForcePushApprovalDAO) PendingExists(taskKey, branch string) (bool, erro
 func (d *ForcePushApprovalDAO) IsApproved(taskKey, branch string) (bool, error) {
 	var n int64
 	err := d.db.Model(&model.ForcePushApproval{}).
-		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL", taskKey, branch, true).
+		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL AND revoked_at IS NULL",
+			taskKey, branch, true).
 		Count(&n).Error
 	return n > 0, err
+}
+
+// Revoke 撤销一条放行(标记为已撤销,放行不再生效)。
+// 已经用掉(consumed)的放行也允许撤销 —— 撤销是"收回授权",两者都让放行失效。
+func (d *ForcePushApprovalDAO) Revoke(id string, by string, at time.Time) (found bool, err error) {
+	a := &model.ForcePushApproval{}
+	q := d.db.Model(&model.ForcePushApproval{}).Where("id = ?", id).First(a)
+	if q.Error != nil {
+		if errors.Is(q.Error, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, q.Error
+	}
+	a.RevokedAt = &at
+	a.RevokedBy = by
+	if err := d.db.Save(a).Error; err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ConsumeApproved 把同 task+branch 的放行标记为已用掉(一次性放行的兑现)。

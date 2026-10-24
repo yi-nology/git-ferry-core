@@ -174,3 +174,21 @@ func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch string) {
 		slog.Info("force-push approval consumed", "taskKey", taskKey, "branch", branch)
 	}
 }
+
+// Revoke 撤销一条放行(放行不再生效)。
+//
+// 为什么需要:放行是"人工授权覆盖目标侧独有提交",批错了要在**兑现之前**收回;
+// 而且已经放行、但因为别的原因还没推成功时,授权也不该继续挂着。
+// 没有撤销口子的话,唯一的"取消"手段是等它被用掉 —— 那正是最不该覆盖的时刻。
+func (st *ForcePushStore) Revoke(id, actor string) (found bool, err error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	found, err = st.dao.Revoke(id, actor, time.Now().UTC())
+	if err != nil {
+		return false, err
+	}
+	if found {
+		slog.Info("force-push approval revoked", "id", id, "actor", actor)
+	}
+	return found, nil
+}
