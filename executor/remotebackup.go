@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 // S3Config S3 兼容对象存储(阿里云 OSS/MinIO/AWS)。
@@ -91,7 +93,7 @@ func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, s
 	dateStamp := now.Format("20060102")
 
 	req.Header.Set("X-Amz-Date", amzDate)
-	req.Header.Set("X-Amz-Content-Sha256", sha256Hex(payload))
+	req.Header.Set("X-Amz-Content-Sha256", encoding.Sha256Hex(payload))
 
 	// canonical headers
 	host := req.URL.Host
@@ -99,7 +101,7 @@ func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, s
 		host = req.Host
 	}
 	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
-		host, sha256Hex(payload), amzDate)
+		host, encoding.Sha256Hex(payload), amzDate)
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 
 	canonicalURI := req.URL.EscapedPath()
@@ -114,7 +116,7 @@ func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, s
 		canonicalQuery,
 		canonicalHeaders,
 		signedHeaders,
-		sha256Hex(payload),
+		encoding.Sha256Hex(payload),
 	}, "\n")
 
 	scope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStamp, region, service)
@@ -122,7 +124,7 @@ func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, s
 		"AWS4-HMAC-SHA256",
 		amzDate,
 		scope,
-		sha256Hex([]byte(canonicalRequest)),
+		encoding.Sha256Hex([]byte(canonicalRequest)),
 	}, "\n")
 
 	signingKey := s3SigningKey(secretKey, dateStamp, region, service)
@@ -131,11 +133,6 @@ func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, s
 	req.Header.Set("Authorization", fmt.Sprintf(
 		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		accessKey, scope, signedHeaders, signature))
-}
-
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }
 
 func hmacSHA256(key, data []byte) []byte {

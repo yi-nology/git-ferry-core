@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/pkg/convert"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -69,8 +69,8 @@ func (s *Service) ProviderForPlatform(p *model.Platform, tokenOverride string) (
 
 // parsePageOpts 解析分页参数字符串并归一化(空/非法回落 SDK 默认值)。
 func parsePageOpts(page, perPage string) (int, int) {
-	p, _ := strconv.Atoi(page)
-	pp, _ := strconv.Atoi(perPage)
+	p := convert.Str2Int(page, 0)
+	pp := convert.Str2Int(perPage, 0)
 	return sdkprov.NormalizePageOpts(p, pp)
 }
 
