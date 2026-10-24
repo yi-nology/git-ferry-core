@@ -115,8 +115,18 @@ func (st *ForcePushStore) Request(taskKey, branch, reason, targetRef string) (Fo
 func (st *ForcePushStore) RequestApproval(taskKey, branch, reason, targetRef string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	exists, err := st.dao.PendingExists(taskKey, branch)
-	if err != nil || exists {
+	// 已有 pending 时**刷新**它(reason / target_ref / created_at),而不是跳过。
+	//
+	// 跳过会有个隐蔽的后果:pending 是"针对目标某个状态"的申请,
+	// 目标侧此后又变了(独有提交从 1 个变成 50 个)时,旧的 pending 仍挂着、
+	// 绑的还是**旧状态** ⇒ 运维批的是一份过期的描述。
+	// 刷新后,待批的永远是"当前这一次分歧"。
+	existing, err := st.dao.FindPending(taskKey, branch)
+	if err == nil && existing != nil {
+		existing.Reason = reason
+		existing.TargetRef = targetRef
+		existing.CreatedAt = time.Now().UTC()
+		_ = st.dao.Update(existing)
 		return
 	}
 	_ = st.dao.Create(&ForcePushApproval{

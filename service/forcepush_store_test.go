@@ -218,3 +218,25 @@ func TestForcePushStore_ApprovalBoundToTargetState(t *testing.T) {
 	require.Len(t, list, 1)
 	assert.Equal(t, "sha-1", list[0].TargetRef, "要记下放行是针对哪个目标状态批的")
 }
+
+// TestForcePushStore_PendingRefreshesToCurrentState 已存在的 pending 必须**刷新**
+// 到当前状态,而不是一直挂着旧的。
+//
+// 回归背景:pending 是"针对目标某个状态"的申请。目标侧此后又变了
+// (独有提交从 1 个变成 50 个)时,旧的 pending 仍挂着、绑的还是**旧状态**
+// ⇒ 运维批的是一份过期的描述,批完的放行也对应旧状态。
+func TestForcePushStore_PendingRefreshesToCurrentState(t *testing.T) {
+	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
+
+	st.RequestApproval("t1", "main", "divergent target has 1 unique commits", "sha-1")
+	require.Len(t, st.List(), 1)
+	firstID := st.List()[0].ID
+
+	// 目标侧又变了,重新申请 ⇒ 仍是**同一条** pending,但内容刷新到当前状态
+	st.RequestApproval("t1", "main", "divergent target has 50 unique commits", "sha-2")
+	require.Len(t, st.List(), 1, "同一 task+branch 只留一条 pending")
+	pending := st.List()[0]
+	assert.Equal(t, firstID, pending.ID, "应是同一条记录(不重复建)")
+	assert.Equal(t, "sha-2", pending.TargetRef, "pending 必须绑到当前目标状态")
+	assert.Contains(t, pending.Reason, "50", "pending 的描述必须反映当前分歧")
+}

@@ -61,6 +61,21 @@ func (d *ForcePushApprovalDAO) PendingExists(taskKey, branch string) (bool, erro
 	return n > 0, err
 }
 
+// FindPending 找同 task+branch 的未放行记录(最老的一条)。
+func (d *ForcePushApprovalDAO) FindPending(taskKey, branch string) (*model.ForcePushApproval, error) {
+	a := &model.ForcePushApproval{}
+	q := d.db.Model(&model.ForcePushApproval{}).
+		Where("task_key = ? AND branch = ? AND approved = ?", taskKey, branch, false).
+		Order("created_at ASC").First(a)
+	if q.Error != nil {
+		if errors.Is(q.Error, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, q.Error
+	}
+	return a, nil
+}
+
 // IsApproved 同 task+branch 是否已放行**且尚未被用掉**。
 //
 // 放行是一次性的:用掉之后(consumed_at 非空)不再算数 ——
