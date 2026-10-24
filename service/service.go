@@ -211,6 +211,13 @@ func (s *Service) doStop() {
 		}
 	}
 
+	// 释放历史同步通道跨实例锁的 redis 连接
+	if s.history != nil && s.history.lockClient != nil {
+		if err := s.history.lockClient.Close(); err != nil {
+			slog.Error("failed to close history redis lock", "error", err)
+		}
+	}
+
 	// 释放并发控制器(关闭 redis 连接等)
 	if s.guard != nil {
 		if err := s.guard.Close(); err != nil {
@@ -228,6 +235,14 @@ func (s *Service) doStop() {
 
 func (s *Service) GetTempDir(taskKey string) string {
 	return filepath.Join(s.config.Git.TempDir, taskKey)
+}
+
+// GetRepoDir 返回任务的 git 工作区路径(<tempDir>/<taskKey>/repo)。
+//
+// GetTempDir 返回的是**父目录**,真正的 git 仓库在 repo 子目录里 ——
+// 把父目录当仓库用会得到 "repository does not exist"。
+func (s *Service) GetRepoDir(taskKey string) string {
+	return filepath.Join(s.GetTempDir(taskKey), model.RepoDirName)
 }
 
 func (s *Service) GetConfig() *model.Config {

@@ -287,14 +287,21 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	// workdir 成功后保留,后续执行走增量 fetch,全量克隆只是一次性成本。
 	// 多分支(glob)同步不能 SingleBranch,否则只克隆匹配到的第一分支
 	multi := strings.ContainsAny(task.SourceBranch, "*?[")
+	cloneBranch := task.SourceBranch
+	if multi {
+		cloneBranch = ""
+	}
 	var partial string
 	if cfg := e.service.GetConfig(); cfg != nil {
 		partial = cfg.Sync.PartialClone
 	}
 	err := e.backend.Clone(ctx, gitbackend.CloneOptions{
-		URL:          repo.CloneURL,
-		Path:         dir,
-		Branch:       task.SourceBranch,
+		URL:  repo.CloneURL,
+		Path: dir,
+		// glob 多分支:--branch 只接受具体分支名,给 glob 会让 git clone 直接失败
+		// ("Remote branch release/* not found in upstream origin")。
+		// 多分支走全量克隆,再由 alignSourceBranches 按 glob 建出本地分支。
+		Branch:       cloneBranch,
 		SingleBranch: !multi,
 		Filter:       partial,
 		Submodules:   task.Submodules,
@@ -364,10 +371,18 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 		slog.Warn("fetchRepo: update origin URL failed", "error", err, "dir", dir)
 	}
 
+	// glob 多分支:fetch 的 branch 参数要求完整 refspec 形态,
+	// "release/*" 不是合法 refspec(git: invalid refspec 'release/*')。
+	// 多分支改为全量 fetch,再由 alignSourceBranches 按 glob 建出本地分支。
+	fetchBranches := []string{task.SourceBranch}
+	if strings.ContainsAny(task.SourceBranch, "*?[") {
+		fetchBranches = nil
+	}
+
 	_, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   RemoteOrigin,
-		Branches: []string{task.SourceBranch},
+		Branches: fetchBranches,
 		Tags:     task.GitTags,
 		Prune:    task.GitPrune,
 		Auth:     e.authConfig(ctx, repo, platform),
@@ -377,13 +392,74 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 	}
 	e.excludeRefs(ctx, dir, task)
 
-	// 增量同步时分支已在正确位置,仅当分支不同时才 checkout
+	// 增量同步的关键一步:fetch 只更新 refs/remotes/origin/<branch>,
+	// 本地分支仍停在旧提交。而 push 推的是 refs/heads/<branch>(本地),
+	// 不把本地分支推进到刚取到的源端 ref ⇒ 目标侧永不前进,
+	// git 回 "already up-to-date" 被当成成功 —— 增量同步等于没跑。
+	return e.alignSourceBranches(ctx, dir, task.SourceBranch)
+}
+
+// alignSourceBranches 把本地源分支对齐到刚 fetch 到的远端跟踪 ref。
+// 单分支任务对齐一个分支;glob 多分支任务对齐所有匹配的远端跟踪分支
+// (源端新建的分支本地还没有,只对齐"已存在的本地分支"会漏掉它)。
+func (e *Executor) alignSourceBranches(ctx context.Context, dir, sourceBranch string) error {
+	if !strings.ContainsAny(sourceBranch, "*?[") {
+		return e.alignSourceBranch(ctx, dir, sourceBranch)
+	}
+	out, err := e.gitOutput(ctx, dir, "for-each-ref", "--format=%(refname:short)",
+		"refs/remotes/"+RemoteOrigin+"/")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		ref := strings.TrimSpace(line)
+		if ref == "" {
+			continue
+		}
+		name := strings.TrimPrefix(ref, RemoteOrigin+"/")
+		if !matchBranchGlob(sourceBranch, name) {
+			continue
+		}
+		if err := e.alignSourceBranch(ctx, dir, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// alignSourceBranch 把单个本地分支对齐到 refs/remotes/origin/<branch>。
+//
+// 源端是唯一真相(镜像语义):本地分支必须等于 origin/<branch>,
+// 源端改写历史(force push)时本地也跟着走。
+//
+// 两条命令按"HEAD 在不在该分支上"分流:
+//   - HEAD 在该分支上 ⇒ reset --hard(ref 与工作区一起更新,不留脏状态);
+//   - 否则 ⇒ update-ref 只动 ref(不动 HEAD 与工作区,避免把别的分支带偏)。
+// 两者都不在平台 git 子命令白名单里,gitOutput 会回落到裸 git ——
+// 与 excludeRefs 用 update-ref 的做法一致。
+func (e *Executor) alignSourceBranch(ctx context.Context, dir, branch string) error {
+	ref := "refs/remotes/" + RemoteOrigin + "/" + branch
+	srcSHA, err := e.backend.RevParse(ctx, dir, ref)
+	if err != nil {
+		// 源端已无此分支(被删)⇒ 本地分支留在原地,push 阶段按需 prune。
+		slog.Warn("alignSourceBranch: source ref missing, skip", "branch", branch, "ref", ref, "dir", dir, "error", err)
+		return nil
+	}
+	if curSHA, err := e.backend.RevParse(ctx, dir, "refs/heads/"+branch); err == nil && curSHA == srcSHA {
+		return nil
+	}
 	cur, curErr := e.backend.GetCurrentBranch(ctx, dir)
 	if curErr != nil {
-		slog.Warn("fetchRepo: GetCurrentBranch failed, will attempt checkout", "error", curErr, "dir", dir)
+		slog.Warn("alignSourceBranch: GetCurrentBranch failed", "error", curErr, "dir", dir)
 	}
-	if cur != task.SourceBranch {
-		return e.backend.Checkout(ctx, dir, task.SourceBranch)
+	if cur == branch {
+		if _, err := e.gitOutput(ctx, dir, "reset", "--hard", ref); err != nil {
+			return errors.Wrapf(err, "align source branch %q to %s failed", branch, ref)
+		}
+		return nil
+	}
+	if _, err := e.gitOutput(ctx, dir, "update-ref", "refs/heads/"+branch, srcSHA); err != nil {
+		return errors.Wrapf(err, "align source branch %q to %s failed", branch, srcSHA)
 	}
 	return nil
 }
@@ -454,7 +530,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	if cfg := e.service.GetConfig(); cfg != nil {
 		backupDir = cfg.Sync.BackupDir
 	}
-	if err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key); err != nil {
+	if err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key, repo, platform); err != nil {
 		return err
 	}
 
@@ -507,6 +583,50 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	// 推送侧 prune:目标上源已删除的同名分支一并删掉(仅单分支任务,语义清晰)
 	if task.GitPushPrune && !multi {
 		return e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform)
+	}
+	return nil
+}
+
+// pushTags 把源端的 tag 推到目标端。
+//
+// 主推送只带分支 refspec,tag 必须**单独推**:语义等同 `git push --tags`
+// —— 全量推、**不覆盖**已存在的 tag(同名不同 SHA 会被拒绝)。
+// 单独推还有一层好处:tag 冲突不会把**已经成功的分支推送**一起拖成失败。
+// 目标端本来就没有同名 tag 时,tag 就补齐了(git_tags=true 的既有语义)。
+func (e *Executor) pushTags(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
+	if !task.GitTags {
+		return nil
+	}
+	auth := e.authConfig(ctx, repo, platform)
+	// 批量推(常见情况一次到位)
+	bulkErr := error(nil)
+	if _, err := e.backend.Push(ctx, gitbackend.PushOptions{
+		RepoPath: dir,
+		Remote:   RemoteTarget,
+		RefSpecs: []string{"refs/tags/*:refs/tags/*"},
+		Auth:     auth,
+	}); err != nil {
+		bulkErr = err
+	} else {
+		return nil
+	}
+	// 批量失败:多半是**某一个** tag 冲突(同名不同 SHA)。
+	// git 的批量 push 是**全有全无** ⇒ 一个冲突会把其它本来没问题的 tag 一起挡住
+	// (实测:目标端有一个同名不同 SHA 的 tag,源端**所有** tag 都没同步上)。
+	// 退化成逐个推:冲突的那个单独报错,其它照常送达。
+	tags, err := e.backend.GetTagList(ctx, dir)
+	if err != nil {
+		return bulkErr
+	}
+	var failed []string
+	for _, t := range tags {
+		if err := e.backend.PushTag(ctx, dir, RemoteTarget, t.Name, auth); err != nil {
+			failed = append(failed, t.Name)
+		}
+	}
+	if len(failed) > 0 {
+		return errors.Wrapf(bulkErr, "push tags failed for %d/%d tag(s): %s",
+			len(failed), len(tags), strings.Join(failed, ","))
 	}
 	return nil
 }

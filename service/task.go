@@ -23,6 +23,7 @@ func (s *Service) GetTask(ctx context.Context, key string) (*model.SyncTask, err
 
 func (s *Service) CreateTask(ctx context.Context, req *model.CreateTaskRequest) (*model.SyncTask, error) {
 	// 预校验 cron 表达式,避免写入 DB 后才发现无效
+	// (创建路径:cron 是普通字符串,空串=不设定时)
 	if req.Cron != "" {
 		if _, err := cron.ParseStandard(req.Cron); err != nil {
 			return nil, fmt.Errorf("invalid cron expression %q: %w", req.Cron, err)
@@ -45,9 +46,10 @@ func (s *Service) CreateTask(ctx context.Context, req *model.CreateTaskRequest) 
 
 func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) (*model.SyncTask, error) {
 	// 预校验 cron 表达式,避免写入 DB 后才发现无效
-	if req.Cron != "" {
-		if _, err := cron.ParseStandard(req.Cron); err != nil {
-			return nil, fmt.Errorf("invalid cron expression %q: %w", req.Cron, err)
+	// (nil=不修改;空串=清空定时,不需要校验)
+	if req.Cron != nil && *req.Cron != "" {
+		if _, err := cron.ParseStandard(*req.Cron); err != nil {
+			return nil, fmt.Errorf("invalid cron expression %q: %w", *req.Cron, err)
 		}
 	}
 

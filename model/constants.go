@@ -109,3 +109,9 @@ const (
 	DefaultEventType = "push"
 	DefaultAction    = "sync"
 )
+
+// RepoDirName 任务工作区里 git 仓库所在子目录名。
+// 单源:executor 的工作区路径与 service 的 GetRepoDir 都必须用这一个名字,
+// 两处各写一份字面量必然漂移(实测:备份推送曾把父目录当仓库用,报
+// "repository does not exist")。
+const RepoDirName = "repo"

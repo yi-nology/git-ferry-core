@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -19,7 +18,7 @@ func (s *Service) addCronJob(task *model.SyncTask) error {
 	entryID, err := s.cron.AddFunc(task.Cron, func() {
 		ctx := context.Background()
 		// 多实例部署时用分布式锁防止重复触发:只有一个实例能拿到锁
-		locked, err := s.guard.TryCronLock(ctx, task.Key, 10*time.Second)
+		release, locked, err := s.guard.TryCronLock(ctx, task.Key, cronLockTTL)
 		if err != nil {
 			slog.Error("cron lock check failed", "taskKey", task.Key, "error", err)
 			return
@@ -28,6 +27,9 @@ func (s *Service) addCronJob(task *model.SyncTask) error {
 			slog.Debug("cron task skipped (another instance holds lock)", "taskKey", task.Key)
 			return
 		}
+		// **必须释放**:cron 锁会被续期 goroutine 一直续着,不释放 = 永久锁,
+		// 之后每次 tick 都拿不到 ⇒ 任务静默停摆(实测踩过)。
+		defer release()
 		if err := s.RunTaskWithTrigger(ctx, task.Key, model.TriggerCron, nil); err != nil {
 			slog.Error("cron task failed", "taskKey", task.Key, "error", err)
 		}

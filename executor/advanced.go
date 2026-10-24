@@ -10,6 +10,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/pkg/pathx"
+	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -57,11 +58,15 @@ func matchBranchGlob(pattern, name string) bool {
 // divergentError 分歧保护触发的错误。
 type divergentError struct {
 	Branch string
-	Extra  []string // 目标独有提交
+	// Count 是目标侧独有提交的**真实**数量(来自 rev-list 的 behind 计数)。
+	// 不能用 len(Extra):Extra 是"目标独有提交"的**展示列表**,有上限截断,
+	// 且不同 git 后端对"独有"的判定还不一致 ⇒ 用它当数量会报错数字。
+	Count int
+	Extra []string // 目标独有提交(展示用,可能截断)
 }
 
 func (e *divergentError) Error() string {
-	return fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, len(e.Extra))
+	return fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, e.Count)
 }
 
 // isDivergent 判断是否分歧保护错误。
@@ -73,7 +78,7 @@ func isDivergent(err error) bool {
 // checkDivergencePolicy 按显式策略做分歧保护。
 // backupDir 非空且 policy=backup_on_demand 时,覆盖前写入回滚快照。
 // 策略: allow=放行 | block=拒绝覆盖(可经 Approver 放行) | backup_on_demand=先快照再覆盖。
-func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string) error {
+func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string, repo *model.Repo, platform *model.Platform) error {
 	// 未 force 时 git 自己会拒绝非快进,无需额外检查
 	if !force {
 		return nil
@@ -89,13 +94,24 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	}
 	// 本地 source 与 target 远端跟踪比对:target 有而 source 没有的提交
 	targetRef := "refs/remotes/" + RemoteTarget + "/" + targetBranch
-	// 远端跟踪可能尚未更新,先 fetch 目标分支
+	// 远端跟踪可能尚未更新,先 fetch 目标分支。
+	//
+	// 必须带凭证:自建实例(私有仓 / 自签证书 / 过期证书)不带凭证就连不上,
+	// 而连不上时**不能**当作"无分歧"放行 —— 那等于给"覆盖目标侧独有提交"
+	// 开了一条静默通道(实测:目标侧分叉提交被 force push 覆盖,任务仍报成功)。
 	if _, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   RemoteTarget,
 		Branches: []string{targetBranch},
+		Auth:     e.authConfig(ctx, repo, platform),
 	}); err != nil {
-		// 目标分支可能不存在(首次推送),无分歧风险
+		// 目标分支可能不存在(首次推送)⇒ 无分歧风险;此时本地也没有该远端跟踪 ref。
+		// 反过来:本地**有**这个 ref,说明目标仓确实存在这个分支,只是这次没连上 ——
+		// 这种情况下不能放行,必须报错让人工介入,否则会覆盖目标侧独有提交。
+		if _, rerr := e.backend.RevParse(ctx, dir, targetRef); rerr == nil {
+			return errors.Wrapf(err,
+				"cannot verify divergence for %q: target fetch failed while the target branch is known to exist", targetBranch)
+		}
 		return nil
 	}
 	// 原实现:git rev-list --right-only --count source...targetRef,
@@ -131,7 +147,7 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		e.Approver.RequestApproval(taskKey, targetBranch,
 			fmt.Sprintf("divergent target has %s unique commits", count))
 	}
-	return &divergentError{Branch: targetBranch, Extra: extra}
+	return &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
 }
 
 // maxDivergentLog 与原 `log --oneline -5` 的条数上限一致。

@@ -1,6 +1,8 @@
 package dao
 
 import (
+	"time"
+
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -36,6 +38,21 @@ func (d *SyncTaskDAO) Create(task *model.SyncTask) error {
 
 func (d *SyncTaskDAO) Update(task *model.SyncTask) error {
 	return d.db.Save(task).Error
+}
+
+// UpdateLastRun 只更新"最近一次执行"这两个字段。
+//
+// **不能用 Save(整行)**:Save 会把调用方手里的**整份快照**写回去。
+// 同步任务执行期间,运维改了 force_push_policy / cron / 开关,
+// 任务结束时用执行开始时的旧快照整行写回 ⇒ **把并发修改悄悄改回去**
+// (实测:一次 cron 执行把刚改的 force_push_policy=allow 还原成 block)。
+func (d *SyncTaskDAO) UpdateLastRun(key string, lastRunAt *time.Time, lastStatus string) error {
+	return d.db.Model(&model.SyncTask{}).
+		Where("`key` = ?", key).
+		Updates(map[string]any{
+			"last_run_at": lastRunAt,
+			"last_status": lastStatus,
+		}).Error
 }
 
 func (d *SyncTaskDAO) Delete(key string) error {

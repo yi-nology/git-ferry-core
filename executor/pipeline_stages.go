@@ -85,6 +85,15 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 	})
 	rc.Run.RetryTotal = retries
 	if err == nil {
+		// git_tags=true:tag 单独推(不覆盖已存在的 tag)。
+		// 失败只记警告 —— 分支已经推成功,不该因为一个同名 tag 冲突把整次同步判失败。
+		if rc.Task.GitTags {
+			if tagErr := rc.Exec.pushTags(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID]); tagErr != nil {
+				rc.logf("  push tags failed (分支已同步成功): %v\n", tagErr)
+			} else {
+				rc.logf("  tags pushed\n")
+			}
+		}
 		return nil
 	}
 	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {

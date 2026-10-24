@@ -140,8 +140,9 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	if req.SyncMode != "" {
 		task.SyncMode = req.SyncMode
 	}
-	if req.Cron != "" {
-		task.Cron = req.Cron
+	// nil=不修改;空串=清空定时
+	if req.Cron != nil {
+		task.Cron = *req.Cron
 	}
 	// bool 字段:仅当请求显式携带时才更新(nil = 不修改)
 	if req.Enabled != nil {
@@ -285,20 +286,28 @@ func (ts *TaskService) CompleteRun(run *model.SyncRun) error {
 }
 
 // UpdateTaskLastRun updates the task's last run time and status.
+//
+// 只写这两列(不是整行 Save):执行期间的并发修改(策略/cron/开关)不能被
+// 执行开始时的旧快照悄悄改回去。
 func (ts *TaskService) UpdateTaskLastRun(task *model.SyncTask, run *model.SyncRun) error {
-	task.LastRunAt = run.EndTime
-	task.LastStatus = run.Status
-	return ts.taskDAO.Update(task)
+	return ts.taskDAO.UpdateLastRun(task.Key, run.EndTime, run.Status)
 }
 
 // CompleteRunWithTaskUpdate 在同一事务中完成 run 更新 + task 状态更新,保证原子性。
+//
+// task 状态**只更新 last_run_at / last_status 两列**:整行 Save 会把
+// 执行开始时的旧快照写回,抹掉执行期间的并发修改(实测:一次 cron 执行
+// 把刚改的 force_push_policy=allow 还原成 block)。
 func (ts *TaskService) CompleteRunWithTaskUpdate(run *model.SyncRun, task *model.SyncTask) error {
 	return ts.runDAO.DB().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Save(run).Error; err != nil {
 			return err
 		}
-		task.LastRunAt = run.EndTime
-		task.LastStatus = run.Status
-		return tx.Save(task).Error
+		return tx.Model(&model.SyncTask{}).
+			Where("`key` = ?", task.Key).
+			Updates(map[string]any{
+				"last_run_at": run.EndTime,
+				"last_status": run.Status,
+			}).Error
 	})
 }

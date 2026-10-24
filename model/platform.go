@@ -96,6 +96,26 @@ var PlatformDefaultInstances = map[string]string{
 	PlatformTypeTencentCode: "git.code.tencent.com",
 }
 
+// PlatformAPIBaseURLs 已知 SaaS 实例的 API 基址(整域名,而非"主机+路径")。
+//
+// 这类平台的 REST API 不在"实例域名 + 固定路径"上:
+//   - GitHub SaaS 的 API 在 api.github.com。github.com/api/v3 是
+//     **GitHub Enterprise** 的路径 —— 按它拼出来的平台必然 404
+//     (实测:创建 GitHub 平台时连通性检测直接失败,平台建出来是坏的)。
+//   - GitCode 的 API 在 api.gitcode.com/api/v5。
+//
+// 与 SDK 的 provider.knownHostPlatforms 保持一致(SDK 是实际发请求的那一层,
+// 这里只是"建平台时填 api_url"的推导)。
+var PlatformAPIBaseURLs = map[string]string{
+	"github.com":       "https://api.github.com",
+	"gitcode.com":      "https://api.gitcode.com/api/v5",
+	"gitee.com":        "https://gitee.com/api/v5",
+	"gitea.com":        "https://gitea.com/api/v1",
+	"gitlab.com":       "https://gitlab.com/api/v4",
+	"atomgit.com":      "https://atomgit.com/api/v1",
+	"code.tencent.com": "https://git.code.tencent.com/api/v3",
+}
+
 // GetAPIURL 根据实例地址生成 API URL。
 // 自建实例(非默认域名)的 URL 由壳层传入 instanceURL 覆盖;
 // SDK 的 provider.NewProvider 也能推导已知平台的 URL,但 DB 字段 NOT NULL
@@ -103,6 +123,10 @@ var PlatformDefaultInstances = map[string]string{
 func GetAPIURL(platformType, instanceURL string) string {
 	if instanceURL == "" {
 		instanceURL = PlatformDefaultInstances[platformType]
+	}
+	// 已知 SaaS 实例:API 基址是另一个主机,不能按"主机+路径"拼。
+	if base, ok := PlatformAPIBaseURLs[instanceURL]; ok {
+		return base
 	}
 	apiPath := PlatformAPIPaths[platformType]
 	if apiPath == "" {

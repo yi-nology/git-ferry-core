@@ -26,9 +26,13 @@ type concurrencyGuard interface {
 	// Acquire 尝试获取 taskKey 的执行权 + 一个全局并发槽。
 	// 成功返回 release;taskKey 已在跑返回 ErrTaskRunning;全局满返回 ErrTooManyConcurrent。
 	Acquire(ctx context.Context, taskKey string) (releaseFunc, error)
-	// TryCronLock 尝试获取 cron 分布式锁(短 TTL),防止多实例重复触发。
-	// 本地模式始终返回 true;Redis 模式用 SetNX 实现。
-	TryCronLock(ctx context.Context, taskKey string, ttl time.Duration) (bool, error)
+	// TryCronLock 尝试获取 cron 分布式锁,防止多实例重复触发。
+	//
+	// 返回 (release, acquired, err):acquired=true 时调用方**必须**在本次执行
+	// 结束后调用 release —— 锁不释放就会被续期成"永久锁",任务再也不会被触发
+	// (cron 锁的续期 goroutine 一直在跑,TTL 形同虚设)。
+	// 本地模式始终成功;Redis 模式用 SetNX 实现。
+	TryCronLock(ctx context.Context, taskKey string, ttl time.Duration) (releaseFunc, bool, error)
 	// Ping 检查后端连通性(本地实现始终返回 nil)。
 	Ping() error
 	Close() error
@@ -40,6 +44,19 @@ const (
 	semSlotKey     = "sync-tasks"     // 全局并发信号量 key
 	semSlotTTL     = 30 * time.Second // 信号量槽 TTL,watchdog 续期
 	renewInterval  = 10 * time.Second // watchdog 续期间隔(< TTL/2)
+
+	// cronLockTTL 是 cron 分布式锁的 TTL。
+	//
+	// **必须 > 2×renewInterval**:distlock 的续期间隔是**锁级固定值**
+	// (WithRenewInterval),不随每把锁的 TTL 变化 ⇒ 若 TTL ≤ 续期间隔,
+	// 第一次续期就正好撞上 key 过期,续期必败("lock lost or not owned"),
+	// 锁在 TTL 后自然失效而**从未被续上**。
+	//
+	// 后果:cron 锁的用途是"防止多实例重复触发",但只在开头 TTL 内有效;
+	// 跑得久一点的任务,第二实例就能拿到同一把锁并**并发跑同一个任务**
+	// (进程内的 "task is already running" 拦不住跨实例)。
+	// 实测:TTL=10s 而续期间隔也是 10s ⇒ 每次 cron 执行都打这条续期失败告警。
+	cronLockTTL = 3 * renewInterval
 )
 
 // ---------------- 本地(进程内)实现 ----------------
@@ -77,8 +94,8 @@ func (g *localGuard) Acquire(_ context.Context, taskKey string) (releaseFunc, er
 
 func (g *localGuard) Ping() error  { return nil }
 func (g *localGuard) Close() error { return nil }
-func (g *localGuard) TryCronLock(_ context.Context, _ string, _ time.Duration) (bool, error) {
-	return true, nil // 本地模式始终成功
+func (g *localGuard) TryCronLock(_ context.Context, _ string, _ time.Duration) (releaseFunc, bool, error) {
+	return func() {}, true, nil // 本地模式始终成功
 }
 
 // ---------------- 分布式(redis)实现 ----------------
@@ -174,15 +191,28 @@ func (g *redisGuard) Ping() error {
 	return g.client.Ping(context.Background()).Err()
 }
 
-// TryCronLock 用短 TTL 的 cron 锁防止多实例重复触发;锁不显式释放,到期自然过期。
-func (g *redisGuard) TryCronLock(ctx context.Context, taskKey string, ttl time.Duration) (bool, error) {
-	if _, err := g.locker.TryLock(ctx, "cron:"+taskKey, ttl); err != nil {
+// TryCronLock 用 cron 锁防止多实例重复触发。
+//
+// **锁在本次执行结束时必须释放**:cron 锁的续期 goroutine 会把 TTL 一直续下去,
+// 不释放就等于一把永久锁 —— 之后每次 tick 都拿不到锁,task 再也不会被触发
+// (实测:cron 停止触发,任务静默停摆)。
+func (g *redisGuard) TryCronLock(ctx context.Context, taskKey string, ttl time.Duration) (releaseFunc, bool, error) {
+	key := "cron:" + taskKey
+	ownerID, err := g.locker.TryLock(ctx, key, ttl)
+	if err != nil {
 		if errors.Is(err, distlock.ErrLockNotAcquired) {
-			return false, nil
+			return func() {}, false, nil
 		}
-		return false, err
+		return func() {}, false, err
 	}
-	return true, nil
+	release := func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := g.locker.Unlock(releaseCtx, key, ownerID); err != nil {
+			slog.Warn("cron lock release failed", "key", key, "error", err)
+		}
+	}
+	return release, true, nil
 }
 
 func (g *redisGuard) Close() error {

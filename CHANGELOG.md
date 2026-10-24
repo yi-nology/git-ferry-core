@@ -4,6 +4,57 @@
 
 ## [Unreleased]
 
+### Fixed
+
+本轮在「GitHub ↔ 自建 Forgejo 双向同步」实测中定位并修掉的 core 侧缺陷。
+前三条是**报成功但数据错**级别：任务状态显示成功，目标侧实际没前进 / 目标侧独有提交被覆盖。
+
+- **增量同步永不前进**（`executor/fetchRepo`）：`git fetch` 只更新
+  `refs/remotes/origin/<branch>`，**本地分支仍停在旧提交**；而 push 推的是
+  `refs/heads/<branch>`（本地）。于是目标侧永不更新，git 回 `already up-to-date`
+  被当成成功 —— **首次克隆正常，第二次起每次都空转**。
+  修法：fetch 之后把本地分支对齐到源端 ref（HEAD 在该分支上用 `reset --hard`，
+  否则用 `update-ref` 只动 ref，不牵动别的分支）。
+- **分歧保护自我失效**（`executor/checkDivergencePolicy`）：检查目标分叉时 fetch
+  **没带凭证**（自建实例/私有仓/过期证书连不上），而 fetch 失败被当作「无分歧风险」
+  直接放行 ⇒ 目标侧独有提交被 force push 覆盖，**任务仍报成功**。
+  修法：fetch 带上平台凭证；连不上时**fail-closed**（本地若已有该目标分支的远端跟踪
+  ref，说明目标确实有这个分支，必须报错让人工介入）。
+- **执行结束回写状态抹掉并发修改**（`service/task_service.go`）：回写用整行
+  `Save(task)`，而 task 是**执行开始时**的快照 ⇒ 执行期间改的 `force_push_policy` /
+  `cron` / 开关会被旧快照悄悄改回去（实测：一次 cron 执行把刚改的
+  `force_push_policy=allow` 还原成 `block`，表现为「改了没生效」）。
+  修法：回写只碰自己拥有的两列（`last_run_at` / `last_status`）。
+- **cron 锁 TTL 与续期间隔冲突**（`service/concurrency.go`）：续期间隔是**锁级固定值**，
+  而 cron 锁 TTL 曾等于续期间隔 ⇒ 第一次续期就撞上 key 过期，锁从未被续上；
+  锁只在前 10 秒有效，之后多实例可并发跑同一任务。
+  修法：cron 锁 TTL 提到 `3×renewInterval`，**并在本次执行结束后显式释放**
+  （不释放 = 续期成永久锁 ⇒ 之后每次 tick 都拿不到，cron 静默停摆）。
+- **已设的 cron 清不掉**（`model.UpdateTaskRequest.Cron`）：曾是普通 string，空串与
+  「没传」不可区分 ⇒ 一旦设了 cron 就再也改不掉（只能删任务重建）。
+  修法：改 `*string`（nil=不修改 / 空串=清空）。
+- **`git_tags=true` 从来没把 tag 推到目标端**（`executor/push`）：主推送只带分支
+  refspec，tag 只在 fetch / bundle / backup-remote 里被用到。修法：tag 单独推
+  （不覆盖已存在的 tag，等同 `git push --tags`）；批量失败时退化成**逐个推** ——
+  git 的批量 push 是全有全无，一个冲突的 tag 会把其它本来没问题的 tag 一起挡住。
+- **分歧错误文案里的「独有提交数」是错的**（`executor/divergentError`）：用的是
+  **有上限截断的展示列表长度**（maxDivergentLog=5），目标侧只有 1 个独有提交时文案写
+  「has 5 commit(s)」。修法：改用 rev-list 的真实 behind 计数。
+- **`GetAPIURL` 把 github.com 拼成 `github.com/api/v3`**（`model/platform.go`）：那是
+  **GitHub Enterprise** 的路径，github.com 的 REST API 在 `api.github.com`
+  ⇒ 按旧逻辑建出来的 GitHub 平台必坏。修法：已知 SaaS 实例用整域名基址表
+  （与 SDK 的 `knownHostPlatforms` 对齐），并加交叉校验测试。
+- **glob 多分支两处非法 refspec**（`executor`）：`git clone --branch 'release/*'` 与
+  `git fetch origin 'release/*'` 都不是合法用法 ⇒ 多分支任务从来跑不起来。
+  修法：多分支走全量 clone / 全量 fetch，再按 glob 建出本地分支。
+- **镜像引擎增量 fetch 不更新工作区**（`service/mirror_service.go`）：镜像发布从
+  **工作区**取材，fetch 后工作区还是旧的 ⇒ 每次发旧快照。修法：fetch 之后把工作区
+  对齐到源端默认分支。
+- **镜像发布没把平台 TLS 设置传给 go-git 传输**（`mirror` + `service`）：
+  `TransportAuth()` 只产出 `transport.AuthMethod`，不带 TLS 开关 ⇒ 自建实例
+  （自签/过期证书）的「远端一致性检查」必然失败、发布直接中止。修法：显式传
+  `InsecureSkipTLS`，并按 host 找回目标所属平台补上它的 TLS 策略。
+
 ### Added
 
 - **历史同步的端到端门禁测试**（`service/history_e2e_test.go`）：core 层跑完整条流水线

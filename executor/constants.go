@@ -1,5 +1,7 @@
 package executor
 
+import "github.com/yi-nology/git-ferry-core/model"
+
 // Git remote name constants
 const (
 	RemoteOrigin = "origin"
@@ -8,5 +10,6 @@ const (
 
 // Work directory subdirectory name
 const (
-	RepoDir = "repo"
+	// 与 service.GetRepoDir 同一单源(model.RepoDirName)。
+	RepoDir = model.RepoDirName
 )

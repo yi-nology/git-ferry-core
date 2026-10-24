@@ -128,7 +128,8 @@ func (s *Service) ApplyTemplate(ctx context.Context, templateID string, dryRun b
 			// UpdateTaskRequest：空字符串=不改；Enabled 指针 nil=不改
 			upd := &model.UpdateTaskRequest{Key: task.Key, Name: task.Name}
 			if eff.Cron != "" {
-				upd.Cron = eff.Cron
+				cronExpr := eff.Cron
+				upd.Cron = &cronExpr
 			}
 			if eff.Enabled != nil {
 				upd.Enabled = eff.Enabled

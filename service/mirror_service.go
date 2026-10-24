@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -468,7 +469,32 @@ func (m *MirrorService) ensureRepo(ctx context.Context, ch *model.MirrorChannel)
 		}
 		return dir, cleanup, nil
 	}
+	// fetch 只更新 refs/remotes/origin/*,**工作区仍是旧内容**;
+	// 而发布是从工作区取材(go.mod、工作树文件)—— 不同步就等于每次都发旧快照
+	// (实测:源仓已提交 go.mod,发布仍因"工作区没有 go.mod"失败)。
+	if err = alignWorktreeToSource(ctx, dir); err != nil {
+		return "", cleanup, err
+	}
 	return dir, cleanup, nil
+}
+
+// alignWorktreeToSource 把镜像工作区对齐到源端默认分支的最新提交。
+//
+// 源端是唯一真相(镜像语义):工作区必须等于 origin/<默认分支>。
+// origin/HEAD 由 clone 建立;万一没有就退回 origin/main / origin/master。
+func alignWorktreeToSource(ctx context.Context, dir string) error {
+	for _, ref := range []string{"origin/HEAD", "origin/main", "origin/master"} {
+		out, err := runGitQuiet(ctx, dir, "rev-parse", "--verify", "--quiet", ref)
+		if err != nil || strings.TrimSpace(out) == "" {
+			continue
+		}
+		if _, err := runGitQuiet(ctx, dir, "reset", "--hard", ref); err != nil {
+			return fmt.Errorf("对齐工作区到 %s 失败: %w", ref, err)
+		}
+		return nil
+	}
+	// 源端还没有任何分支:保持原样(后续发布会按缺 tag 处理)。
+	return nil
 }
 
 // ensureTargetRemote 把目标仓库配置为克隆里的远端(存在则核对 URL)。
@@ -497,6 +523,60 @@ func (m *MirrorService) repoAuth(repo *model.Repo) gitbackend.AuthConfig {
 		}
 	}
 	return executor.BuildRepoAuth(repo, p)
+}
+
+// applyTargetPlatformTLS 把目标仓所属平台的 TLS 设置(自签证书/过期证书)补到 auth 上。
+//
+// 目标远端通常是**另一个**平台上的仓(源在 GitHub、目标在自建 Gitea 很常见),
+// 而它的 TLS 策略登记在"平台"上,目标记录本身没有这个字段。
+// 缺了这一步,自建实例的"远端一致性检查"会因为证书问题失败
+// (实测:*.enjoye.top 证书过期 ⇒ 镜像发布在一致性检查这一步直接中止)。
+func (m *MirrorService) applyTargetPlatformTLS(ctx context.Context, t *model.MirrorTarget, auth gitbackend.AuthConfig) gitbackend.AuthConfig {
+	if auth.InsecureSkipTLS || t == nil {
+		return auth
+	}
+	host := hostOfRepoURL(t.RepoURL)
+	if host == "" {
+		return auth
+	}
+	platforms, err := m.svc.ListPlatforms(ctx)
+	if err != nil {
+		return auth
+	}
+	for _, p := range platforms {
+		if p == nil || !p.SkipTLSVerify {
+			continue
+		}
+		if strings.EqualFold(hostOfRepoURL(p.InstanceURL), host) {
+			auth.InsecureSkipTLS = true
+			return auth
+		}
+	}
+	return auth
+}
+
+// hostOfRepoURL 取仓库地址的 host(兼容 https:// 与 scp 式 git@host:path)。
+// 平台的 instance_url 常常是**裸主机名**(如 git.enjoye.top),也要认出来。
+func hostOfRepoURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Hostname()
+	}
+	// scp 式:git@host:owner/repo.git
+	if i := strings.Index(raw, "@"); i >= 0 {
+		rest := raw[i+1:]
+		if j := strings.IndexAny(rest, ":/"); j > 0 {
+			return rest[:j]
+		}
+	}
+	// 裸主机名:git.enjoye.top(无 scheme、无路径、无 @)
+	if !strings.ContainsAny(raw, ":/@") {
+		return raw
+	}
+	return ""
 }
 
 // targetAuth 目标仓库凭据(解密 Credential)。
@@ -737,6 +817,10 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 	if err != nil {
 		return nil, err
 	}
+	// 目标远端的 TLS 策略在**它所属的平台**上(自建实例常见自签/过期证书),
+	// 目标记录本身没有这个字段 ⇒ 必须在这里按 host 找回平台并补上,
+	// 否则"远端一致性检查"会因证书问题直接中止发布。
+	auth = m.applyTargetPlatformTLS(ctx, t, auth)
 	scrubRules, err := channelScrubRules(ch)
 	if err != nil {
 		return nil, err

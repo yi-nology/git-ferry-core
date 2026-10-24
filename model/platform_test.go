@@ -104,7 +104,11 @@ func TestGetAPIURL(t *testing.T) {
 		instanceURL  string
 		expected     string
 	}{
-		{"github with default", "github", "", "https://github.com/api/v3"},
+		// GitHub SaaS 的 REST API 在 api.github.com ——
+		// github.com/api/v3 是 **GitHub Enterprise** 的路径,按它拼出来的平台必然 404
+		// (实测:建出来的 GitHub 平台连通性检测直接失败)。
+		{"github with default", "github", "", "https://api.github.com"},
+		{"github with explicit saas host", "github", "github.com", "https://api.github.com"},
 		{"github with custom", "github", "github.example.com", "https://github.example.com/api/v3"},
 		{"gitlab with default", "gitlab", "", "https://gitlab.com/api/v4"},
 		{"gitlab with custom", "gitlab", "gitlab.example.com", "https://gitlab.example.com/api/v4"},
@@ -112,6 +116,8 @@ func TestGetAPIURL(t *testing.T) {
 		{"gitea with custom", "gitea", "gitea.example.com", "https://gitea.example.com/api/v1"},
 		{"gitee with default", "gitee", "", "https://gitee.com/api/v5"},
 		{"gitee with custom", "gitee", "gitee.example.com", "https://gitee.example.com/api/v5"},
+		{"gitcode with default", "gitcode", "", "https://api.gitcode.com/api/v5"},
+		{"gitcode with custom", "gitcode", "gitcode.example.com", "https://gitcode.example.com/api/v5"},
 		{"unknown type", "unknown", "", ""},
 		{"unknown type with custom", "unknown", "example.com", ""},
 	}
@@ -123,5 +129,29 @@ func TestGetAPIURL(t *testing.T) {
 				t.Errorf("GetAPIURL(%q, %q) = %q, want %q", tt.platformType, tt.instanceURL, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestGetAPIURL_MatchesSDKKnownHosts 交叉校验:core 推导出的 API 基址必须与
+// SDK(provider.knownHostPlatforms,实际发请求的那一层)对同一 host 的取值一致。
+// 两份推导各写各的必然漂移 —— 漂移的后果是"平台建出来了,但是坏的"。
+func TestGetAPIURL_MatchesSDKKnownHosts(t *testing.T) {
+	// host → 期望基址(取自 go-git-platform provider 的 knownHostPlatforms)
+	sdkHosts := map[string]struct {
+		platformType string
+		baseURL      string
+	}{
+		"github.com":       {"github", "https://api.github.com"},
+		"gitlab.com":       {"gitlab", "https://gitlab.com/api/v4"},
+		"gitea.com":        {"gitea", "https://gitea.com/api/v1"},
+		"gitee.com":        {"gitee", "https://gitee.com/api/v5"},
+		"gitcode.com":      {"gitcode", "https://api.gitcode.com/api/v5"},
+		"code.tencent.com": {"tencent_code", "https://git.code.tencent.com/api/v3"},
+	}
+	for host, want := range sdkHosts {
+		got := GetAPIURL(want.platformType, host)
+		if got != want.baseURL {
+			t.Errorf("GetAPIURL(%q, %q) = %q, SDK 基址是 %q", want.platformType, host, got, want.baseURL)
+		}
 	}
 }

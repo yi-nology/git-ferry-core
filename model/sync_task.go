@@ -83,11 +83,14 @@ type CreateTaskRequest struct {
 type UpdateTaskRequest struct {
 	Key  string `json:"key"`
 	Name string `json:"name"`
-	// SourceBranch/TargetBranch/SyncMode/Cron:空字符串=不修改
+	// SourceBranch/TargetBranch/SyncMode:空字符串=不修改
 	SourceBranch string `json:"source_branch"`
 	TargetBranch string `json:"target_branch"`
 	SyncMode     string `json:"sync_mode"`
-	Cron         string `json:"cron"`
+	// Cron 用指针:nil=不修改,**空串=清空定时**。
+	// 之前是普通 string,空串与"没传"不可区分 ⇒ 一旦设了 cron 就再也改不掉
+	// (只能删任务重建)。
+	Cron *string `json:"cron"`
 	// bool 字段用指针:nil=不修改,false=显式关闭。
 	// 替代旧 bool 零值语义——此前客户端只改 name 也会把任务静默禁用。
 	Enabled       *bool `json:"enabled"`
