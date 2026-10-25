@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.24.0] - 2026-10-25
+
+### Removed（**破坏性**）
+
+删除所有"为兼容旧版本/旧数据而保留"的代码。删除前确认过现网数据：
+历史同步记录**全是新格式**、旧文件（`force-push-approvals.json` / `templates.json`）
+**都已不存在** ⇒ 这几处对现网零影响。
+
+- **`GitPrune` 字段**（`model/sync_task.go` 的 `SyncTask` / `CreateTaskRequest` /
+  `UpdateTaskRequest`，以及 `service/task_service.go` 的映射）：
+  它自 v0.23.0 起已**不再生效**（源端 fetch 恒剪枝是镜像语义要求），
+  留着只是个"看起来能配、实际没用"的开关。
+- **旧哈希算法**（`model/history_channel.go` 的 `ComputeHistoryRunHashLegacy` /
+  `legacyFinishedAt`，以及 `VerifyHistoryRunHash` 的兜底）：它让"升级前的记录，
+  哪怕 `kind` / `pushed_run_id` 被改成任何值，链都照样报完好" —— 而这两个字段
+  正是「这个产物推没推送」的判定依据。现在只认当前载荷算法。
+- **旧审批文件的导入**（`service/forcepush_store.go` 的 `migrateLegacy` 与
+  `legacy` 参数、`service/service.go` 的调用点）。
+- **旧模板文件的迁移**（`service/template_store.go` 的 `migrateLegacyTemplates`、
+  `service/service.go` 的调用点）。
+
 ## [v0.23.0] - 2026-10-25
 
 ### Fixed
