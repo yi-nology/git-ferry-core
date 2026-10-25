@@ -30,7 +30,6 @@ func TestSyncTask_Fields(t *testing.T) {
 		Enabled:       true,
 		GitTags:       true,
 		GitForce:      false,
-		GitPrune:      true,
 		LastRunAt:     &now,
 		LastStatus:    "success",
 		CreatedAt:     now,
@@ -89,9 +88,6 @@ func TestSyncTask_Fields(t *testing.T) {
 		t.Error("expected git force to be false")
 	}
 
-	if !tk.GitPrune {
-		t.Error("expected git prune to be true")
-	}
 
 	if tk.LastStatus != "success" {
 		t.Errorf("expected last status 'success', got '%s'", tk.LastStatus)

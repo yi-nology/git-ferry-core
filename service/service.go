@@ -130,16 +130,10 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	if tplPath == "" {
 		tplPath = "data/templates.json"
 	}
-	migrateLegacyTemplates(daos.template, tplPath)
 	svc.templates = &dbTemplateStore{dao: daos.template}
 
-	// force-push 审批：表存储（force_push_approvals）；
-	// 旧 <backup_dir>/force-push-approvals.json 空表时一次性导入。
-	approvalsPath := filepath.Join("data", "force-push-approvals.json")
-	if cfg.Sync.BackupDir != "" {
-		approvalsPath = filepath.Join(cfg.Sync.BackupDir, "force-push-approvals.json")
-	}
-	svc.approvals = NewForcePushStore(daos.approv, approvalsPath)
+	// force-push 审批：表存储（force_push_approvals）。
+	svc.approvals = NewForcePushStore(daos.approv)
 	svc.retryTracker = NewRetryTracker(0)
 
 	exec, err := executor.NewExecutor(svc)

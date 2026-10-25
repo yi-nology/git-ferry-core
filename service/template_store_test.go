@@ -1,7 +1,6 @@
 package service
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -85,31 +84,4 @@ func TestDBTemplateStore_ResolveExtends(t *testing.T) {
 
 	_, _, err = st.Resolve("missing")
 	require.ErrorIs(t, err, tpl.ErrNotFound)
-}
-
-// TestMigrateLegacyTemplates 旧 json 在空表时导入；表非空不导入。
-func TestMigrateLegacyTemplates(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "templates.json")
-	legacy := `[{"id":"tpl-1","name":"legacy","spec":{"cron":"0 1 * * *"},"tags":["old"]}]`
-	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
-
-	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(dir, "tpl.db")), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&tpl.Template{}))
-	d := dao.NewTemplateDAO(db)
-
-	migrateLegacyTemplates(d, path)
-	list, err := d.All()
-	require.NoError(t, err)
-	require.Len(t, list, 1, "空表应导入旧文件")
-	assert.Equal(t, "tpl-1", list[0].ID)
-	assert.Equal(t, "0 1 * * *", list[0].Spec.Cron)
-
-	// 表非空 + 旧文件新增 → 不再导入
-	require.NoError(t, os.WriteFile(path, []byte(`[{"id":"tpl-2","name":"new","spec":{}}]`), 0o600))
-	migrateLegacyTemplates(d, path)
-	list, err = d.All()
-	require.NoError(t, err)
-	require.Len(t, list, 1, "表非空时不应重复导入")
 }

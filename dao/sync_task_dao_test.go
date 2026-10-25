@@ -249,7 +249,6 @@ func TestSyncTaskDAO_Fields(t *testing.T) {
 		Enabled:       true,
 		GitTags:       true,
 		GitForce:      false,
-		GitPrune:      true,
 		LastRunAt:     &now,
 		LastStatus:    "success",
 		CreatedAt:     now,
@@ -267,6 +266,5 @@ func TestSyncTaskDAO_Fields(t *testing.T) {
 	assert.True(t, task.Enabled, "expected enabled to be true")
 	assert.True(t, task.GitTags, "expected git tags to be true")
 	assert.False(t, task.GitForce, "expected git force to be false")
-	assert.True(t, task.GitPrune, "expected git prune to be true")
 	assert.Equal(t, "success", task.LastStatus, "expected last status 'success'")
 }

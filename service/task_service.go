@@ -88,7 +88,6 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		Enabled:       true,
 		GitTags:       req.GitTags,
 		GitForce:      req.GitForce,
-		GitPrune:      req.GitPrune,
 		GitLFS:        req.GitLFS,
 		SyncWiki:      req.SyncWiki,
 		GitBundle:     req.GitBundle,
@@ -153,9 +152,6 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	}
 	if req.GitForce != nil {
 		task.GitForce = *req.GitForce
-	}
-	if req.GitPrune != nil {
-		task.GitPrune = *req.GitPrune
 	}
 	if req.GitLFS != nil {
 		task.GitLFS = *req.GitLFS

@@ -648,7 +648,6 @@ func TestFetchRepo(t *testing.T) {
 	task := &model.SyncTask{
 		SourceBranch: "main",
 		GitTags:      true,
-		GitPrune:     true,
 	}
 
 	repo := &model.Repo{

@@ -155,46 +155,6 @@ func TestHistoryChainDetectsTailTruncation(t *testing.T) {
 	require.Contains(t, res.Message, "截断")
 }
 
-// TestHistoryChainAcceptsLegacyHash 回归:升级前的执行记录必须仍然验得过。
-//
-// 哈希载荷变过(加了 kind / pushed_run_id,时间格式也换了)。
-// 不做双算法兼容的话,升级即把全部历史记录报成「被篡改」——
-// 等于毁掉过去的防篡改证据,运维只会把告警当噪声。
-func TestHistoryChainAcceptsLegacyHash(t *testing.T) {
-	h := newHistoryTestService(t)
-	ctx := context.Background()
-
-	ch, err := h.CreateHistoryChannel(ctx, HistoryChannelInput{
-		Name: "legacy", SourceDir: strPtr(historyRepoDir(t, "src")),
-		TargetDir:    strPtr(historyRepoDir(t, "tgt")),
-		ModuleSource: strPtr("a/b"), ModuleTarget: strPtr("c/d"),
-		Enabled: boolPtr(true),
-	})
-	require.NoError(t, err)
-
-	now := time.Now()
-	run := &model.HistoryRun{
-		ChannelID: ch.ID, Kind: model.HistoryRunKindApply,
-		Status:   model.HistoryRunSuccess,
-		BaseHead: "b1", Head: "h1",
-		CreatedAt: now, FinishedAt: &now,
-	}
-	require.NoError(t, h.runs.Create(run))
-
-	// **按旧算法**重算哈希并写回 —— 这就是「升级前写进去的那条记录」的样子:
-	// 载荷结构是旧的(没有 kind / pushed_run_id),时间格式是旧的。
-	stored, err := h.runs.FindByID(run.ID)
-	require.NoError(t, err)
-	stored.EntryHash = model.ComputeHistoryRunHashLegacy("", stored)
-	require.NoError(t, h.runs.Update(stored))
-	require.NoError(t, h.channels.UpdateLastEntryHash(ch.ID, stored.EntryHash))
-
-	res, err := h.VerifyHistoryChannelChain(ctx, ch.ID)
-	require.NoError(t, err)
-	require.True(t, res.OK, "升级前的记录必须仍然验得过:"+res.Message)
-	require.Equal(t, 1, res.Checked)
-}
-
 // TestHistoryChainDetectsAllRecordsDeleted 回归:执行记录被**删光**
 // 也必须被检出。
 //

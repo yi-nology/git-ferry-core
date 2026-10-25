@@ -244,63 +244,13 @@ func (r *HistoryRun) applyDefaults() {
 	}
 }
 
-// ComputeHistoryRunHashLegacy 是**旧版**载荷算出的哈希。
-//
-// 载荷结构变过:新增了 kind / pushed_run_id,时间格式也从变宽的
-// RFC3339Nano 换成了定宽毫秒。升级前写入的记录用新算法算不出来 ——
-// 直接判「被篡改」等于升级即毁掉全部历史防篡改证据。
-//
-// 所以校验时**两个算法都试**:任一命中即通过(见 VerifyHistoryRunHash)。
-func ComputeHistoryRunHashLegacy(prev string, r *HistoryRun) string {
-	payload, _ := json.Marshal(map[string]any{
-		"channel_id":   r.ChannelID,
-		"status":       r.Status,
-		"base_head":    r.BaseHead,
-		"head":         r.Head,
-		"plan_summary": r.PlanSummary,
-		"commits":      r.Commits,
-		"files":        r.Files,
-		"skipped":      r.Skipped,
-		"scrub_report": r.ScrubReport,
-		"gate_report":  r.GateReport,
-		"refs_before":  r.RefsBefore,
-		"refs_after":   r.RefsAfter,
-		"error":        r.Error,
-		"created_at":   r.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"finished_at":  legacyFinishedAt(r),
-	})
-	h := sha256.Sum256(append([]byte(prev), payload...))
-	return hex.EncodeToString(h[:])
-}
-
-// legacyFinishedAt 取终态时间(旧格式:变宽 RFC3339Nano)。
-func legacyFinishedAt(r *HistoryRun) string {
-	if r.FinishedAt == nil {
-		return ""
-	}
-	return r.FinishedAt.UTC().Format(time.RFC3339Nano)
-}
-
 // VerifyHistoryRunHash 校验一条执行记录的哈希。
 //
-// **兼容新旧两套载荷**:升级前的记录用旧算法算,升级后的用新算法。
-// 少了这一步,升级即把全部历史记录报成「被篡改」。
-//
-// 但旧算法**只在记录确实是旧的时才用**:旧载荷不含 kind / pushed_run_id,
-// 无条件兜底的话,升级前的记录里这两个字段被改成任何值链都照样报「完好」——
-// 而它们正是「这个产物推没推送」的判定依据。
-// 所以:kind / pushed_run_id 非零 = 新结构 = 只认新算法。
+// **只认当前载荷算法**:旧版载荷的哈希算法已删除 ——
+// 留着它等于"升级前的记录,哪怕 kind / pushed_run_id 被改成任何值,链都照样报完好",
+// 而这两个字段正是「这个产物推没推送」的判定依据。
 func VerifyHistoryRunHash(prev string, r *HistoryRun, stored string) bool {
-	if stored == ComputeHistoryRunHash(prev, r) {
-		return true
-	}
-	if r.Kind != "" && r.Kind != HistoryRunKindApply {
-		return false
-	}
-	if r.PushedRunID != 0 {
-		return false
-	}
-	return stored == ComputeHistoryRunHashLegacy(prev, r)
+	return stored == ComputeHistoryRunHash(prev, r)
 }
 
 // ComputeHistoryRunHash 计算执行记录哈希。

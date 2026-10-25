@@ -229,7 +229,6 @@ func TestFetchRepo_AlwaysPrunes(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "always-prune", SourceBranch: "main", TargetBranch: "main",
-		GitPrune: false, // 任务级开关是关的 —— 但镜像语义要求仍要剪
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	ctx := context.Background()

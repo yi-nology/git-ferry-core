@@ -101,35 +101,3 @@ func (s *dbTemplateStore) Resolve(id string) (tpl.Spec, []string, error) {
 	}
 	return tpl.ResolveSelf(list, id)
 }
-
-// migrateLegacyTemplates 旧 data/templates.json 在**表为空**时一次性导入。
-// 幂等：只在空表执行，重复启动不再导入；失败仅告警不阻断启动。
-func migrateLegacyTemplates(d *dao.TemplateDAO, path string) {
-	n, err := d.Count()
-	if err != nil || n > 0 {
-		return
-	}
-	legacy, lerr := tpl.Open(path) // 只读解析旧文件
-	if lerr != nil {
-		slog.Warn("legacy templates unreadable, skip import", "path", path, "error", lerr)
-		return
-	}
-	items := legacy.List()
-	if len(items) == 0 {
-		return
-	}
-	imported := 0
-	for i := range items {
-		if items[i].ID == "" || items[i].Name == "" {
-			continue
-		}
-		if err := d.Save(&items[i]); err != nil {
-			slog.Warn("import legacy template failed", "id", items[i].ID, "error", err)
-			continue
-		}
-		imported++
-	}
-	if imported > 0 {
-		slog.Info("imported legacy templates into db", "count", imported, "path", path)
-	}
-}

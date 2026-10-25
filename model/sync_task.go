@@ -20,17 +20,6 @@ type SyncTask struct {
 	Enabled       bool   `json:"enabled" gorm:"default:true;index"`
 	GitTags       bool   `json:"git_tags" gorm:"default:false"`
 	GitForce      bool   `json:"git_force" gorm:"default:false"`
-	// GitPrune 已**不再生效**(保留字段只为兼容旧客户端/配置)。
-	//
-	// 源端 fetch 现在**恒剪枝**:剪掉"源端已删分支"的远端跟踪 ref 是镜像语义的
-	// ���基 —— 不剪的话,①陈旧跟踪 ref 留在本地 ⇒ align 把本地分支对齐到旧提交
-	// ⇒ 源端已删的分支又被推回目标(分支"复活");
-	// ②"源端是否还在这个分支"的判断靠的就是 ref 被剪掉
-	// ⇒ 镜像删除(git_push_prune)永远不触发。
-	//
-	// 另外 gogit 后端(生产用的)本来就只在 Prune=true 时才剪,native 恒剪
-	// ⇒ 同一份配置在两个后端行为不同,生产上镜像删除其实一直没生效。
-	GitPrune bool `json:"git_prune" gorm:"default:false"`
 	// GitLFS 同步 Git LFS 对象(需要环境安装 git-lfs)
 	GitLFS bool `json:"git_lfs" gorm:"default:false"`
 	// SyncWiki 同步 wiki 仓库(源/目标 URL 按 .wiki.git 规则推导)
@@ -74,7 +63,6 @@ type CreateTaskRequest struct {
 	Cron          string `json:"cron"`
 	GitTags       bool   `json:"git_tags"`
 	GitForce      bool   `json:"git_force"`
-	GitPrune      bool   `json:"git_prune"`
 	GitLFS        bool   `json:"git_lfs"`
 	SyncWiki      bool   `json:"sync_wiki"`
 	GitBundle     bool   `json:"git_bundle"`
@@ -106,7 +94,6 @@ type UpdateTaskRequest struct {
 	Enabled       *bool `json:"enabled"`
 	GitTags       *bool `json:"git_tags"`
 	GitForce      *bool `json:"git_force"`
-	GitPrune      *bool `json:"git_prune"`
 	GitLFS        *bool `json:"git_lfs"`
 	SyncWiki      *bool `json:"sync_wiki"`
 	GitBundle     *bool `json:"git_bundle"`
