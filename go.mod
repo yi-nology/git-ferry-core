@@ -8,7 +8,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
-	github.com/oekit/concurrency v0.21.0
+	github.com/oekit/concurrency v0.22.0
 	github.com/oekit/logx v0.7.1
 	github.com/oekit/pkg v0.28.0
 	github.com/oekit/redisx v0.10.4
