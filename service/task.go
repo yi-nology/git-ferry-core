@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -153,13 +154,42 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 	// 非阻塞快速失败:全局满返回 ErrTooManyConcurrent,taskKey 已在跑返回 ErrTaskRunning。
 	release, err := s.guard.Acquire(ctx, taskKey)
 	if err != nil {
+		// 任务正在跑 ⇒ 这次 webhook 触发的提交**不能丢**:记一笔待补跑,
+		// 等当前运行结束、释放执行权后补跑一次(合并:积压多次只补一次)。
+		// 不记的话这次推送的提交要等下一次推送或 cron 才补上。
+		if errors.Is(err, ErrTaskRunning) && trigger == model.TriggerWebhook {
+			s.pendingWebhook.Mark(taskKey)
+		}
 		return err
 	}
-	defer release()
 
-	run, err := s.executor.Execute(ctx, task, trigger, webhookEventID)
-	s.emitRunCompleted(taskKey, trigger, run, err)
-	return err
+	run, execErr := func() (*model.SyncRun, error) {
+		defer release()
+		return s.executor.Execute(ctx, task, trigger, webhookEventID)
+	}()
+	s.emitRunCompleted(taskKey, trigger, run, execErr)
+	// **释放执行权之后**再补跑:否则补跑会立刻又撞上同一个执行权。
+	s.runPendingWebhook(taskKey)
+	return execErr
+}
+
+// runPendingWebhook 补跑被合并掉的 webhook 触发。
+//
+// 合并语义:同一任务积压多次只补跑一次 —— 补跑是"再同步一次",
+// 会把期间到达的所有提交一起带上。
+func (s *Service) runPendingWebhook(taskKey string) {
+	if !s.pendingWebhook.Take(taskKey) {
+		return
+	}
+	ctx := s.bgCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	async.GoSafe(func() {
+		if err := s.RunTaskWithTrigger(ctx, taskKey, model.TriggerWebhook, nil); err != nil {
+			slog.Error("补跑被合并的 webhook 触发失败", "taskKey", taskKey, "error", err)
+		}
+	})
 }
 
 // PreviewSync previews a sync operation.

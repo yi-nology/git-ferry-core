@@ -25,14 +25,16 @@ var _ executor.Service = (*Service)(nil)
 type Config = model.Config
 
 type Service struct {
-	config          *Config
-	db              *gorm.DB
-	sqlDB           *sql.DB
-	ownsDB          bool
-	providerHooks   *sdkprov.Hooks
-	templates       TemplateStore
-	approvals       *ForcePushStore
-	retryTracker    *RetryTracker
+	config        *Config
+	db            *gorm.DB
+	sqlDB         *sql.DB
+	ownsDB        bool
+	providerHooks *sdkprov.Hooks
+	templates     TemplateStore
+	approvals     *ForcePushStore
+	retryTracker  *RetryTracker
+	// pendingWebhook 记「任务在跑、没能立即触发」的待补跑 webhook 触发。
+	pendingWebhook  *pendingTriggerSet
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
@@ -103,10 +105,11 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		platforms:     platformService,
 		opLogs:        opLogService,
 		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
-		bgCtx:        bgCtx,
-		bgCancel:     bgCancel,
+		cron:           cron.New(),
+		cronEntryIDs:   make(map[string]cron.EntryID),
+		bgCtx:          bgCtx,
+		bgCancel:       bgCancel,
+		pendingWebhook: newPendingTriggerSet(),
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -159,10 +162,26 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	}
 	svc.history = historySvc
 
+	// **启动时回收卡在 processing 的 webhook 事件**:
+	// 进程刚起,不可能有正在处理的事件 ⇒ 此刻仍是 processing 的,
+	// 都是上次进程没走完的(被 SIGKILL / 崩溃 / goroutine panic)。
+	// 不回收 ⇒ 它们永远停在这个状态:既没有失败记录(看不出"这次没同步"),
+	// 也没有 pending 可补 ⇒ 这次推送的提交静默丢失。
+	if n, rerr := webhookService.RecoverStuckEvents(context.Background(), 0); rerr != nil {
+		slog.Warn("回收卡住的 webhook 事件失败", "error", rerr)
+	} else if n > 0 {
+		slog.Info("已回收卡住的 webhook 事件", "count", n)
+	}
+
 	svc.wg.Add(1)
 	async.GoSafe(func() {
 		defer svc.wg.Done()
 		svc.cleanupTriggerTimes()
+	})
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.recoverStuckWebhookEvents()
 	})
 	svc.startLifecycleJobs()
 

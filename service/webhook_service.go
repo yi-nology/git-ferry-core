@@ -181,6 +181,30 @@ func (ws *WebhookService) MarkEventFailed(event *model.WebhookEvent, reason stri
 	return nil
 }
 
+// RecoverStuckEvents 回收卡在 processing 的事件,标成 failed(带原因)。
+//
+// 进程被 SIGKILL / 崩溃 / goroutine panic 时,事件停在 processing ⇒
+// 既没有失败记录(看不出"这次没同步"),也没有 pending 可补 ⇒
+// 这次推送的提交**静默丢失**。⇒ 回收成 failed ⇒ 可见、可人工重试
+// (壳层已有 POST /api/v1/webhook/event/retry)。
+//
+// 只回收**超过 olderThan** 的:正在处理中的事件不该被误伤
+// (一次大同步可能跑很久)。
+func (ws *WebhookService) RecoverStuckEvents(ctx context.Context, olderThan time.Duration) (int64, error) {
+	events, err := ws.eventDAO.FindStuckProcessing(ctx, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, e := range events {
+		if err := ws.MarkEventFailed(e, "事件处理中断(进程重启或处理超时),已回收,可重试"); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
 // FindEventByEventID returns a webhook event by event ID (internal use).
 func (ws *WebhookService) FindEventByEventID(eventID string) (*model.WebhookEvent, error) {
 	return ws.eventDAO.FindByEventID(eventID)

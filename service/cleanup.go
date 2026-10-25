@@ -53,6 +53,31 @@ func (s *Service) CleanupOldData(ctx context.Context, maxAge time.Duration) (eve
 	return events, runs, steps, errors.Join(errs...)
 }
 
+// recoverStuckWebhookEvents 周期回收卡在 processing 的 webhook 事件。
+//
+// 进程内的 goroutine panic(async.GoSafe 会 recover)会让事件永远停在 processing
+// ⇒ 既不失败也不重试 ⇒ 这次推送的提交静默丢失。
+//
+// 阈值取 1 小时:一次大同步可能跑很久,不能误伤正在处理中的事件。
+func (s *Service) recoverStuckWebhookEvents() {
+	const interval = 10 * time.Minute
+	const stuckTimeout = 1 * time.Hour
+	loop.Run(s.bgCtx, loop.Config{
+		Interval:   interval,
+		FirstDelay: interval,
+		Name:       "recover-stuck-webhook-events",
+	}, func(ctx context.Context) {
+		n, err := s.webhooks.RecoverStuckEvents(ctx, stuckTimeout)
+		if err != nil {
+			slog.Error("回收卡住的 webhook 事件失败", "error", err)
+			return
+		}
+		if n > 0 {
+			slog.Info("已回收卡住的 webhook 事件", "count", n)
+		}
+	}).Wait()
+}
+
 // cleanupTriggerTimes 周期清理过期的触发时间缓存。
 // 用 oekit concurrency/loop:自带 panic 隔离(单轮失败只记日志,不中断循环)
 // 与 ctx 取消退出(随 bgCancel 收敛),不再自维护 ticker + stop channel。

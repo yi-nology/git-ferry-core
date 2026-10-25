@@ -203,8 +203,8 @@ github.com/studyzy/gongfeng-sdk-go v0.6.0 h1:TLRJP1mrheo54kjC4Dn/tS78i7F+cnaVpnP
 github.com/studyzy/gongfeng-sdk-go v0.6.0/go.mod h1:9DWaRQPNcLtTVMQE1fvBiFrP2pe49PgkinLpK2dLDE0=
 github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
-github.com/yi-nology/go-git-platform v0.99.3 h1:c7SAE/PFDVOoFOXmZ6MCvmFREWpaQa15gQgUPISuovo=
-github.com/yi-nology/go-git-platform v0.99.3/go.mod h1:9K74FZgjg+nhdZSqTHEXTRZbAoVL0JahnfLBWig/z0g=
+github.com/yi-nology/go-git-platform v0.99.4 h1:pyJYyWBL8z5mh74bQJxh/foDiE+r/wngwKXty4lkyK4=
+github.com/yi-nology/go-git-platform v0.99.4/go.mod h1:YTNWtQiXUexHmEb1Q0hYiCovKTIn7FaYrkt17+EH6NQ=
 github.com/yi-nology/go-gitcode v0.7.2 h1:ULEoYgRzhLXBlvZAfj7/9yP9F9pTqHL5vpNebiZcSr8=
 github.com/yi-nology/go-gitcode v0.7.2/go.mod h1:YE9snaa9ChVY7FoPj/4huVDkVNJaI/gpxHcWgNNGYls=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
