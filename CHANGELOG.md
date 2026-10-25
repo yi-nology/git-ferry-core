@@ -2,6 +2,37 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.23.0] - 2026-10-25
+
+### Fixed
+
+- **源端 fetch 恒剪枝**（`executor/executor.go`）：之前跟 `task.GitPrune` 走，
+  而 **gogit 后端（生产用的）只在 `Prune=true` 时才剪、native 恒剪** ⇒ 同一份配置在
+  两个后端行为不同。后果：① 源端删了分支，本地还留着它的远端跟踪 ref ⇒ align 把本地
+  分支对齐到旧提交 ⇒ **源端已删的分支又被推回目标**（分支"复活"）；
+  ② "源端是否还在这个分支"的判断靠的就是 ref 被剪掉 ⇒ **镜像删除
+  （`git_push_prune`）从来没触发过**。修法：显式传 `Prune=true`，两后端口径一致。
+  `task.GitPrune` 标注为**不再生效**（保留字段只为兼容旧客户端）。
+- **多分支的镜像删除落地**（`executor/executor.go`）：以前只告警不实现
+  （"SDK 的 ListRemoteBranches 不带凭证 ⇒ 暂不实现"）—— 配置里明明有开关，看着像
+  生效的，实际什么都不删。改用**两端 fetch 之后的远端跟踪 ref**判定（不需要新的 SDK
+  读原语）：目标有、源端没有 ⇒ 删。三条安全阀，少一条都不删：① 源端分支列表为空
+  （源端 fetch 没成功）⇒ 不删；② 目标端 fetch 失败 ⇒ 不删；③ 只删"目标有、源端没有"的分支。
+- **wiki 改逐分支推**（`executor/wiki.go`）：整批推（`refs/heads/*:refs/heads/*`）时，
+  目标上任一分支非快进 ⇒ 平台拒收整批 ⇒ **其它无分歧的分支也同步不了**（一个分支的
+  冲突拖垮全部）。修法：逐分支推，失败的分支明确点名，其它照常送达。
+- **align 跳过 `origin/HEAD` 伪 ref**（`executor/executor.go`）：
+  `refs/remotes/origin/HEAD` 的短名是 "origin"（不是分支），对齐它必然失败，
+  只会刷一条 "source ref missing" 噪音日志。
+- **漂移检测的 clone 套用 partial-clone**（`service/lifecycle_service.go`）：不套的话
+  漂移仓库会把源端**完整历史**拷一份（executor 的工作区是部分克隆）⇒ 大仓下磁盘与
+  首轮耗时都翻倍。
+
+### Changed
+
+- `task.GitPrune` 标注为**不再生效**：源端 fetch 恒剪枝（镜像语义要求），
+  保留字段只为兼容旧客户端/配置。
+
 ## [v0.22.0] - 2026-10-25
 
 ### Fixed
