@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.26.1] - 2026-10-25
+
+### Changed
+
+- **抬 `go-git-platform` 地板 v0.99.0 → v0.99.2**：本仓用 `GetCommitsBetween`
+  算「目标侧独有提交」展示清单，而 gogit 后端的旧实现（SDK v0.99.0）
+  **在分叉场景会把共同祖先也收进清单**（v0.99.1 已修：改用 merge-base 作
+  遍历边界）。本仓 pin 停在 v0.99.0 ⇒ 单独构建 core 时仍带着这个语义缺陷
+  （壳层因依赖图取最高版本实际跑 v0.99.2 ⇒ 两边口径不一致）。
+  抬地板后本仓测试全量重跑通过。
+
 ## [v0.26.0] - 2026-10-25
 
 ### Removed（**破坏性**）
