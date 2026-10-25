@@ -2,6 +2,41 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.26.0] - 2026-10-25
+
+### Removed（**破坏性**）
+
+健康评分此前有**两套引擎并存**：旧的规则 DSL（`health/rules.go`）与新的维度
+引擎（`health/dimension.go`）。`service/health_service.go` 里两套都跑，旧的
+只贡献 issue 文案（它的 score/level 一直被丢弃，真正生效的分数一直是维度
+引擎给的），变量名就叫 `legacy`。
+
+- **删除 `health/rules.go`**（`Rule` / `Level` / `Config` / `DefaultConfig` /
+  `Evaluate` / `match` / `Result`）与 `health/rules_test.go`。
+- **`Facts` 与 `toFloat` 搬到 `health/dimension.go`**：它们是新引擎在用的
+  （只是恰好住在旧文件里），不是旧引擎的私有物。
+- **`service/health_service.go`**：去掉 `healthRules` 全局、去掉 legacy 合并
+  （`issues` 直接取维度引擎的）、去掉只为这次合并存在的 `uniqueStrings`。
+
+### Fixed
+
+- **`error_free` 信号不再无人使用**：该 fact 原先**只有**旧引擎消费（旧引擎
+  单独报"最近执行带有错误信息"）。引擎删除后若没人接手，采集到的信号就静默
+  消失 ⇒ 现在由 `reliability` 维度接管：
+  - 只有**采到了**该 fact 且为 false 才报；事实缺失 = 不知道，不能当成
+    "有错误"（否则不采集该 fact 的调用方会一直误报）；
+  - 刻意**不参与打分**（旧引擎的权重从未进入最终分数），保持既有分数不变；
+  - 新增用例 `TestEvaluateDimensions_ErrorFreeSignalSurfaced` 钉住这条
+    （反向验证：去掉那段分支，用例变红）。
+
+### Changed
+
+- `issues` 数组不再有旧引擎的措辞，改为维度格式（`<维度>: <结论>`）。
+  旧引擎的另外四条信号（缺少任务名称 / 未配置 cron / 尚无执行历史 /
+  最近一次执行未成功）在维度引擎里**本来就有**
+  （`completeness.detail` / `schedule.detail` / `reliability.reason`），
+  信息不丢；**分数与 level 不变**，变的是前端健康面板展示的 issues 文案。
+
 ## [v0.25.0] - 2026-10-25
 
 ### Removed（**破坏性**）
