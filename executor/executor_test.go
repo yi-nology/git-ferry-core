@@ -691,7 +691,7 @@ func TestPush(t *testing.T) {
 
 	// This will fail because we don't have a real git repo,
 	// but it exercises the push code path
-	_, _, _ = exec.push(context.Background(), "/tmp/nonexistent", task, repo, nil)
+	_, _, _, _ = exec.push(context.Background(), "/tmp/nonexistent", task, repo, nil)
 }
 
 func TestExecute_WithDefaultTimeout(t *testing.T) {

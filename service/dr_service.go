@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
-	"log/slog"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
@@ -38,9 +39,29 @@ func (s *Service) RunDRDrill(ctx context.Context, name string) (*DrillReport, er
 	if !pathx.IsSafeFileName(name) {
 		return nil, errInvalidName
 	}
-	rep, err := executor.RunDRDrill(ctx, filepath.Join(dir, name))
+	// **加密冷备要先解密再演练**:
+	// 同文件的 VerifyBundle/RestoreBundle 都走 DecryptToTemp,唯独演练直接
+	// 把密文喂给 `git bundle list-heads` ⇒ 配了 backup_encrypt_key 之后,
+	// **真正发到异地的密文件无法演练**(能演练的只是本地明文 bundle)。
+	path := filepath.Join(dir, name)
+	cleanup := func() {}
+	if executor.IsEncryptedFile(name) {
+		tmp, derr := executor.DecryptToTemp(path, s.config.Sync.BackupEncryptKey)
+		if derr != nil {
+			return nil, derr
+		}
+		path = tmp
+		cleanup = func() { _ = os.RemoveAll(filepath.Dir(tmp)) }
+	}
+	defer cleanup()
+
+	rep, err := executor.RunDRDrill(ctx, path)
 	if rep != nil {
-		_, _ = executor.SaveDrillReport(s.drillHistoryPath(), rep)
+		// 演练报告写不进哈希链要**报错**:否则"演练做过了"却查无此记录,
+		// 而链校验仍报"完整"。
+		if _, serr := executor.SaveDrillReport(s.drillHistoryPath(), rep); serr != nil {
+			return rep, errors.Wrap(serr, "save drill report")
+		}
 	}
 	return rep, err
 }
@@ -238,7 +259,6 @@ func (s *Service) drillHistoryPath() string {
 	}
 	return filepath.Join(dir, "drill-history.jsonl")
 }
-
 
 // knownTaskPrefixes 返回"任务 key 文件名前缀 → 真实任务 key"的映射。
 //

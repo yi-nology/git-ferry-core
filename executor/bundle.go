@@ -110,7 +110,6 @@ func zipDir(srcDir, dest string) error {
 	})
 }
 
-
 // expandBundleRefs 把 glob 分支模式展开成实际的 refs/heads/<b> 列表。
 func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *model.SyncTask) ([]string, error) {
 	branches, err := e.listLocalBranches(repoDir)
@@ -132,14 +131,14 @@ func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *m
 
 // rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。
 // 借鉴 gickup zip keep N:防冷备目录无限膨胀。
-func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
+func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error) {
 	if keep <= 0 {
-		return 0
+		return 0, nil
 	}
 	prefix := strutil.SanitizeFileToken(taskKey) + "-"
-	entries, err := os.ReadDir(backupDir)
-	if err != nil {
-		return 0
+	entries, rerr := os.ReadDir(backupDir)
+	if rerr != nil {
+		return 0, rerr
 	}
 	var names []string
 	for _, e := range entries {
@@ -154,16 +153,24 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int) {
 	}
 	// 文件名含时间戳 yyyyMMdd-HHmmss,字典序即时间序
 	if len(names) <= keep {
-		return 0
+		return 0, nil
 	}
 	// 升序:最早在前(文件名含时间戳,字典序即时间序)
 	sort.Strings(names)
+	var failures []string
 	for _, name := range names[:len(names)-keep] {
-		if os.Remove(filepath.Join(backupDir, name)) == nil {
-			removed++
+		if rerr := os.Remove(filepath.Join(backupDir, name)); rerr != nil {
+			// 删除失败**不计数也不沉默**:否则"轮转在生效"是假的,
+			// 冷备目录照样无限涨(而运维以为有上限)。
+			failures = append(failures, name+": "+rerr.Error())
+			continue
 		}
+		removed++
 	}
-	return removed
+	if len(failures) > 0 {
+		return removed, errors.Errorf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+	}
+	return removed, nil
 }
 
 // fanoutBundle 冷备完成后:可选 AES-GCM 加密 + 多目的地扇出上传。

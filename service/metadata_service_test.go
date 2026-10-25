@@ -615,11 +615,11 @@ func TestListIssues_CapsAtMax(t *testing.T) {
 	prov := &fakeEngineProv{issues: issues}
 	repo := &model.Repo{PlatformOwner: "o", PlatformRepo: "r", Platform: model.PlatformTypeGitHub}
 
-	all, err := listIssues(t.Context(), prov, repo, "all", 100)
+	all, _, _, err := listIssues(t.Context(), prov, repo, "all", 100, 0, "", "")
 	require.NoError(t, err)
 	assert.Len(t, all, 55)
 
-	capped, err := listIssues(t.Context(), prov, repo, "all", 52)
+	capped, _, _, err := listIssues(t.Context(), prov, repo, "all", 52, 0, "", "")
 	require.NoError(t, err)
 	assert.Len(t, capped, 52, "到 max 必须提前收束")
 	assert.Equal(t, "t0", capped[0].Title)

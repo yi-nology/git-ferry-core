@@ -156,6 +156,10 @@ type stubApprover struct {
 	// consumedTargetRef 记录消费时传入的目标 SHA:
 	// 消费必须落在"判定通过的那条"上,否则真正授权的放行仍可反复使用。
 	consumedTargetRef string
+	// consumedBranch 记录消费时传入的**分支**:
+	// 多分支任务的 task.TargetBranch 是 glob ⇒ 用它消费会匹配不到任何记录,
+	// 放行永远不被消费("一次性"退化成常驻后门)。
+	consumedBranch string
 }
 
 func (s *stubApprover) IsForcePushApproved(taskKey, branch, targetRef string) bool {
@@ -171,6 +175,7 @@ func (s *stubApprover) RequestApproval(taskKey, branch, reason, targetRef string
 func (s *stubApprover) ConsumeForcePushApproval(taskKey, branch, targetRef string) {
 	s.consumed++
 	s.consumedTargetRef = targetRef
+	s.consumedBranch = branch
 	s.approved = false
 }
 

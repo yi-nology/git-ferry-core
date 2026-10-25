@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -70,6 +71,9 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 	var usedApproval bool
 	// 放行所绑定的目标状态:消费时必须原样带回(消费若不绑定,可能消费掉别的放行)。
 	var approvalTargetRef string
+	// 放行对应的**分支**:多分支任务里 task.TargetBranch 是 glob 或空,
+	// 用它去消费会匹配不到任何记录 ⇒ 放行永远不被消费("一次性"退化成常驻后门)。
+	var approvalBranch string
 	err := retry.Do(ctx, retry.Config{
 		Attempts: maxRetries,
 		Delay:    time.Duration(model.RetryBackoffMs) * time.Millisecond,
@@ -80,7 +84,7 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 			rc.logf("retry attempt %d/%d...\n", attempt, maxRetries)
 		}
 		var pushErr error
-		usedApproval, approvalTargetRef, pushErr = rc.Exec.push(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID])
+		usedApproval, approvalTargetRef, approvalBranch, pushErr = rc.Exec.push(ctx, rc.RepoDir, rc.Task, rc.TargetRepo, rc.Platforms[rc.TargetRepo.PlatformID])
 		if pushErr != nil && attempt < maxRetries {
 			rc.logf("push failed, retrying fetch...\n")
 			if ferr := rc.Exec.fetchRepo(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, rc.Platforms[rc.SourceRepo.PlatformID]); ferr != nil {
@@ -95,7 +99,11 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 		// 下次同一任务同一分支再出现分歧必须重新审批
 		// (契约:"Admin 一次性放行后允许本次 force")。
 		if usedApproval && rc.Exec.Approver != nil {
-			rc.Exec.Approver.ConsumeForcePushApproval(rc.Task.Key, rc.Task.TargetBranch, approvalTargetRef)
+			branch := approvalBranch
+			if branch == "" {
+				branch = rc.Task.TargetBranch
+			}
+			rc.Exec.Approver.ConsumeForcePushApproval(rc.Task.Key, branch, approvalTargetRef)
 		}
 		// git_tags=true:tag 单独推(不覆盖已存在的 tag)。
 		// 失败只记警告 —— 分支已经推成功,不该因为一个同名 tag 冲突把整次同步判失败。
@@ -158,9 +166,17 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 	// 备份频率 × 任务数 × 天数的产物把磁盘吃满。
 	// 轮转是 optional 阶段的一环,失败只记 details(不影响同步结果)。
 	if keep := cfg.Sync.BackupKeep; keep > 0 {
-		if removed := rotateBundles(cfg.Sync.BackupDir, rc.Task.Key, keep); removed > 0 {
+		removed, rerr := rotateBundles(cfg.Sync.BackupDir, rc.Task.Key, keep)
+		if removed > 0 {
 			rc.logf("bundle: rotated out %d old bundle(s) (keep=%d)\n", removed, keep)
 		}
+		if rerr != nil {
+			// 轮转失败要留痕:否则"冷备只保留 N 份"看着是生效的,实际目录照样涨。
+			rc.logf("bundle: rotate failed: %v\n", rerr)
+			fmt.Fprintf(rc.Details, "  bundle rotate failed: %v\n", rerr)
+		}
+	} else {
+		rc.logf("bundle: rotation skipped (sync.backup_keep not configured => keep all)\n")
 	}
 	rc.Exec.fanoutBundle(ctx, path, cfg, rc.Details)
 	rc.BundlesPath = path

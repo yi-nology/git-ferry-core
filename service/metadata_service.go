@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -25,6 +26,10 @@ import (
 // 字段顺序与 JSON 标签对齐壳层 biz/model/ops.MetadataSnapshot（IDL 生成），
 // 保证落盘文件与响应体逐字节兼容。
 type MetadataSnapshot struct {
+	// writeErr 记录分片写失败(任一分片写不出来 ⇒ 这次备份不完整)。
+	// 未导出:不进 manifest/响应,只在本次调用内传递。
+	writeErr error
+
 	RepoKey   string           `json:"repo_key"`
 	Platform  string           `json:"platform"`
 	Owner     string           `json:"owner"`
@@ -177,7 +182,16 @@ func (s *Service) collectMetadataSnapshot(ctx context.Context, o MetadataBackupO
 		(o.IncludePRs && int(snap.Counts["pull_requests"]) >= maxPRs) ||
 		(o.IncludeReleases && int(snap.Counts["releases"]) >= maxReleases)
 
-	writeSnapshotJSON(snap, snapDir)
+	// 任一分片写失败 ⇒ 这次备份不完整 ⇒ 必须让调用方拿到失败。
+	if snap.writeErr != nil {
+		return nil, snap.writeErr
+	}
+	// manifest 写失败必须**让调用方拿到失败**:
+	// manifest.json 是回灌定位快照的唯一依据(没有它,这份快照在列表接口里
+	// 查不到、回灌也找不到)⇒ 写失败却返回 success,等于"备份成功但对灾备不可用"。
+	if err := writeSnapshotJSON(snap, snapDir); err != nil {
+		return nil, err
+	}
 	return &MetadataBackupResult{MetadataSnapshot: *snap, Truncated: truncated}, nil
 }
 
@@ -261,7 +275,15 @@ func (s *Service) SampleMetadataVerify(_ context.Context, repoKey string, n int)
 		}
 		return nil
 	})
-	return VerifyReport{Checked: checked, OK: len(warns) == 0, Warnings: warns}, nil
+	// **一个快照都没抽到 ⇒ 不是"校验通过"**:
+	// 原来 OK 只看 warns,checked=0 时也成立 ⇒ 没有快照时返回
+	// {checked:0, ok:true},调用方(如 DR 演练响应)原样透出成
+	// "metadata_check.ok=true" —— 看着像健康,实际什么都没查。
+	ok := len(warns) == 0 && checked > 0
+	if checked == 0 {
+		warns = append(warns, "没有可校验的元数据快照(备份目录里没有 manifest.json)")
+	}
+	return VerifyReport{Checked: checked, OK: ok, Warnings: warns}, nil
 }
 
 // ===== 收集器:单一职责,便于复用与测试 =====
@@ -292,10 +314,32 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 	if !ok {
 		return
 	}
-	issues, ierr := listIssues(ctx, prov, repo, "all", maxItems)
+	// **增量模式要按 updated 排、并扫得更深**。
+	//
+	// 平台默认按 created 倒序 ⇒ "上次备份后被改动的**老** issue"正好被挤在
+	// 第一页之外,客户端再按 updated 过滤也捞不到(捞到的永远是"最新创建"的
+	// 那批)⇒ 增量备份漏数据,而 truncated 标记又不提示具体漏了什么。
+	//
+	// ① 请求排序:支持 updated 排序的平台(GitHub)直接把要的排在前面;
+	// ② 扫描更深:不支持排序的平台(Gitea/Forgejo 家族当前 SDK 不暴露该参数)
+	//    只能靠多扫 —— 增量模式把扫描上限放大到增量的若干倍;
+	// ③ 扫完仍没覆盖到列表末尾 ⇒ 如实告警("可能还有未扫到的更新"),
+	//    不能让人以为"这次增量是全的"。
+	sortBy, sortDir := "", ""
+	scanMax := 0
+	if since != "" {
+		sortBy, sortDir = "updated", "desc"
+		scanMax = maxItems * incrementalScanFactor
+	}
+	issues, scanned, prSkipped, ierr := listIssues(ctx, prov, repo, "all", maxItems, scanMax, sortBy, sortDir)
 	if ierr != nil {
 		snap.Warnings = append(snap.Warnings, "issues: "+ierr.Error())
 		return
+	}
+	if since != "" && scanned >= scanMax {
+		snap.Warnings = append(snap.Warnings, fmt.Sprintf(
+			"issues: 增量扫描已达上限(扫描 %d 条),可能还有未扫到的更新(平台若不支持按 updated 排序,增量可能不完整)",
+			scanned))
 	}
 	// **剔除 PR**:GitHub 的 issue 列表端点把 PR 一起返回(同一条记录既是
 	// issue 也是 PR)⇒ 不剔除的话同一个 PR 既进 issues 快照又进
@@ -303,11 +347,11 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 	// ⇒ PR 多的仓里真实 issue 可能整批落在预算之外,快照缺项且无任何告警。
 	//
 	// 剔除数量如实告警:调用方要能知道"issue 快照少了多少"。
-	if n := countPullRequests(issues); n > 0 {
-		issues = withoutPullRequests(issues)
+	if prSkipped > 0 {
 		snap.Warnings = append(snap.Warnings,
-			fmt.Sprintf("issues: 剔除了 %d 条 PR(平台的 issue 列表包含 PR)", n))
+			fmt.Sprintf("issues: 剔除了 %d 条 PR(平台的 issue 列表包含 PR;它们不占 issue 额度)", prSkipped))
 	}
+
 	if since != "" {
 		issues = filterIssuesSince(issues, since)
 	}
@@ -320,6 +364,12 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 	writeSnapshotPart(snap, "issues.json", issues)
 	snap.Counts["issues"] = int32(len(issues))
 }
+
+// incrementalScanFactor 增量模式把**扫描上限**放大到增量的多少倍。
+//
+// 平台不支持按 updated 排序时,只能靠多扫几页来覆盖"被改过的老 issue";
+// 放大倍数越大越全,但 API 调用也越多。
+const incrementalScanFactor = 10
 
 // countPullRequests 数一数里有多少条其实是 PR。
 func countPullRequests(issues []*issueRow) int {
@@ -523,21 +573,31 @@ func (s *Service) collectGists(ctx context.Context, prov sdkprov.Provider, snapD
 }
 
 // writeSnapshotPart 写出分片 JSON 并登记文件名。
-func writeSnapshotPart(snap *MetadataSnapshot, name string, v any) {
+// writeSnapshotPart 写一个分片文件。
+//
+// 返回 error:**写失败是"这次备份不完整"**,不能只记 warning 就当成功返回
+// (调用方要能区分"备份成功"与"备份了一半")。分片写失败仍继续写其它分片
+// (尽量多留材料),但错误会一路返回给调用方。
+func writeSnapshotPart(snap *MetadataSnapshot, name string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		snap.Warnings = append(snap.Warnings, name+": marshal: "+err.Error())
-		return
+		return errors.Wrap(err, "marshal "+name)
 	}
 	if err := os.WriteFile(filepath.Join(snap.Dir, name), data, 0o600); err != nil {
 		snap.Warnings = append(snap.Warnings, name+": write: "+err.Error())
-		return
+		if snap.writeErr == nil {
+			snap.writeErr = errors.Wrap(err, "write "+name)
+		}
+		return errors.Wrap(err, "write "+name)
 	}
 	snap.Files = append(snap.Files, name)
+	return nil
 }
 
-func writeSnapshotJSON(snap *MetadataSnapshot, snapDir string) {
-	writeSnapshotPart(snap, "manifest.json", snap)
+// writeSnapshotJSON 写 manifest.json;失败返回错误(调用方据此判失败)。
+func writeSnapshotJSON(snap *MetadataSnapshot, snapDir string) error {
+	return writeSnapshotPart(snap, "manifest.json", snap)
 }
 
 // ===== issue 分片视图（与壳 issues-export 的行结构 JSON 兼容） =====
@@ -562,22 +622,33 @@ type issueRow struct {
 
 // listIssues 分页拉取 issue 行（空页终止 + 到 max 即 ErrStopIteration 的
 // 页预算语义与壳 issues-export 一致）。
-func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state string, max int) ([]*issueRow, error) {
+// listIssues 拉取 issue 行。
+//
+// max 是**产出条数**上限;scanMax 是**扫描条数**上限(增量模式要扫得更深,
+// 见 incrementalScanFactor);scanMax<=0 时与 max 相同。
+func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state string, max, scanMax int,
+	sortBy, sortDir string) ([]*issueRow, int, int, error) {
 	// 平台不一定实现 IssueManager
 	im, ok := p.(sdkprov.IssueManager)
 	if !ok {
-		return nil, fmt.Errorf("platform %s does not support issue export", repo.Platform)
+		return nil, 0, 0, fmt.Errorf("platform %s does not support issue export", repo.Platform)
 	}
 	// 空 state 交平台默认(通常 open+closed 或 open)
 	st := sdkprov.IssueState(state)
 	const perPage = 50
-	// 页预算 = 拉满 max 所需页 +1 页空页观测(空页终止语义,v0.73 分页面);
-	// fn 内到 max 即 ErrStopIteration 提前收束,预算实际用不到。
-	maxPages := (max + perPage - 1) / perPage
+	// 页预算 = 拉满扫描上限所需页 +1 页空页观测(空页终止语义);
+	// fn 内到扫描上限即 ErrStopIteration 提前收束。
+	scanLimit := max
+	if scanMax > scanLimit {
+		scanLimit = scanMax
+	}
+	maxPages := (scanLimit + perPage - 1) / perPage
 	if maxPages < 1 {
 		maxPages = 1
 	}
 	var batch []*sdkprov.Issue
+	scanned := 0
+	prSkipped := 0
 	err := sdkprov.EachBounded(ctx,
 		func(ctx context.Context, page int) ([]*sdkprov.Issue, error) {
 			items, _, lerr := im.ListIssues(ctx, sdkprov.ListIssuesOptions{
@@ -586,10 +657,21 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 				State:   st,
 				Page:    page,
 				PerPage: perPage,
+				// 增量模式要按 updated 排(见 collectIssues 的说明)。
+				Sort:      sortBy,
+				Direction: sortDir,
 			})
 			return items, lerr
 		}, maxPages+1,
 		func(iss *sdkprov.Issue) error {
+			scanned++
+			// **PR 不占 issue 的预算**:平台的 issue 列表端点(GitHub)把 PR 一起返回,
+			// 若让它们占额度,PR 多的仓里真实 issue 会被整批挤出预算(而快照看着是成功的)。
+			// 这里直接跳过并继续翻页 ⇒ 真实 issue 补进预算。
+			if iss != nil && iss.IsPullRequest {
+				prSkipped++
+				return nil
+			}
 			if len(batch) >= max {
 				return sdkprov.ErrStopIteration
 			}
@@ -597,13 +679,13 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 			return nil
 		})
 	if err != nil {
-		return nil, err
+		return nil, scanned, prSkipped, err
 	}
 	out := make([]*issueRow, 0, len(batch))
 	for _, iss := range batch {
 		out = append(out, toIssueRow(iss))
 	}
-	return out, nil
+	return out, scanned, prSkipped, nil
 }
 
 func toIssueRow(iss *sdkprov.Issue) *issueRow {

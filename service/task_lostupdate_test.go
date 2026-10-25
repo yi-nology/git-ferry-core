@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -36,7 +37,7 @@ func TestUpdateTaskLastRun_DoesNotRevertConcurrentChanges(t *testing.T) {
 	// 执行期间:运维把策略改成 allow
 	allow := "allow"
 	_, err = svc.tasks.UpdateTask(t.Context(), &model.UpdateTaskRequest{
-		Key: created.Key, ForcePushPolicy: allow,
+		Key: created.Key, ForcePushPolicy: &allow,
 	})
 	require.NoError(t, err)
 
@@ -101,4 +102,50 @@ func TestUpdateTask_CronCanBeCleared(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "0 3 * * *", updated3.Cron, "不传 cron 时 cron 不得被清掉")
 	require.Equal(t, "renamed", updated3.Name)
+}
+
+// TestUpdateTask_CanClearFields 这三个字段必须能**清空**。
+//
+// 回归背景:它们是普通 string,空串与"没传"不可区分 ⇒ 一旦设过就再也改不回去
+// (只能删任务重建)。与之前修好的 Cron 同一类问题。
+func TestUpdateTask_CanClearFields(t *testing.T) {
+	svc, _ := setupCronTestService(t)
+
+	keep := true
+	policy := "block"
+	include := "release/*"
+	exclude := "refs/pull/*"
+	created, err := svc.tasks.CreateTask(t.Context(), &model.CreateTaskRequest{
+		Name: "clear-fields", SourceRepoKey: "src/repo", TargetRepoKey: "dst/repo",
+		SourceBranch: "main", TargetBranch: "main", SyncMode: "single",
+		KeepDivergent:      &keep,
+		ForcePushPolicy:    policy,
+		IncludeBranches:    include,
+		ExcludeRefPatterns: exclude,
+	})
+	require.NoError(t, err)
+
+	empty := ""
+	_, err = svc.tasks.UpdateTask(t.Context(), &model.UpdateTaskRequest{
+		Key: created.Key,
+		// 三个都显式给空串 ⇒ 应当被清空
+		ForcePushPolicy:    &empty,
+		IncludeBranches:    &empty,
+		ExcludeRefPatterns: &empty,
+	})
+	require.NoError(t, err)
+
+	got, err := svc.tasks.GetTask(t.Context(), created.Key)
+	require.NoError(t, err)
+	assert.Empty(t, got.ForcePushPolicy, "force_push_policy 应被清空")
+	assert.Empty(t, got.IncludeBranches, "include_branches 应被清空")
+	assert.Empty(t, got.ExcludeRefPatterns, "exclude_ref_patterns 应被清空")
+
+	// 不传(nil)⇒ 不修改
+	_, err = svc.tasks.UpdateTask(t.Context(), &model.UpdateTaskRequest{Key: created.Key, Name: "renamed"})
+	require.NoError(t, err)
+	got, err = svc.tasks.GetTask(t.Context(), created.Key)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", got.Name)
+	assert.Empty(t, got.ForcePushPolicy, "不传 ⇒ 不该被改动")
 }

@@ -129,8 +129,12 @@ func isNonFastForward(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	// 关键词要**精确**:裸的 "rejected" 会命中 GitLab/Gitea 的受保护分支拒收
+	// ("! [remote rejected] main -> main (protected branch hook declined)")
+	// ⇒ 把"平台策略拒收"说成"目标有独有提交",并引导运维去开 git_force
+	// (而 git_force 对受保护分支毫无作用)—— 误导 + 权限升级压力。
 	for _, kw := range []string{
-		"non-fast-forward", "fetch first", "rejected", "would be overwritten",
+		"non-fast-forward", "fetch first", "would be overwritten",
 		"updates were rejected",
 	} {
 		if strings.Contains(msg, kw) {

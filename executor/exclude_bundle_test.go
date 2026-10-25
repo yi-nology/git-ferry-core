@@ -104,7 +104,7 @@ func TestRotateBundles_WiredToKeep(t *testing.T) {
 		name := "taskX-main-2026010" + string(rune('0'+i)) + "-000000.bundle"
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
 	}
-	removed := rotateBundles(dir, "taskX", 2)
+	removed, _ := rotateBundles(dir, "taskX", 2)
 	assert.Equal(t, 3, removed, "只保留最近 2 份 ⇒ 应删掉 3 份")
 
 	entries, err := os.ReadDir(dir)

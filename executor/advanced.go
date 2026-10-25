@@ -104,10 +104,11 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 			"本次未覆盖任何内容,也未产生审批申请 —— 避免在没有备份的情况下被放行覆盖")
 	}
 	// 取目标端(一次 fetch);失败按 fail-closed 处理(见 fetchTargetForDivergence)。
-	if err := e.fetchTargetForDivergence(ctx, dir, []string{targetBranch}, repo, platform); err != nil {
+	targetKnown, err := e.fetchTargetForDivergence(ctx, dir, []string{targetBranch}, []string{targetBranch}, repo, platform)
+	if err != nil {
 		return false, "", err
 	}
-	return e.checkDivergenceForBranch(ctx, dir, sourceBranch, targetBranch, force, policy, backupDir, taskKey)
+	return e.checkDivergenceForBranch(ctx, dir, sourceBranch, targetBranch, force, policy, backupDir, taskKey, targetKnown)
 }
 
 // normalizeDivergencePolicy 归一策略;第二个返回值 false = 不需要做分歧检查。
@@ -135,22 +136,63 @@ func normalizeDivergencePolicy(policy string) (string, bool) {
 // 必须带凭证:自建实例(私有仓 / 自签证书 / 过期证书)不带凭证就连不上,
 // 而连不上时**不能**当作"无分歧"放行 —— 那等于给"覆盖目标侧独有提交"
 // 开了一条静默通道(实测:目标侧分叉提交被 force push 覆盖,任务仍报成功)。
-func (e *Executor) fetchTargetForDivergence(ctx context.Context, dir string, branches []string, repo *model.Repo, platform *model.Platform) error {
+// fetchBranches 是"要 fetch 哪些分支";knownBranches 是"本次要推哪些分支"。
+//
+// 两者**必须分开**:多分支时 fetch 的是全量(nil),而"目标端是否已知存在"
+// 要看**要推的那些分支**。之前用 fetch 参数去判断,多分支时传的是 nil ⇒
+// 循环体一次都不执行 ⇒ 恒返回 false ⇒ fetch 失败被当成"目标端没有这些分支"
+// 放行 —— fail-closed 成了死代码,目标侧独有提交被静默覆盖。
+// 第一个返回值 targetKnown = "目标端状态是否已知"。
+//
+// **这是 fail-closed 的关键**:取回失败时,本地查不到 refs/remotes/target/<b>
+// 既可能是"目标端没这个分支",也可能是"目标端连不上/状态未知"——
+// 两者在本地看起来一模一样。不区分就会把"不知道"当成"没有"⇒ 放行覆盖。
+func (e *Executor) fetchTargetForDivergence(ctx context.Context, dir string,
+	fetchBranches, knownBranches []string, repo *model.Repo, platform *model.Platform) (bool, error) {
 	if _, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   RemoteTarget,
-		Branches: branches,
+		Branches: fetchBranches,
 		Auth:     e.authConfig(ctx, repo, platform),
 	}); err != nil {
-		if e.targetBranchKnown(ctx, dir, branches) {
-			return errors.Wrapf(err,
+		// 目标分支**已知存在**(本地留有远端跟踪 ref)却连不上 ⇒ fail-closed。
+		if e.targetBranchKnown(ctx, dir, knownBranches) {
+			return false, errors.Wrapf(err,
 				"cannot verify divergence: target fetch failed while the target branch is known to exist")
 		}
+		// 已经是**全量** fetch 还是失败 ⇒ 目标端不可达/损坏 ⇒
+		// **无法判断目标端有没有这些分支** ⇒ 必须 fail-closed。
+		//
+		// 放行的话:本地没有 refs/remotes/target/* (新 workdir 从没 fetch 过)⇒
+		// 逐分支判定也判不出来("目标分支不存在"与"连不上"都表现为查不到 ref)
+		// ⇒ 目标侧独有提交被静默覆盖,而任务报 success。
+		if fetchBranches == nil {
+			return false, errors.Wrapf(err,
+				"cannot verify divergence: target fetch failed (target unreachable or broken); "+
+					"refusing to overwrite without knowing the target state")
+		}
+		// 分支专属的 fetch 失败,可能只是"目标端确实没这个分支"(首次推送)⇒
+		// 全量再取一次来区分:全量也失败 ⇒ 目标端不可达 ⇒ fail-closed。
+		if ferr := e.fetchTargetAll(ctx, dir, repo, platform); ferr != nil {
+			return false, errors.Wrapf(err, "cannot verify divergence: target fetch failed")
+		}
 		slog.Info("目标端没有这些分支(首次推送),按无分歧处理",
-			"branches", strings.Join(branches, ","), "error", err)
-		return nil
+			"branches", strings.Join(knownBranches, ","), "error", err)
+		// 目标端可达、取回成功 ⇒ 状态已知(目标端确实没这些分支)
+		return true, nil
 	}
-	return nil
+	return true, nil
+}
+
+// fetchTargetAll 全量取回目标端(用来区分"没这个分支"与"连不上")。
+func (e *Executor) fetchTargetAll(ctx context.Context, dir string, repo *model.Repo, platform *model.Platform) error {
+	_, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
+		RepoPath: dir,
+		Remote:   RemoteTarget,
+		Branches: nil,
+		Auth:     e.authConfig(ctx, repo, platform),
+	})
+	return err
 }
 
 // targetBranchKnown 目标端是否**已知**存在这些分支(本地有对应的远端跟踪 ref)。
@@ -171,7 +213,21 @@ func (e *Executor) targetBranchKnown(ctx context.Context, dir string, branches [
 // 与旧的整段实现相比,这里**不再吞掉"算不出来"的错误**:
 // 算不出来时只有一种情况可以放行 —— 目标分支压根不存在;
 // 目标分支存在却算不出来 ⇒ fail-closed(报错),否则 force 推送会覆盖独有提交。
-func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string) (bool, string, error) {
+func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string, targetKnown bool) (bool, string, error) {
+	// **未 force 时 git 自己会拒绝非快进**,无需额外检查。
+	//
+	// 这条早退必须在这里(而不是只在单分支入口):多分支路径直接调本函数,
+	// 没有它就会在 force=false 时也去 fetch 目标端 + 判定分歧 ——
+	// 白白多一次全量 fetch,还会往审批队列塞待批记录(任务根本没在强推)。
+	if !force {
+		return false, "", nil
+	}
+	// 策略归一也必须在这里:"allow" 的语义是"放行",不归一的话
+	// 多分支路径会把 allow 当成 block ⇒ 显式允许覆盖的任务反而被拒。
+	policy, ok := normalizeDivergencePolicy(policy)
+	if !ok {
+		return false, "", nil
+	}
 	// 本地 source 与 target 远端跟踪比对:target 有而 source 没有的提交
 	targetRef := "refs/remotes/" + RemoteTarget + "/" + targetBranch
 	// 原实现:git rev-list --right-only --count source...targetRef,
@@ -193,6 +249,13 @@ func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBran
 		if _, rerr := e.backend.RevParse(ctx, dir, targetRef); rerr == nil {
 			return false, "", errors.Wrapf(err,
 				"cannot verify divergence for %q: target branch exists but the comparison failed", targetBranch)
+		}
+		if !targetKnown {
+			// 目标端状态**未知**(取回失败)且本地也没有它的跟踪 ref ⇒
+			// "查不到"既可能是"目标端没这个分支",也可能是"目标端连不上"——
+			// 不区分就会把"不知道"当成"没有"⇒ 放行覆盖目标侧独有提交。
+			return false, "", errors.Wrapf(err,
+				"cannot verify divergence for %q: target state unknown (fetch failed and no local tracking ref)", targetBranch)
 		}
 		return false, "", nil
 	}
@@ -216,7 +279,17 @@ func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBran
 	//
 	// 放行绑定到**当前目标分支的 HEAD**:审批是"针对这一次分歧"的授权,
 	// 目标侧此后若又前进(独有提交从 1 个变成 50 个),旧放行不该继续适用。
-	targetSHA, _ := e.backend.RevParse(ctx, dir, targetRef)
+	// 目标分支的 HEAD:算不出来 ⇒ **不能当成"未绑定"**。
+	//
+	// 空 target_ref 在 DAO 的语义里是"对任何目标状态都适用"(早期版本的审批),
+	// 所以这里若把解析失败当成空串,一条**未绑定**的旧审批就会被用来覆盖
+	// 此刻的目标状态 —— 正好绕开了"审批绑定目标状态"这层保护。
+	// 算不出来就不该放行:报错让人工介入。
+	targetSHA, shaErr := e.backend.RevParse(ctx, dir, targetRef)
+	if shaErr != nil {
+		return false, "", errors.Wrapf(shaErr,
+			"cannot resolve target HEAD %q for divergence check", targetRef)
+	}
 	if e.Approver != nil {
 		if e.Approver.IsForcePushApproved(taskKey, targetBranch, targetSHA) {
 			// 放行通过 —— 标记"用掉了":本次强推成功后要把这条放行消费掉,

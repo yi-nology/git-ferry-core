@@ -175,14 +175,14 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	if req.KeepDivergent != nil {
 		task.KeepDivergent = *req.KeepDivergent
 	}
-	if req.ForcePushPolicy != "" {
-		task.ForcePushPolicy = req.ForcePushPolicy
+	if req.ForcePushPolicy != nil {
+		task.ForcePushPolicy = *req.ForcePushPolicy
 	}
-	if req.IncludeBranches != "" {
-		task.IncludeBranches = req.IncludeBranches
+	if req.IncludeBranches != nil {
+		task.IncludeBranches = *req.IncludeBranches
 	}
-	if req.ExcludeRefPatterns != "" {
-		task.ExcludeRefPatterns = req.ExcludeRefPatterns
+	if req.ExcludeRefPatterns != nil {
+		task.ExcludeRefPatterns = *req.ExcludeRefPatterns
 	}
 
 	if err := ts.taskDAO.Update(task); err != nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/executor"
 )
 
@@ -25,6 +26,11 @@ func (s *Service) ListBundles(taskKey string) ([]BundleInfo, error) {
 // 自动识别 .enc 加密冷备:先解密到临时目录再校验。
 func (s *Service) VerifyBundle(ctx context.Context, name string) (*BundleInfo, error) {
 	dir := s.config.Sync.BackupDir
+	// 文件名安全校验(纵深防御):core 是给多个壳用的库,
+	// 不能假设每个壳都校验过;名字里带 ../ 就能把路径拼到备份目录之外。
+	if !pathx.IsSafeFileName(name) {
+		return nil, errInvalidName
+	}
 	path := filepath.Join(dir, name)
 	if executor.IsEncryptedFile(name) {
 		tmp, err := executor.DecryptToTemp(path, s.config.Sync.BackupEncryptKey)
@@ -41,6 +47,9 @@ func (s *Service) VerifyBundle(ctx context.Context, name string) (*BundleInfo, e
 // 支持 .bundle 与 .bundle.enc(需配置 backup_encrypt_key)。
 func (s *Service) RestoreBundle(ctx context.Context, name, destDir string) error {
 	dir := s.config.Sync.BackupDir
+	if !pathx.IsSafeFileName(name) {
+		return errInvalidName
+	}
 	path := filepath.Join(dir, name)
 	if executor.IsEncryptedFile(name) {
 		tmp, err := executor.DecryptToTemp(path, s.config.Sync.BackupEncryptKey)
@@ -110,6 +119,27 @@ func (s *Service) CleanupExpiredBackups() (removed int, err error) {
 				return filepath.SkipDir
 			}
 		}
+		return nil
+	})
+	// 同步清理过期的**回灌历史**(metadata-restore/<repo>/*.json)。
+	//
+	// 原来只清 metadata/ ⇒ 回灌历史目录无限增长(每次回灌一个文件,永不清理)。
+	// 它和元数据快照是同一类东西(灾备材料),按同一保留期清即可
+	// (legal_hold 时整个清理都不执行 ✔)。
+	restoreRoot := filepath.Join(dir, "metadata-restore")
+	_ = filepath.WalkDir(restoreRoot, func(path string, d os.DirEntry, werr error) error {
+		if werr != nil || d == nil || d.IsDir() {
+			return nil
+		}
+		fi, ierr := d.Info()
+		if ierr != nil || !fi.ModTime().Before(cutoff) {
+			return nil
+		}
+		if rerr := os.Remove(path); rerr != nil {
+			failures = append(failures, path+": "+rerr.Error())
+			return nil
+		}
+		removed++
 		return nil
 	})
 	if len(failures) > 0 {

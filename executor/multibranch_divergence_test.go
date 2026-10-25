@@ -58,7 +58,7 @@ func TestPush_MultiBranch_BlockPolicyBlocksDivergentBranch(t *testing.T) {
 		require.NoError(t, rerr, "多分支首次 clone 后本地应建出 %s", b)
 	}
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.Error(t, err, "多分支 + block 策略:目标侧有独有提交时必须被拦下")
 	assert.True(t, isDivergent(err), "应是分歧保护错误,实际=%v", err)
 	assert.Contains(t, err.Error(), "release/1.0", "错误要点名是哪个分支分歧")
@@ -93,7 +93,7 @@ func TestPush_MultiBranch_BlockPolicyAllowsWhenNoDivergence(t *testing.T) {
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 
 	branches := targetBranches(t, dstBare)
@@ -135,7 +135,7 @@ func TestPush_SingleBranch_BlockPolicyFailsClosedWhenCompareFails(t *testing.T) 
 		"前置条件:本地应已留下目标分支的远端跟踪 ref")
 	gitRun(t, work, "remote", "set-url", "target", filepath.Join(t.TempDir(), "does-not-exist.git"))
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.Error(t, err, "目标端已知存在却连不上时必须报错,不能放行")
 	assert.Contains(t, err.Error(), "cannot verify divergence")
 }

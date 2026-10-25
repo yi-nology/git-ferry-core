@@ -98,7 +98,7 @@ func TestRotateRespectsKeep(t *testing.T) {
 		name := "task-main-2026010" + string(rune('1'+i)) + "-000000.bundle"
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o640))
 	}
-	removed := rotateBundles(dir, "task", 2)
+	removed, _ := rotateBundles(dir, "task", 2)
 	assert.Equal(t, 3, removed)
 	left, _ := ListBundles(dir, "task")
 	assert.Len(t, left, 2)

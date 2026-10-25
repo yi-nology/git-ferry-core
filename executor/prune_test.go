@@ -70,7 +70,7 @@ func TestPush_PruneKeepsBranchWhenSourceAlive(t *testing.T) {
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 
 	// 目标侧必须有该分支(不该被 prune 掉)
@@ -106,7 +106,7 @@ func TestPush_PruneKeepsDefaultBranchWhenSourceAlive(t *testing.T) {
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err, "同步必须成功(旧实现会在这里被 prune 失败拖成错误)")
 	assert.Contains(t, targetBranches(t, dstBare), "main", "目标侧默认分支不该被删")
 }
@@ -139,7 +139,7 @@ func TestPush_PruneDeletesBranchWhenSourceGone(t *testing.T) {
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
 	// 先正常同步一次,目标侧有 main
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 	require.Contains(t, targetBranches(t, dstBare), "feature/x")
 
@@ -153,7 +153,7 @@ func TestPush_PruneDeletesBranchWhenSourceGone(t *testing.T) {
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil),
 		"源端删除分支不应让整次同步失败(应走镜像删除)")
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 
 	assert.NotContains(t, targetBranches(t, dstBare), "feature/x",
@@ -183,14 +183,14 @@ func TestPush_SourceGone_NoPruneKeepsTarget(t *testing.T) {
 	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 	require.Contains(t, targetBranches(t, dstBare), "feature/x")
 
 	// 源端删掉 main
 	gitRun(t, src, "push", "origin", "--delete", "feature/x")
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 
 	assert.Contains(t, targetBranches(t, dstBare), "feature/x",
@@ -229,7 +229,7 @@ func TestPush_SourceGone_DoesNotResurrectBranch(t *testing.T) {
 	_, err = exec.backend.RevParse(ctx, work, "refs/heads/feature/x")
 	require.NoError(t, err, "前提:本地还留着残留分支")
 
-	_, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
 	require.NoError(t, err)
 
 	// 目标侧不该出现 main(源端已经删了)

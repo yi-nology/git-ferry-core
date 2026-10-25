@@ -255,6 +255,6 @@ func TestPushTags_ConflictingTagDoesNotBlockOthers(t *testing.T) {
 // mustPush 调 exec.push 并只关心错误(忽略"是否用掉放行"的返回)。
 func mustPush(t *testing.T, exec *Executor, ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
 	t.Helper()
-	_, _, err := exec.push(ctx, dir, task, repo, platform)
+	_, _, _, err := exec.push(ctx, dir, task, repo, platform)
 	return err
 }

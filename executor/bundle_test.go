@@ -19,7 +19,7 @@ func TestRotateBundles_KeepN(t *testing.T) {
 	// 不相关文件
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "t2-main-20260101-000000.bundle"), []byte("y"), 0o600))
 
-	removed := rotateBundles(dir, "t1", 2)
+	removed, _ := rotateBundles(dir, "t1", 2)
 	assert.Equal(t, 3, removed)
 
 	entries, _ := os.ReadDir(dir)
@@ -37,5 +37,7 @@ func TestRotateBundles_KeepN(t *testing.T) {
 func TestRotateBundles_KeepZero(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "t1-a.bundle"), []byte("x"), 0o600))
-	assert.Equal(t, 0, rotateBundles(dir, "t1", 0))
+	r0, rerr0 := rotateBundles(dir, "t1", 0)
+	assert.Equal(t, 0, r0)
+	assert.NoError(t, rerr0)
 }

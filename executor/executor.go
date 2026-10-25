@@ -711,7 +711,7 @@ func (e *Executor) workdirUsable(ctx context.Context, dir string) bool {
 // push 推送分支到目标端。
 // 第二个返回值 usedApproval = 本次是否用掉了一次人工放行(调用方负责在成功后兑现"一次性")。
 // 第三个返回值 approvalTargetRef = 该放行绑定的目标状态(消费时必须原样带回)。
-func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) (bool, string, error) {
+func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) (bool, string, string, error) {
 	// 分歧保护:按 ForcePushPolicy(block/backup_on_demand/allow)处理
 	policy := task.ForcePushPolicy
 	if policy == "" {
@@ -745,14 +745,14 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 			}
 		}
 		if len(branches) == 0 {
-			return false, "", fmt.Errorf("no local branches match %q", task.SourceBranch)
+			return false, "", "", fmt.Errorf("no local branches match %q", task.SourceBranch)
 		}
 		for _, b := range branches {
 			refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 		}
 	} else {
 		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
-			return false, "", fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+			return false, "", "", fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
 		}
 		// **源端还有这个分支吗?**
 		//
@@ -767,7 +767,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		if _, rerr := e.backend.RevParse(ctx, dir, sourceRef); rerr != nil {
 			if task.GitPushPrune {
 				if perr := e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform); perr != nil {
-					return false, "", perr
+					return false, "", "", perr
 				}
 				slog.Info("源端已删除该分支,已删除目标侧同名分支(镜像删除)",
 					"source", task.SourceBranch, "target", task.TargetBranch)
@@ -775,7 +775,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 				slog.Info("源端已删除该分支,本次不推送(git_push_prune 未开启,目标侧保持不动)",
 					"source", task.SourceBranch, "target", task.TargetBranch)
 			}
-			return false, "", nil
+			return false, "", "", nil
 		}
 		branches = []string{task.SourceBranch}
 		refSpecs = []string{fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch)}
@@ -789,34 +789,47 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	// 分歧保护对多分支**整体失效**。现在按实际要推的分支逐个判定。
 	var usedApproval bool
 	var approvalTargetRef string
+	// approvalBranch 是"这次放行对应的分支" —— 消费时要用它,
+	// 不能用 task.TargetBranch(多分支任务里那是 glob 或空)⇒
+	// 否则放行既不被消费、也不报错,approved 一直挂着 ⇒
+	// "一次性放行"对多分支退化成常驻后门。
+	var approvalBranch string
 	if multi {
 		// 目标端一次取回(逐分支 fetch 太慢)。
-		if err := e.fetchTargetForDivergence(ctx, dir, nil, repo, platform); err != nil {
-			return false, "", errors.Wrap(err,
+		//
+		// **knownBranches 传"本次要推的分支"**:fetch 参数是 nil(全量),
+		// 若用它判断"目标端是否已知存在",循环体一次都不执行 ⇒
+		// fetch 失败会被当成"目标端没有这些分支"放行 —— fail-closed 形同虚设,
+		// 目标侧独有提交被静默覆盖。
+		targetKnown, ferr := e.fetchTargetForDivergence(ctx, dir, nil, branches, repo, platform)
+		if ferr != nil {
+			return false, "", "", errors.Wrap(ferr,
 				"cannot verify divergence for multi-branch task: target fetch failed")
 		}
 		for _, b := range branches {
-			used, ref, derr := e.checkDivergenceForBranch(ctx, dir, b, b, task.GitForce, policy, backupDir, task.Key)
+			used, ref, derr := e.checkDivergenceForBranch(ctx, dir, b, b, task.GitForce, policy, backupDir, task.Key, targetKnown)
 			if derr != nil {
-				return false, ref, derr
+				return false, ref, approvalBranch, derr
 			}
 			if used {
 				usedApproval = true
 				approvalTargetRef = ref
+				approvalBranch = b
 			}
 		}
 	} else {
 		var derr error
 		usedApproval, approvalTargetRef, derr = e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key, repo, platform)
 		if derr != nil {
-			return false, approvalTargetRef, derr
+			return false, approvalTargetRef, approvalBranch, derr
 		}
+		approvalBranch = task.TargetBranch
 	}
 
 	// LFS 对象先推,避免代码分支推上去了大文件缺失
 	if task.GitLFS {
 		if err := e.syncLFS(ctx, dir, RemoteTarget, false); err != nil {
-			return usedApproval, approvalTargetRef, err
+			return usedApproval, approvalTargetRef, approvalBranch, err
 		}
 	}
 
@@ -828,7 +841,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		Auth:     e.authConfig(ctx, repo, platform),
 	})
 	if err != nil {
-		return usedApproval, approvalTargetRef, err
+		return usedApproval, approvalTargetRef, approvalBranch, err
 	}
 
 	// 推送侧 prune **只发生在"源端已删除该分支"的那条路径上**
@@ -844,7 +857,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		slog.Warn("git_push_prune 对多分支任务暂未实现(本次不删目标侧任何分支)",
 			"sourcePattern", task.SourceBranch)
 	}
-	return usedApproval, approvalTargetRef, nil
+	return usedApproval, approvalTargetRef, approvalBranch, nil
 }
 
 // pushTags 把源端的 tag 推到目标端。

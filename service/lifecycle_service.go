@@ -12,6 +12,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -253,7 +254,6 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 	return rep, nil
 }
 
-
 // prepareDriftRepo 准备该任务的**漂移检测专用仓库**(克隆源端 + 配置 target 远端)。
 //
 // 为什么不用 executor 的 workdir:检测要 fetch,而 fetch 会写 git 锁 ——
@@ -279,7 +279,14 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 		return "", errors.New("未配置 git.temp_dir")
 	}
 	dir := filepath.Join(base, "drift", t.Key, "repo")
-	if _, serr := os.Stat(filepath.Join(dir, ".git")); serr != nil {
+	// **仓库必须可用,不能只看 .git 在不在**:
+	// git clone 会先建好 .git 再取对象,被预算/超时杀掉后目录残留 .git ⇒
+	// 下次只做 os.Stat 就认定"已存在"⇒ 跳过 clone ⇒ 后续 fetch 全失败
+	// ⇒ **该任务的漂移检测被永久打瞎**(而报告里 Checked 不增,看着像"没问题")。
+	if !driftRepoUsable(ctx, backend, dir) {
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("漂移仓库清理失败,重建", "dir", dir, "error", err)
+		}
 		if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 			return "", err
 		}
@@ -332,10 +339,16 @@ func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.
 			dstPlat = got
 		}
 	}
+	// **glob 不能直接当 fetch 的分支参数**:"release/*" 不是合法 refspec
+	// (git: invalid refspec)⇒ fetch 报错 ⇒ 多分支任务的漂移检测**永远失败**,
+	// 而且失败被算作"未漂移"(Checked/Drifted 都不增,报告里与"已检查无漂移"无法区分)。
+	// 这里对 glob 改成全量取回,再从远端跟踪 ref 里挑出匹配的分支。
+	srcBranches, srcGlob := driftFetchBranches(t.SourceBranch)
+	tgtBranches, tgtGlob := driftFetchBranches(t.TargetBranch)
 	if _, ferr := backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   executor.RemoteOrigin,
-		Branches: []string{t.SourceBranch},
+		Branches: srcBranches,
 		Auth:     executor.BuildRepoAuth(srcRepo, srcPlat),
 	}); ferr != nil {
 		return "", "", ferr
@@ -343,14 +356,68 @@ func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.
 	if _, ferr := backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   executor.RemoteTarget,
-		Branches: []string{t.TargetBranch},
+		Branches: tgtBranches,
 		Auth:     executor.BuildRepoAuth(dstRepo, dstPlat),
 	}); ferr != nil {
 		return "", "", ferr
 	}
-	srcRef := gitRevParse(ctx, dir, "refs/remotes/"+executor.RemoteOrigin+"/"+t.SourceBranch)
-	tgtRef := gitRevParse(ctx, dir, "refs/remotes/"+executor.RemoteTarget+"/"+t.TargetBranch)
+	srcRef := driftRef(ctx, dir, executor.RemoteOrigin, t.SourceBranch, srcGlob)
+	tgtRef := driftRef(ctx, dir, executor.RemoteTarget, t.TargetBranch, tgtGlob)
 	return srcRef, tgtRef, nil
+}
+
+// driftFetchBranches glob 模式 ⇒ 全量取回(nil);否则取该分支。
+func driftFetchBranches(branch string) ([]string, bool) {
+	if strings.ContainsAny(branch, "*?[") {
+		return nil, true
+	}
+	return []string{branch}, false
+}
+
+// driftRef 取远端跟踪 ref 的 SHA;glob 模式下取**匹配到的最新一个**。
+func driftRef(ctx context.Context, dir, remote, branch string, isGlob bool) string {
+	if !isGlob {
+		return gitRevParse(ctx, dir, "refs/remotes/"+remote+"/"+branch)
+	}
+	// glob:列出远端跟踪 ref,挑更新时间最新的那个作为代表
+	out, err := runGitQuiet(ctx, dir, "for-each-ref", "--format=%(refname:short) %(committerdate:unix)",
+		"refs/remotes/"+remote+"/")
+	if err != nil {
+		return ""
+	}
+	best, bestTS := "", int64(-1)
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[0], remote+"/")
+		if !pathx.MatchGlob(branch, name) {
+			continue
+		}
+		var ts int64
+		if _, serr := fmt.Sscanf(fields[1], "%d", &ts); serr != nil {
+			continue
+		}
+		if ts > bestTS {
+			best, bestTS = name, ts
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return gitRevParse(ctx, dir, "refs/remotes/"+remote+"/"+best)
+}
+
+// driftRepoUsable 漂移仓库是否可用(不只是 .git 在不在)。
+func driftRepoUsable(ctx context.Context, backend gitbackend.GitBackend, dir string) bool {
+	if _, serr := os.Stat(filepath.Join(dir, ".git")); serr != nil {
+		return false
+	}
+	if _, rerr := backend.RevParse(ctx, dir, "HEAD"); rerr != nil {
+		return false
+	}
+	return true
 }
 
 // ForcePushPolicy 强制推送保护策略。

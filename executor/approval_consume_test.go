@@ -49,3 +49,41 @@ func TestExecute_ForcePush_ConsumesApprovalOnce(t *testing.T) {
 	require.Equal(t, 1, ap.consumed, "一次成功的强推之后必须把放行用掉")
 	require.False(t, ap.approved, "用掉之后应当不再算已放行(下一次分歧必须重新审批)")
 }
+
+// TestExecute_MultiBranch_ConsumesApprovalOnce 多分支任务的人工放行也必须被用掉。
+//
+// 回归背景(P1,自查发现):判定时放行按**具体分支**记
+// (IsForcePushApproved(taskKey, "<具体分支>", sha)),
+// 而消费点用 task.TargetBranch —— 多分支任务里那是 glob("release/*")⇒
+// DAO 的 WHERE task_key=? AND branch=? 匹配不到任何行 ⇒ found=false ⇒
+// **放行既不被消费、也不报错**,approved 一直挂着 ⇒
+// 同一次人工放行可以反复授权覆盖("一次性"退化成常驻后门)。
+func TestExecute_MultiBranch_ConsumesApprovalOnce(t *testing.T) {
+	srcBare, dstBare, work := multiDivergentLab(t)
+
+	tempDir := t.TempDir()
+	svc := newMockService()
+	svc.tempDir = tempDir
+	svc.repos = map[string]*model.Repo{
+		"source-repo": {Key: "source-repo", Name: "src", CloneURL: srcBare, DefaultBranch: "main"},
+		"target-repo": {Key: "target-repo", Name: "dst", CloneURL: dstBare, DefaultBranch: "main"},
+	}
+	exec, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	ap := &stubApprover{approved: true}
+	exec.Approver = ap
+
+	task := &model.SyncTask{
+		Key: "consume-multi", SourceRepoKey: "source-repo", TargetRepoKey: "target-repo",
+		SourceBranch: "release/*", TargetBranch: "release/*", SyncMode: "single",
+		GitForce: true, KeepDivergent: true, ForcePushPolicy: "block",
+	}
+	_ = work
+
+	_, _ = exec.Execute(context.Background(), task, "manual", nil)
+	require.Equal(t, 1, ap.consumed, "多分支的一次成功强推之后也必须把放行用掉")
+	require.Equal(t, "release/1.0", ap.consumedBranch,
+		"必须按**具体分支**消费(用 task.TargetBranch 这个 glob 会匹配不到任何记录)")
+	require.False(t, ap.approved, "用掉之后应当不再算已放行")
+}

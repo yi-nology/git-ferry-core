@@ -103,9 +103,11 @@ type UpdateTaskRequest struct {
 	Submodules    *bool `json:"submodules"`
 	GitPushPrune  *bool `json:"git_push_prune"`
 	KeepDivergent *bool `json:"keep_divergent"`
-	// ForcePushPolicy 空=不修改
-	ForcePushPolicy string `json:"force_push_policy"`
-	// IncludeBranches/ExcludeRefPatterns:空字符串=不修改
-	IncludeBranches    string `json:"include_branches"`
-	ExcludeRefPatterns string `json:"exclude_ref_patterns"`
+	// ForcePushPolicy 用指针:nil=不修改,**空串=清空**。
+	// 之前是普通 string,空串与"没传"不可区分 ⇒ 一旦设过就再也改不回去
+	// (只能删任务重建)。与 Cron 同一口径。
+	ForcePushPolicy *string `json:"force_push_policy"`
+	// IncludeBranches/ExcludeRefPatterns 同样用指针:nil=不修改,空串=清空。
+	IncludeBranches    *string `json:"include_branches"`
+	ExcludeRefPatterns *string `json:"exclude_ref_patterns"`
 }
