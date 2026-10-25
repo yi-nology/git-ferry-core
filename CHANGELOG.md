@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.20.1] - 2026-10-25
+
+### Fixed
+
+- **回灌去重只取第 1 页**（`service/metadata_restore.go`）：去重表只拉 100 条，
+  目标仓 issue 超过 100 条后第二页以后的同名 issue 不在表里 ⇒ **灾备演练重跑会
+  重复创建同名 issue**（幂等性被破坏，DR 重演变脏数据）；overwrite=false 也拦不住
+  （同名检查根本没看到）。修法：翻页拉全量，拉取失败如实告警。
+- **清单的 task_key 仍从文件名反推**（`service/dr_service.go`）：RPO 报告那条已改成
+  用任务表解析，清单这条还是按 "-" 切第一段 ⇒ key 带 "-" 时对不上任何任务。
+
 ## [v0.20.0] - 2026-10-25
 
 ### Fixed
