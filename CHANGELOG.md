@@ -2,6 +2,32 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.28.0] - 2026-10-25
+
+### Fixed
+
+- **任务繁忙时,webhook 事件的提交被静默丢掉**：webhook 推送到达时任务正在同步
+  ⇒ `guard.Acquire` 快速失败（`ErrTaskRunning`）⇒ **连运行记录都没有** ⇒
+  自动重跑机制（`RetryTracker`，只认 `status=failed` 的运行）看不到它 ⇒
+  这次推送的提交被丢掉，要等下一次推送或 cron 才补上。
+  修法：把这类触发**合并**记下来，当前运行结束、**释放执行权之后**补跑一次
+  （同一任务积压多次只补一次 —— 补跑会把期间所有提交一起带上）。
+  只对 webhook 触发生效：手动/cron 触发的语义就是「立刻失败，让调用方知道」。
+- **卡在 `processing` 的事件永不恢复**：`processing` 只在「正在处理」期间存在 ⇒
+  进程被 SIGKILL / 崩溃 / goroutine panic 时，事件永远停在这个状态 ⇒
+  ① 没有失败记录（看不出「这次没同步」）；② 没有 pending 可补 ⇒
+  这次推送的提交**静默丢失**。
+  修法：**启动时**回收（进程刚起，不可能有正在处理的事件 ⇒ 此刻仍是
+  `processing` 的都是上次进程没走完的）+ **周期回收**（进程内 goroutine panic
+  会让事件永远停着 ⇒ 每 10 分钟回收超过 1 小时的），统一落 **failed 终态** + 原因
+  ⇒ 可见、可人工重试。
+
+### Changed
+
+- **抬 `go-git-platform` 至 v0.99.4**：跨 host 重定向不再带走平台令牌（P0），
+  以及 gogit 后端六处会破坏仓库的差异（Checkout 半切换 / CherryPick 静默覆盖
+  未提交改动 / Merge 快进不同步工作区 / 删改当前分支 / Clone 忽略子模块）。
+
 ## [v0.27.0] - 2026-10-25
 
 ### Fixed
