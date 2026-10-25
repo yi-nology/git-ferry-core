@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.29.0] - 2026-10-25
+
+### Changed
+
+- **抬 `go-git-platform` 至 v0.99.6**：
+  - **v0.99.6**：`GetBranchSyncInfo` 在两侧历史无关（目标仓被强推改写过）时 gogit
+    后端返回 `(0,0)` ⇒ 上层（漂移检测 / 同步状态）**误判成「已同步」** ⇒ 目标仓被
+    改写历史后漂移再也检测不到。native 走
+    `git rev-list --left-right --count A...B` 会给出两侧各自的提交数 ⇒ 补齐同一语义。
+    这条路径在镜像漂移检测里被用到。
+  - **v0.99.5**：日志里的 URL 再脱敏一层（`redactURL` 补 userinfo 与更多秘密参数名；
+    新增 `redactPath` 接入三处日志与一处错误构造 —— `Request.Path` 可以自带 query，
+    里面的 token 会随日志与错误信息外泄）。
+
 ## [v0.28.0] - 2026-10-25
 
 ### Fixed
