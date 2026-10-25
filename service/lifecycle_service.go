@@ -132,9 +132,24 @@ type DriftReport struct {
 // 预算耗尽后,剩下的任务标为"未检查"如实报出,而不是继续跑或假装检查过。
 const DriftDetectBudget = 30 * time.Second
 
-// DetectDrift 检测本地 workdir 与目标远端的分支漂移。
+// DetectDrift 检测**源端与目标端**的分支漂移。
+//
 // 用于发现「镜像声称同步成功但 refs 实际不一致」的静默故障。
 // taskKeys 为空时扫描全部启用任务。
+//
+// **语义（重写）**：漂移 = 目标端与源端不一致。
+//
+// 原来比的是"工作区本地分支 vs 源端远端" ⇒ 报出来的多半是"源端前进了"
+// —— 那是**正常状态**(下次同步就推上去了),不是漂移;
+// 而真正该报的"目标端跑偏了(目标有源端没有的提交)"**从来没被检查过**。
+//
+// 另外三处一并修掉：
+//   - **带凭证**:原来走 `git ls-remote`,而平台的 RunRaw 固定用空凭证
+//     ⇒ 私有仓(本产品的主要场景)永远 "cannot resolve refs",
+//     漂移检测形同虚设;现在用带凭证的 fetch 取两端状态。
+//   - **专用工作目录**:不复用 executor 的 workdir —— 检测时的 fetch 会写
+//     git 锁,和正在跑的同步抢同一份目录会互相报错。
+//   - **不静默截断**:任务列表被上限截断时如实报"未检查"。
 func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftReport, error) {
 	rep := &DriftReport{Generated: time.Now().UTC(), Items: []DriftItem{}}
 
@@ -149,7 +164,9 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			tasks = append(tasks, t)
 		}
 	} else {
-		list, _, err := s.ListTasks(ctx, "", 0, 200)
+		// 任务列表有上限(dao 侧钳到 200)⇒ 被截断的部分**如实报"未检查"**,
+		// 不能让人以为"全部都查过了、没问题"。
+		list, total, err := s.ListTasks(ctx, "", 0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -157,6 +174,10 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			if t.Enabled {
 				tasks = append(tasks, t)
 			}
+		}
+		if int64(len(list)) < total {
+			rep.Warnings = append(rep.Warnings,
+				fmt.Sprintf("任务列表超过单页上限(已检查 %d / 共 %d),其余任务未检查", len(list), total))
 		}
 	}
 
@@ -177,50 +198,52 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			rep.Items = append(rep.Items, item)
 			continue
 		}
-		workDir := s.GetTempDir(t.Key)
-		gitDir := filepath.Join(workDir, "repo")
-		if _, serr := os.Stat(gitDir); serr != nil {
-			item.Message = "workdir missing (not synced yet)"
+		// 比对的是**源端 vs 目标端**（这才是"漂移"）。
+		//
+		// 原来比的是"工作区本地分支 vs 源端远端" ⇒ 报出来的多半是"源端前进了"
+		// —— 那是正常状态(下次同步就推上去了),不是漂移;
+		// 而"目标端跑偏了"从来没被检查过。
+		//
+		// 用**专用工作目录**(不复用 executor 的 workdir):检测时的 fetch 会写
+		// git 锁,和正在跑的同步抢同一份目录会互相报错。
+		gitDir, derr := s.prepareDriftRepo(ctx, t, repo)
+		if derr != nil {
+			item.Message = "cannot prepare drift repo: " + derr.Error()
 			rep.Items = append(rep.Items, item)
 			continue
 		}
-		// 比对的是**源**分支:工作区里的本地分支就是克隆源端时检出的那个分支
-		// (executor.cloneRepo 按 task.SourceBranch 克隆)⇒ 用 TargetBranch 去找
-		// refs/heads/<target> 在源/目标分支不同的任务上必然找不到("cannot resolve refs")。
-		// origin 远端同样是源端(工作区的 "target" 才是目标仓)。
-		localRef := gitRevParse(ctx, gitDir, "refs/heads/"+t.SourceBranch)
-		item.LocalRef = localRef
-		remoteRef := gitLsRemote(ctx, gitDir, "origin", "refs/heads/"+t.SourceBranch)
-		item.RemoteRef = remoteRef
+		// 带凭证取两端状态(私有仓/自签证书必须带凭证;
+		// 原来走 git ls-remote,而平台的 RunRaw 固定用空凭证 ⇒ 私有仓永远
+		// "cannot resolve refs",漂移检测形同虚设)。
+		srcRef, tgtRef, ferr := s.fetchDriftBothSides(ctx, gitDir, t, repo)
+		if ferr != nil {
+			item.Message = "cannot fetch both sides: " + ferr.Error()
+			rep.Items = append(rep.Items, item)
+			continue
+		}
+		item.LocalRef = srcRef
+		item.RemoteRef = tgtRef
 		switch {
-		case localRef == "" || remoteRef == "":
+		case srcRef == "" || tgtRef == "":
 			item.Message = "cannot resolve refs"
-		case localRef == remoteRef:
+		case srcRef == tgtRef:
 			item.Message = "in sync"
 		default:
 			item.Drifted = true
 			// rev-list --count A..B 要求两个 sha 都在本地对象库里;
-			// 远端(ls-remote 拿到的)那个 sha 没被 fetch 过 ⇒ 命令直接失败,
-			// ahead/behind 只能报"未知"。先把源端分支 fetch 下来(带凭证,私有仓必须),
-			// 再算 —— 否则"漂移了多少"这个最该有的信息永远是空的。
-			if ferr := s.fetchDriftSource(ctx, gitDir, t); ferr != nil {
-				item.Message = "drifted (cannot fetch source branch to compute ahead/behind: " + ferr.Error() + ")"
-				rep.Drifted++
-				rep.Items = append(rep.Items, item)
-				continue
-			}
-			a, b, ok := revListCounts(ctx, gitDir, localRef, remoteRef)
+			// 两端都 fetch 过了 ⇒ 算得出来。
+			a, b, ok := revListCounts(ctx, gitDir, srcRef, tgtRef)
 			item.LocalAhead, item.RemoteAhead = a, b
 			switch {
 			case !ok:
 				// fetch 过了还算不出 ⇒ 真的算不出来(罕见),明说而不是给 0/0
 				item.Message = "drifted (ahead/behind not resolvable after fetch)"
 			case a > 0 && b > 0:
-				item.Message = "diverged (both sides have unique commits)"
+				item.Message = "diverged (both source and target have unique commits)"
 			case a > 0:
-				item.Message = "local ahead (workdir has commits the source does not)"
+				item.Message = "source ahead (target is behind; next sync will push)"
 			case b > 0:
-				item.Message = "source ahead (workdir is behind; next sync will push)"
+				item.Message = "target ahead (target has commits the source does not)"
 			}
 			rep.Drifted++
 		}
@@ -228,6 +251,106 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 		rep.Items = append(rep.Items, item)
 	}
 	return rep, nil
+}
+
+
+// prepareDriftRepo 准备该任务的**漂移检测专用仓库**(克隆源端 + 配置 target 远端)。
+//
+// 为什么不用 executor 的 workdir:检测要 fetch,而 fetch 会写 git 锁 ——
+// 与正在跑的同步抢同一份目录会互相报错("cannot lock ref")。
+// 专用目录第一次克隆、之后增量 fetch。
+func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRepo *model.Repo) (string, error) {
+	backend := lifecycleBackend()
+	if backend == nil {
+		return "", errors.New("git backend 不可用")
+	}
+	srcRepo, err := s.GetRepoByKey(t.SourceRepoKey)
+	if err != nil || srcRepo == nil {
+		return "", errors.New("源仓记录不存在")
+	}
+	var srcPlat *model.Platform
+	if srcRepo.PlatformID > 0 {
+		if got, gerr := s.GetPlatformByID(ctx, srcRepo.PlatformID); gerr == nil {
+			srcPlat = got
+		}
+	}
+	base := s.GetConfig().Git.TempDir
+	if base == "" {
+		return "", errors.New("未配置 git.temp_dir")
+	}
+	dir := filepath.Join(base, "drift", t.Key, "repo")
+	if _, serr := os.Stat(filepath.Join(dir, ".git")); serr != nil {
+		if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
+			return "", err
+		}
+		if err := backend.Clone(ctx, gitbackend.CloneOptions{
+			URL:  srcRepo.CloneURL,
+			Path: dir,
+			Auth: executor.BuildRepoAuth(srcRepo, srcPlat),
+		}); err != nil {
+			return "", err
+		}
+	}
+	// target 远端
+	remotes, rerr := backend.GetRemotes(ctx, dir)
+	if rerr != nil {
+		return "", rerr
+	}
+	hasTarget := false
+	for _, n := range remotes {
+		if n == executor.RemoteTarget {
+			hasTarget = true
+			break
+		}
+	}
+	if !hasTarget {
+		if err := backend.AddRemote(ctx, dir, executor.RemoteTarget, dstRepo.CloneURL); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+// fetchDriftBothSides 带凭证取**源端与目标端**的分支状态,返回两边的 SHA。
+func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.SyncTask, dstRepo *model.Repo) (string, string, error) {
+	backend := lifecycleBackend()
+	if backend == nil {
+		return "", "", errors.New("git backend 不可用")
+	}
+	srcRepo, err := s.GetRepoByKey(t.SourceRepoKey)
+	if err != nil || srcRepo == nil {
+		return "", "", errors.New("源仓记录不存在")
+	}
+	var srcPlat, dstPlat *model.Platform
+	if srcRepo.PlatformID > 0 {
+		if got, gerr := s.GetPlatformByID(ctx, srcRepo.PlatformID); gerr == nil {
+			srcPlat = got
+		}
+	}
+	if dstRepo.PlatformID > 0 {
+		if got, gerr := s.GetPlatformByID(ctx, dstRepo.PlatformID); gerr == nil {
+			dstPlat = got
+		}
+	}
+	if _, ferr := backend.Fetch(ctx, gitbackend.FetchOptions{
+		RepoPath: dir,
+		Remote:   executor.RemoteOrigin,
+		Branches: []string{t.SourceBranch},
+		Auth:     executor.BuildRepoAuth(srcRepo, srcPlat),
+	}); ferr != nil {
+		return "", "", ferr
+	}
+	if _, ferr := backend.Fetch(ctx, gitbackend.FetchOptions{
+		RepoPath: dir,
+		Remote:   executor.RemoteTarget,
+		Branches: []string{t.TargetBranch},
+		Auth:     executor.BuildRepoAuth(dstRepo, dstPlat),
+	}); ferr != nil {
+		return "", "", ferr
+	}
+	srcRef := gitRevParse(ctx, dir, "refs/remotes/"+executor.RemoteOrigin+"/"+t.SourceBranch)
+	tgtRef := gitRevParse(ctx, dir, "refs/remotes/"+executor.RemoteTarget+"/"+t.TargetBranch)
+	return srcRef, tgtRef, nil
 }
 
 // ForcePushPolicy 强制推送保护策略。

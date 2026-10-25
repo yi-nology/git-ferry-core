@@ -30,17 +30,23 @@ func driftGit(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %v: %s", args, out)
 }
 
-// TestDetectDrift_ComputesRealAheadBehind 漂移检测必须给出**真实的** ahead/behind。
+// TestDetectDrift_ComparesSourceWithTarget 漂移检测要比的是**源端 vs 目标端**。
 //
-// 回归背景:rev-list --count A..B 要求两个 sha 都在本地对象库里;
-// 远端(ls-remote 拿到的)那个 sha 没被 fetch 过 ⇒ 命令直接失败,
-// 旧实现静默给 0/0 并报 "diverged" ⇒ "漂移了多少"这个最该有的信息永远是空的。
-// 修法:先 fetch 源端分支(带凭证)再算。
-func TestDetectDrift_ComputesRealAheadBehind(t *testing.T) {
+// 语义（重写后）：漂移 = 目标端与源端不一致。
+// 原来比的是"工作区本地分支 vs 源端远端" ⇒ 报出来的多半是"源端前进了"
+// —— 那是**正常状态**(下次同步就推上去了),不是漂移;
+// 而"目标端跑偏了(目标有源端没有的提交)"从来没被检查过。
+//
+// 三个场景各测一遍：
+//   - 目标落后 ⇒ source ahead(下次同步会推上去)
+//   - 目标多出提交 ⇒ target ahead(**真正的漂移**)
+//   - 两边一致 ⇒ in sync
+func TestDetectDrift_ComparesSourceWithTarget(t *testing.T) {
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	root := t.TempDir()
 	src := filepath.Join(root, "src.git")
+	tgt := filepath.Join(root, "tgt.git")
 	seed := filepath.Join(root, "seed")
 	require.NoError(t, os.MkdirAll(seed, 0o750))
 	driftGit(t, seed, "init", "-b", "main")
@@ -48,14 +54,12 @@ func TestDetectDrift_ComputesRealAheadBehind(t *testing.T) {
 	driftGit(t, seed, "add", ".")
 	driftGit(t, seed, "commit", "-m", "c1")
 	driftGit(t, seed, "init", "--bare", "-b", "main", src)
+	driftGit(t, seed, "init", "--bare", "-b", "main", tgt)
 	driftGit(t, seed, "remote", "add", "origin", src)
 	driftGit(t, seed, "push", "-q", "origin", "main")
+	// 目标先与源端一致
+	driftGit(t, seed, "push", "-q", tgt, "main:main")
 
-	// 工作区:从源端克隆(模拟 executor 的 clone)
-	work := filepath.Join(root, "work")
-	driftGit(t, root, "clone", "-q", src, work)
-
-	// 装配 service
 	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(t.TempDir(), "drift.db")), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Platform{}, &model.Repo{}, &model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}))
@@ -66,10 +70,14 @@ func TestDetectDrift_ComputesRealAheadBehind(t *testing.T) {
 		Key: "acme/src", Name: "src", Platform: "github", PlatformID: plat.ID,
 		PlatformOwner: "acme", PlatformRepo: "src", CloneURL: src, DefaultBranch: "main",
 	}).Error)
+	require.NoError(t, db.Create(&model.Repo{
+		Key: "acme/tgt", Name: "tgt", Platform: "github", PlatformID: plat.ID,
+		PlatformOwner: "acme", PlatformRepo: "tgt", CloneURL: tgt, DefaultBranch: "main",
+	}).Error)
 
 	taskKey := "drift-task"
 	require.NoError(t, db.Create(&model.SyncTask{
-		Key: taskKey, Name: "drift", SourceRepoKey: "acme/src", TargetRepoKey: "acme/src",
+		Key: taskKey, Name: "drift", SourceRepoKey: "acme/src", TargetRepoKey: "acme/tgt",
 		SourceBranch: "main", TargetBranch: "main", Enabled: true,
 	}).Error)
 
@@ -81,15 +89,6 @@ func TestDetectDrift_ComputesRealAheadBehind(t *testing.T) {
 
 	tempDir := filepath.Join(root, "tmp")
 	require.NoError(t, os.MkdirAll(tempDir, 0o750))
-	// 工作区要放在 service 的 TempDir 下:<TempDir>/<taskKey>/repo
-	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, taskKey), 0o750))
-	driftGit(t, root, "clone", "-q", src, filepath.Join(tempDir, taskKey, "repo"))
-
-	// **工作区克隆之后**源端才前进 ⇒ 工作区落后 1 个提交
-	require.NoError(t, os.WriteFile(filepath.Join(seed, "b.txt"), []byte("v2"), 0o640))
-	driftGit(t, seed, "add", ".")
-	driftGit(t, seed, "commit", "-m", "c2")
-	driftGit(t, seed, "push", "-q", "origin", "main")
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: tempDir}},
@@ -101,15 +100,44 @@ func TestDetectDrift_ComputesRealAheadBehind(t *testing.T) {
 		),
 	}
 
+	// ① 两边一致 ⇒ in sync
 	rep, err := svc.DetectDrift(context.Background(), nil)
 	require.NoError(t, err)
 	require.Len(t, rep.Items, 1)
+	assert.False(t, rep.Items[0].Drifted, "两边一致不该判漂移: %s", rep.Items[0].Message)
+	assert.Contains(t, rep.Items[0].Message, "in sync")
+
+	// ② 目标多出提交 ⇒ target ahead(**真正的漂移**:目标有源端没有的东西)
+	tgtWork := filepath.Join(root, "tgtwork")
+	driftGit(t, root, "clone", "-q", tgt, tgtWork)
+	require.NoError(t, os.WriteFile(filepath.Join(tgtWork, "only-target.txt"), []byte("x"), 0o640))
+	driftGit(t, tgtWork, "add", ".")
+	driftGit(t, tgtWork, "commit", "-m", "target-only")
+	driftGit(t, tgtWork, "push", "-q", "origin", "main")
+
+	rep, err = svc.DetectDrift(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, rep.Items, 1)
 	item := rep.Items[0]
-	assert.True(t, item.Drifted, "源端前进了 ⇒ 应判定为漂移")
-	assert.Equal(t, 1, item.RemoteAhead, "远端(源端)领先 1 个提交 —— 必须是真实数字")
-	assert.Equal(t, 0, item.LocalAhead, "本地没有独有提交")
-	assert.Contains(t, item.Message, "source ahead", "判词要说明是谁领先: %s", item.Message)
-	assert.Equal(t, 1, rep.Drifted)
+	assert.True(t, item.Drifted)
+	assert.Contains(t, item.Message, "target ahead", "目标有源端没有的提交 —— 这才是真漂移: %s", item.Message)
+	assert.Equal(t, 1, item.RemoteAhead, "目标端独有 1 个提交")
+	assert.Equal(t, 0, item.LocalAhead, "源端没有独有提交")
+
+	// ③ 源端也前进 ⇒ 两边各有独有提交 ⇒ diverged
+	require.NoError(t, os.WriteFile(filepath.Join(seed, "b.txt"), []byte("v2"), 0o640))
+	driftGit(t, seed, "add", ".")
+	driftGit(t, seed, "commit", "-m", "c2")
+	driftGit(t, seed, "push", "-q", "origin", "main")
+
+	rep, err = svc.DetectDrift(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, rep.Items, 1)
+	item = rep.Items[0]
+	assert.True(t, item.Drifted)
+	assert.Contains(t, item.Message, "diverged", "两边各有独有提交: %s", item.Message)
+	assert.Equal(t, 1, item.LocalAhead, "源端独有 1 个提交 —— 必须是真实数字")
+	assert.Equal(t, 1, item.RemoteAhead, "目标端独有 1 个提交")
 }
 
 // TestDetectDrift_RespectsBudget 漂移检测必须有**总预算**。

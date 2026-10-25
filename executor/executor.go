@@ -367,7 +367,7 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	//     报告却是 success。
 	// 增量路径(fetch 之后)本来就有对齐,这里让首次与后续行为一致。
 	if strings.ContainsAny(task.SourceBranch, "*?[") {
-		return e.alignSourceBranches(ctx, dir, task.SourceBranch)
+		return e.alignSourceBranchesExcluded(ctx, dir, task.SourceBranch, task)
 	}
 	return nil
 }
@@ -521,7 +521,61 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 	// 本地分支仍停在旧提交。而 push 推的是 refs/heads/<branch>(本地),
 	// 不把本地分支推进到刚取到的源端 ref ⇒ 目标侧永不前进,
 	// git 回 "already up-to-date" 被当成成功 —— 增量同步等于没跑。
-	return e.alignSourceBranches(ctx, dir, task.SourceBranch)
+	return e.alignSourceBranchesExcluded(ctx, dir, task.SourceBranch, task)
+}
+
+// alignSourceBranchesExcluded 带排除名单的分支对齐。
+//
+// **为什么 align 也要看 exclude 名单**:增量路径的顺序是
+// fetch → excludeRefs(删匹配 ref) → alignSourceBranches(按 glob 把
+// refs/remotes/origin/<b> 写回 refs/heads/<b>)。
+// align **不看排除名单** ⇒ 被 exclude 名单命中的分支在删掉之后又被
+// 重新创建成本地分支,下一次 push 照样推给目标 ⇒
+// 黑名单形同虚设(默认的 refs/pull/* 不受影响,因为它不是分支)。
+func (e *Executor) alignSourceBranchesExcluded(ctx context.Context, dir, sourceBranch string, task *model.SyncTask) error {
+	patterns := stringx.SplitCSVNonEmpty(task.ExcludeRefPatterns)
+	if len(patterns) == 0 {
+		patterns = defaultExcludeRefs
+	}
+	excluded := func(branch string) bool {
+		ref := "refs/heads/" + branch
+		for _, p := range patterns {
+			if matchRefGlob(p, ref) {
+				return true
+			}
+		}
+		return false
+	}
+	if !strings.ContainsAny(sourceBranch, "*?[") {
+		if excluded(sourceBranch) {
+			slog.Info("align: 分支命中排除名单,跳过", "branch", sourceBranch)
+			return nil
+		}
+		return e.alignSourceBranch(ctx, dir, sourceBranch)
+	}
+	out, err := e.gitOutput(ctx, dir, "for-each-ref", "--format=%(refname:short)",
+		"refs/remotes/"+RemoteOrigin+"/")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		ref := strings.TrimSpace(line)
+		if ref == "" {
+			continue
+		}
+		name := strings.TrimPrefix(ref, RemoteOrigin+"/")
+		if !matchBranchGlob(sourceBranch, name) {
+			continue
+		}
+		if excluded(name) {
+			slog.Info("align: 分支命中排除名单,跳过", "branch", name)
+			continue
+		}
+		if err := e.alignSourceBranch(ctx, dir, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // alignSourceBranches 把本地源分支对齐到刚 fetch 到的远端跟踪 ref。

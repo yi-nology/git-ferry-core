@@ -151,6 +151,17 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 	if err != nil {
 		return err
 	}
+	// 轮转:每任务只保留最近 N 份(backup_keep)。
+	//
+	// 原实现 rotateBundles **从来没有生产调用点**(全仓只有定义与测试)⇒
+	// 配置里那个"每任务保留最近 N 份"看起来是生效的,实际冷备目录只增不减,
+	// 备份频率 × 任务数 × 天数的产物把磁盘吃满。
+	// 轮转是 optional 阶段的一环,失败只记 details(不影响同步结果)。
+	if keep := cfg.Sync.BackupKeep; keep > 0 {
+		if removed := rotateBundles(cfg.Sync.BackupDir, rc.Task.Key, keep); removed > 0 {
+			rc.logf("bundle: rotated out %d old bundle(s) (keep=%d)\n", removed, keep)
+		}
+	}
 	rc.Exec.fanoutBundle(ctx, path, cfg, rc.Details)
 	rc.BundlesPath = path
 	return nil

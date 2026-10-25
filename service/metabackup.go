@@ -29,12 +29,15 @@ func (s *Service) BackupGists(ctx context.Context, prov sdkprov.Provider, destDi
 	maxPages := (maxGists + perPage - 1) / perPage
 	// 空页终止 + 到 max 即 ErrStopIteration;预算 +1 页用于观测空页。
 	var gists []*sdkprov.Gist
+	truncated := false
 	err = sdkprov.EachBounded(ctx,
 		func(ctx context.Context, page int) ([]*sdkprov.Gist, error) {
 			return gm.ListMyGists(ctx, page, perPage)
 		}, maxPages+1,
 		func(g *sdkprov.Gist) error {
 			if len(gists) >= maxGists {
+				// 截断留痕:到上限就停,必须说明"还有没拉到的"。
+				truncated = true
 				return sdkprov.ErrStopIteration
 			}
 			gists = append(gists, g)
@@ -42,6 +45,10 @@ func (s *Service) BackupGists(ctx context.Context, prov sdkprov.Provider, destDi
 		})
 	if err != nil {
 		return 0, nil, err
+	}
+	if truncated {
+		warnings = append(warnings, fmt.Sprintf(
+			"gists truncated at %d (max_gists); 还有没拉到的 gist", maxGists))
 	}
 	if err := os.MkdirAll(destDir, 0o750); err != nil {
 		return 0, nil, err
@@ -97,6 +104,10 @@ func (s *Service) DownloadReleaseAssets(ctx context.Context, prov sdkprov.Provid
 				continue
 			}
 			if count >= maxAssets {
+				// 截断必须**留痕**:原来直接返回,调用方拿到"assets=N"、
+				// 零告警 ⇒ 以为附件全备份了,灾备恢复时另外那些附件静默缺失。
+				warnings = append(warnings, fmt.Sprintf(
+					"attachments truncated at %d (max_assets); 附件未全部备份", maxAssets))
 				return saved, warnings, nil
 			}
 			name := strutil.SanitizePathToken(rel.TagName) + "__" + strutil.SanitizePathToken(asset.Name)

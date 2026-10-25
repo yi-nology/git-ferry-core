@@ -50,8 +50,23 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	}
 
 	// 打当前同步分支 + HEAD(缺 HEAD 则 clone 后无法 checkout) + 标签
-	ref := "refs/heads/" + task.SourceBranch
-	args := []string{"bundle", "create", outPath, ref, "HEAD"}
+	//
+	// **多分支(glob)不能把 glob 直接塞进 refspec**:"refs/heads/release/*"
+	// 不是合法 rev ⇒ git bundle create 必然失败(退出码 128)⇒
+	// 多分支任务**永远产不出冷备**,而 bundle 阶段是 optional(失败只进 details)
+	// ⇒ 同步仍报成功、冷备静默停止,RPO 指标却以为冷备在正常跑。
+	// 这里按 glob 展开成实际分支列表(逐个作为 rev)。
+	refs := []string{"refs/heads/" + task.SourceBranch}
+	if strings.ContainsAny(task.SourceBranch, "*?[") {
+		expanded, err := e.expandBundleRefs(ctx, repoDir, task)
+		if err != nil {
+			return "", err
+		}
+		refs = expanded
+	}
+	args := []string{"bundle", "create", outPath}
+	args = append(args, refs...)
+	args = append(args, "HEAD")
 	if task.GitTags {
 		args = append(args, "--tags")
 	}
@@ -93,6 +108,26 @@ func zipDir(srcDir, dest string) error {
 		_, werr := w.Write(data)
 		return werr
 	})
+}
+
+
+// expandBundleRefs 把 glob 分支模式展开成实际的 refs/heads/<b> 列表。
+func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *model.SyncTask) ([]string, error) {
+	branches, err := e.listLocalBranches(repoDir)
+	if err != nil {
+		return nil, errors.Wrap(err, "list local branches for bundle")
+	}
+	var refs []string
+	for _, b := range branches {
+		if !matchBranchGlob(task.SourceBranch, b) {
+			continue
+		}
+		refs = append(refs, "refs/heads/"+b)
+	}
+	if len(refs) == 0 {
+		return nil, errors.Errorf("no local branches match %q", task.SourceBranch)
+	}
+	return refs, nil
 }
 
 // rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。

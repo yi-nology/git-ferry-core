@@ -71,7 +71,11 @@ func TestBackupGists_PaginatesToMax(t *testing.T) {
 	svc := &Service{}
 	count, warnings, err := svc.BackupGists(t.Context(), prov, dest, 150)
 	require.NoError(t, err)
-	assert.Empty(t, warnings)
+	// **截断必须留痕**:一共 200 个 gist、上限 150 ⇒ 确实有 50 个没拉到,
+	// 必须说清楚(原来零告警 ⇒ 以为全部备份了,灾备恢复时另外 50 个静默缺失)。
+	require.Len(t, warnings, 1, "截断必须告警")
+	assert.Contains(t, warnings[0], "truncated")
+	assert.Contains(t, warnings[0], "150")
 	assert.Equal(t, 50+100, count, "应分页拉到第 2 页并截断到 maxGists=150")
 	assert.Equal(t, []int{1, 2}, prov.gistCalls, "只应翻到第 2 页")
 

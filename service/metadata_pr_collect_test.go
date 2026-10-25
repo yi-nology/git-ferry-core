@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -194,4 +195,32 @@ func TestCollectPullRequests_CapsByUpdatedAt(t *testing.T) {
 	// 最近的两个:closed new(4h) 与 open new(3h)
 	assert.Equal(t, "4", got[0].Number)
 	assert.Equal(t, "2", got[1].Number)
+}
+
+// TestCollectIssues_ExcludesPullRequests issue 快照必须**剔除 PR**。
+//
+// 回归背景(P1):平台的 issue 列表端点(GitHub)把 PR 一起返回 ⇒
+// 同一个 PR 既进 issues 快照又进 pull_requests 快照(重复),
+// 而且**占掉 issue 的数量预算**(默认 500)⇒ PR 多的仓里真实 issue
+// 可能整批落在预算之外,快照缺项且无任何告警。
+func TestCollectIssues_ExcludesPullRequests(t *testing.T) {
+	snap := newPRCollectSnap(t)
+	repo := &model.Repo{PlatformOwner: "o", PlatformRepo: "r"}
+	prov := &fakeEngineProv{issues: []*sdkprov.Issue{
+		{Number: "1", Title: "real issue", State: "open"},
+		{Number: "7", Title: "a pull request", State: "open", IsPullRequest: true},
+		{Number: "2", Title: "another issue", State: "open"},
+	}}
+
+	svc := &Service{}
+	svc.collectIssues(context.Background(), prov, repo, 500, "", snap)
+
+	assert.Equal(t, int32(2), snap.Counts["issues"], "PR 不该计入 issue 数")
+	assert.NotEmpty(t, snap.Warnings, "剔除了 PR 必须告警(调用方要知道少了什么)")
+	assert.Contains(t, strings.Join(snap.Warnings, "|"), "剔除了 1 条 PR")
+
+	data, err := os.ReadFile(filepath.Join(snap.Dir, "issues.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "a pull request", "快照里不该出现 PR")
+	assert.Contains(t, string(data), "real issue")
 }

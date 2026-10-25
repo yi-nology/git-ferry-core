@@ -297,6 +297,17 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 		snap.Warnings = append(snap.Warnings, "issues: "+ierr.Error())
 		return
 	}
+	// **剔除 PR**:GitHub 的 issue 列表端点把 PR 一起返回(同一条记录既是
+	// issue 也是 PR)⇒ 不剔除的话同一个 PR 既进 issues 快照又进
+	// pull_requests 快照(重复),而且**占掉 issue 的数量预算**(默认 500)
+	// ⇒ PR 多的仓里真实 issue 可能整批落在预算之外,快照缺项且无任何告警。
+	//
+	// 剔除数量如实告警:调用方要能知道"issue 快照少了多少"。
+	if n := countPullRequests(issues); n > 0 {
+		issues = withoutPullRequests(issues)
+		snap.Warnings = append(snap.Warnings,
+			fmt.Sprintf("issues: 剔除了 %d 条 PR(平台的 issue 列表包含 PR)", n))
+	}
 	if since != "" {
 		issues = filterIssuesSince(issues, since)
 	}
@@ -308,6 +319,29 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 	}
 	writeSnapshotPart(snap, "issues.json", issues)
 	snap.Counts["issues"] = int32(len(issues))
+}
+
+// countPullRequests 数一数里有多少条其实是 PR。
+func countPullRequests(issues []*issueRow) int {
+	n := 0
+	for _, iss := range issues {
+		if iss != nil && iss.IsPullRequest {
+			n++
+		}
+	}
+	return n
+}
+
+// withoutPullRequests 去掉 PR,只留真正的 issue。
+func withoutPullRequests(issues []*issueRow) []*issueRow {
+	out := issues[:0]
+	for _, iss := range issues {
+		if iss != nil && iss.IsPullRequest {
+			continue
+		}
+		out = append(out, iss)
+	}
+	return out
 }
 
 // filterIssuesSince 仅保留 UpdatedAt >= since(RFC3339) 的 issue。
@@ -521,6 +555,9 @@ type issueRow struct {
 	CreatedAt   string                  `json:"created_at"`
 	UpdatedAt   string                  `json:"updated_at"`
 	CommentList []*sdkprov.IssueComment `json:"comments,omitempty"`
+	// IsPullRequest 标记这条"issue"其实是 PR(平台的 issue 列表含 PR)。
+	// **不落进 JSON**:PR 在采集阶段就被剔除了,快照里不该出现。
+	IsPullRequest bool `json:"-"`
 }
 
 // listIssues 分页拉取 issue 行（空页终止 + 到 max 即 ErrStopIteration 的
@@ -575,15 +612,16 @@ func toIssueRow(iss *sdkprov.Issue) *issueRow {
 		author = iss.Author.Username
 	}
 	return &issueRow{
-		Number:    iss.Number,
-		Title:     iss.Title,
-		State:     string(iss.State),
-		Author:    author,
-		Labels:    iss.Labels,
-		Assignees: iss.Assignees,
-		Body:      iss.Body,
-		WebURL:    iss.WebURL,
-		CreatedAt: iss.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: iss.UpdatedAt.Format(time.RFC3339),
+		Number:        iss.Number,
+		Title:         iss.Title,
+		State:         string(iss.State),
+		IsPullRequest: iss.IsPullRequest,
+		Author:        author,
+		Labels:        iss.Labels,
+		Assignees:     iss.Assignees,
+		Body:          iss.Body,
+		WebURL:        iss.WebURL,
+		CreatedAt:     iss.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:     iss.UpdatedAt.Format(time.RFC3339),
 	}
 }

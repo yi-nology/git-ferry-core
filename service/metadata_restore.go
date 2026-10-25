@@ -184,7 +184,10 @@ func (s *Service) runRestore(ctx context.Context, req RestoreRequest, snapDir st
 	}
 
 	// 历史文件在 dry_run 提示追加之前写入（与历史行为一致：提示不进历史）。
-	writeRestoreHistory(s.BackupDir(), req.RepoKey, result)
+	if herr := writeRestoreHistory(s.BackupDir(), req.RepoKey, result); herr != nil {
+		// 历史没落盘 ⇒ 审计留痕缺失,必须让调用方看到(不能"看着成功其实没留痕")。
+		result.Warnings = append(result.Warnings, "回灌历史落盘失败:"+herr.Error())
+	}
 	if req.DryRun {
 		result.Warnings = append(result.Warnings, "dry_run=true：未写入目标；去掉 dry_run 执行")
 	}
@@ -693,10 +696,18 @@ type restoreHistoryRecord struct {
 	FinishedAt  string                      `json:"finished_at"`
 }
 
-func writeRestoreHistory(backupDir, repoKey string, result *RestoreResult) {
+// writeRestoreHistory 落回灌历史(灾备演练的审计留痕)。
+//
+// **失败必须让调用方知道**:原来目录建不出来、序列化失败、写文件失败
+// 全部静默 return ⇒ 回灌结果看起来是成功的,而"回灌了多少、改了什么"
+// 这条唯一留痕**无痕消失**。
+//
+// 文件名用**毫秒**而不是秒:同一秒内两次回灌会写同一个文件名,
+// 后者把前者覆盖掉(实测:两次回灌只剩 1 个文件)。
+func writeRestoreHistory(backupDir, repoKey string, result *RestoreResult) error {
 	dir := filepath.Join(backupDir, "metadata-restore", strutil.SanitizePathToken(repoKey))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return
+		return err
 	}
 	data, err := json.Marshal(restoreHistoryRecord{
 		SnapshotDir: result.SnapshotDir,
@@ -708,7 +719,11 @@ func writeRestoreHistory(backupDir, repoKey string, result *RestoreResult) {
 		FinishedAt:  result.FinishedAt,
 	})
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(filepath.Join(dir, time.Now().UTC().Format("20060102-150405")+".json"), data, 0o600)
+	name := time.Now().UTC().Format("20060102-150405.000") + ".json"
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		return err
+	}
+	return nil
 }

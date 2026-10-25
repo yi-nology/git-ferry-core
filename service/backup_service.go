@@ -1,6 +1,8 @@
 package service
 
 import (
+	errors "github.com/cockroachdb/errors"
+
 	"context"
 	"os"
 	"path/filepath"
@@ -75,11 +77,19 @@ func (s *Service) CleanupExpiredBackups() (removed int, err error) {
 	if err != nil {
 		return 0, err
 	}
+	// 删除失败**如实报错**,不计入 removed。
+	//
+	// 原来 `_ = os.Remove(...)` 静默丢弃错误 ⇒ 日志打出
+	// "expired backups cleaned: removed=N",运维以为保留策略在生效,
+	// 实际旧产物原地不动(磁盘持续涨),而且没有任何信号提示需要人工介入。
+	var failures []string
 	for _, b := range all {
 		if b.ModTime.Before(cutoff) {
-			if os.Remove(b.Path) == nil {
-				removed++
+			if rerr := os.Remove(b.Path); rerr != nil {
+				failures = append(failures, b.Name+": "+rerr.Error())
+				continue
 			}
+			removed++
 		}
 	}
 	// 同步清理过期元数据快照
@@ -92,13 +102,20 @@ func (s *Service) CleanupExpiredBackups() (removed int, err error) {
 		base := d.Name()
 		if len(base) == 15 && strings.Count(base, "-") == 1 { // 20060102-150405
 			if t, perr := time.Parse("20060102-150405", base); perr == nil && t.Before(cutoff) {
-				_ = os.RemoveAll(path)
+				if rerr := os.RemoveAll(path); rerr != nil {
+					failures = append(failures, base+": "+rerr.Error())
+					return filepath.SkipDir
+				}
 				removed++
 				return filepath.SkipDir
 			}
 		}
 		return nil
 	})
+	if len(failures) > 0 {
+		return removed, errors.Errorf("清理未完成:%d 项删除失败(%s)",
+			len(failures), strings.Join(failures, "; "))
+	}
 	return removed, nil
 }
 

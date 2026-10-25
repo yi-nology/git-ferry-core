@@ -79,16 +79,32 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 		}
 	}
 
+	// **把本地分支推进到刚取到的源端 ref**(与主仓同款语义)。
+	//
+	// 原来缺这一步:fetch 只更新 refs/remotes/origin/*,本地 refs/heads/* 停在
+	// 克隆那一刻的提交 ⇒ 推出去的 wiki **永远是旧内容**(而且每次都覆盖目标,
+	// 目标侧人工改的内容被抹掉),而 details 写着 "wiki: done"。
+	//
+	// 用 "*" 对齐**全部分支**:clone 只把默认分支建成本地分支,
+	// 其余 wiki 分支只存在于 refs/remotes/origin/* ⇒ 不对齐就永远同步不过去。
+	if err := e.alignSourceBranches(ctx, wikiDir, "*"); err != nil {
+		return errors.Wrap(err, "align wiki branches failed")
+	}
+
 	// ensure target remote
 	if err := e.ensureWikiRemote(ctx, wikiDir, dstURL); err != nil {
 		return errors.Wrap(err, "ensure wiki remote failed")
 	}
 
 	details.WriteString("  wiki: push\n")
+	// **refspec 不带 "+"**:原来 "+refs/heads/*:refs/heads/*" 是无条件强推 ——
+	// 目标 wiki 上有人工提交也会被直接覆盖,而 task.GitForce 形同虚设。
+	// 现在:快进照推;目标有独有提交 ⇒ git 拒绝(非快进),
+	// 要覆盖必须显式开 git_force。
 	if _, err := e.backend.Push(ctx, gitbackend.PushOptions{
 		RepoPath: wikiDir,
 		Remote:   RemoteTarget,
-		RefSpecs: []string{"+refs/heads/*:refs/heads/*"},
+		RefSpecs: []string{"refs/heads/*:refs/heads/*"},
 		Force:    task.GitForce,
 		Auth:     dstAuth,
 	}); err != nil {
@@ -96,10 +112,32 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 			details.WriteString("  wiki: target not found, skip\n")
 			return nil
 		}
+		if !task.GitForce && isNonFastForward(err) {
+			return errors.Wrap(err,
+				"push wiki failed: target wiki has commits not in source (non-fast-forward); "+
+					"refused to overwrite — enable git_force to allow overwriting")
+		}
 		return errors.Wrap(err, "push wiki failed")
 	}
 	details.WriteString("  wiki: done\n")
 	return nil
+}
+
+// isNonFastForward 判断是不是"非快进拒绝"(目标侧有源端没有的提交)。
+func isNonFastForward(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, kw := range []string{
+		"non-fast-forward", "fetch first", "rejected", "would be overwritten",
+		"updates were rejected",
+	} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Executor) ensureWikiRemote(ctx context.Context, dir, url string) error {
