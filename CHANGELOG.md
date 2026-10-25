@@ -2,6 +2,52 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.20.0] - 2026-10-25
+
+### Fixed
+
+两轮 verifier 审计（同步执行器 / 备份灾备）发现的六条数据安全缺陷：
+
+- **强推放行的"消费"没绑定 target_ref**（`dao/force_push_approval_dao.go`、
+  `service/forcepush_store.go`、`executor/`）：判定（IsApproved）按 target_ref 绑定，
+  消费（ConsumeApproved）却不绑定、还取"最新一条 approved" ⇒ 被消费掉的可能是另一条放行，
+  真正被授权的那条仍然 approved 且未消费 ⇒ **同一次人工放行可以反复授权覆盖**，
+  "一次性"变成常驻后门。修法：消费与判定用同一套条件（绑定 target_ref、排除已撤销），
+  判定时用的 targetSHA 一路带回消费点。
+- **`git_push_prune` 无条件删目标分支**（`executor/executor.go`）：push 成功后紧接着推
+  `:refs/heads/<tgt>`（git 语义＝删除该分支）—— 任何勾了它的单分支任务，每次同步结束
+  目标侧该分支都没了（目标 HEAD 就是该分支时则是"每次同步都失败"），而任务报 success。
+  语义应是"删除目标上**源已不存在**的同名分支"。修法：prune 条件化；源端删了分支时
+  不再把本地残留推回去；源端删分支不再让整次同步失败（放宽 fetch refspec +
+  失败回退全量 fetch，区分"源端删了"与"连不上"）。
+- **多分支（glob）任务的分歧保护整体失效**（`executor/advanced.go`）：glob 被当分支名
+  传给 git rev-list ⇒ 必然报错 ⇒ 旧实现 fail-open 放行 ⇒ block 不拦、
+  backup_on_demand 不备份，随后强推照常执行（目标侧独有提交被覆盖，任务仍报 success）。
+  修法：按实际要推的分支逐分支判定；"算不出来"只有目标分支不存在时才能放行，
+  其余情况 fail-closed。
+- **多分支首次执行不做分支对齐**（`executor/executor.go`）：clone 只把默认分支建成本地
+  分支 ⇒ glob 不含默认分支时整次同步失败；含默认分支时只同步了 1/N 个分支，报告却
+  是 success。修法：clone 之后也 align。
+- **冷备完整性清单零校验却报"通过"**（`executor/manifest.go`、`executor/bundle_ops.go`）：
+  清单只认 `.bundle`，而 zip/加密产物形态不在其中 ⇒ 配了 `backup_format=zip` 的部署
+  清单里一条都没有，校验却回 "merkle root matches"（假绿灯），发到异地的密文件也不在
+  任何哈希覆盖范围内。修法：产物后缀一处定义四处共用；零条目时明确报
+  "没有可校验的冷备产物"。
+- **RPO 报告把不同任务合并成一条**（`service/dr_service.go`）：任务 key 从文件名按 "-"
+  切第一段反推 ⇒ key 带 "-" 时两个任务合成一条指标，该指标取最新那份的时间 ⇒
+  **停更 3 天的任务被另一个刚备份的任务"洗白"**，超标不报警。修法：任务 key 的权威
+  来源改为任务表（按文件名前缀最长匹配映射回真实 key）。
+
+### Fixed（并发与可用性）
+
+- **手动触发完全绕过同 taskKey 互斥**（`service/task.go`）：cron/webhook 走
+  RunTaskWithTrigger 有互斥，手动触发/重试/重建/自动补偿全走 RunTaskAsync ——
+  函数体里根本没有 guard 调用；workdir 按 taskKey 共享 ⇒ 并发跑多份会互相踩 ref 锁。
+  修法：受理时同步抢锁，抢不到就返回 ErrTaskRunning。
+- **post_exec 脚本无超时**（`executor/executor.go`）：它跑在收尾的 defer 里，脚本挂住 ⇒
+  run 永远停在 running、同 taskKey 锁与全局并发槽一起泄漏，挂够次数整个服务的同步
+  全部起不来。修法：CommandContext + WaitDelay。
+
 ## [v0.19.0] - 2026-10-25
 
 ### Fixed
