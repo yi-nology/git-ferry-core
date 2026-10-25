@@ -2,6 +2,52 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.21.0] - 2026-10-25
+
+### Fixed
+
+- **wiki 同步推的是旧内容 + 无条件强推 + 非默认分支不同步**（`executor/wiki.go`）：
+  wiki 的 fetch 只更新远端跟踪 ref、本地分支停在克隆那一刻 ⇒ 推出去的 wiki
+  **永远是旧内容**（每次还覆盖目标，目标侧人工改的内容被抹掉），details 却写着
+  "wiki: done"；refspec 带 `+` 是无条件强推（目标的人工提交被直接覆盖，
+  `git_force` 形同虚设）；clone 只建默认分支 ⇒ 其余 wiki 分支一次都没同步过。
+  修法：推之前对齐本地分支（覆盖全部分支）；refspec 去掉 `+`（强推只由
+  `git_force` 决定）；目标有独有提交且未开 `git_force` ⇒ 明确报错拒绝覆盖。
+- **漂移检测比错了两侧 + 不带凭证**（`service/lifecycle_service.go`）：原来比的是
+  "工作区本地分支 vs 源端远端" ⇒ 报出来的多半是"源端前进了"（**正常状态**，
+  不是漂移）；而"目标端跑偏了"从来没被检查过。取远端 SHA 走 `git ls-remote`，
+  而平台的 RunRaw 固定用空凭证 ⇒ **私有仓永远 "cannot resolve refs"**，
+  漂移检测形同虚设。修法：漂移 = **目标端与源端不一致**；用带凭证的 fetch 取两端
+  状态；在**专用工作目录**里做（不复用 executor 的 workdir —— 检测时的 fetch 会写
+  git 锁，和正在跑的同步抢同一份目录会互相报错）；任务列表被上限截断时如实报
+  "未检查"。
+- **exclude_ref_patterns 被 align 重新造回**（`executor/executor.go`）：增量路径
+  fetch → excludeRefs（删）→ align（重建）⇒ 被排除的分支删掉又被写回本地分支，
+  下一次 push 照样推给目标 ⇒ 黑名单形同虚设。修法：align 也套用排除名单。
+- **glob 分支名传给 git bundle create**（`executor/bundle.go`）：
+  `refs/heads/release/*` 不是合法 rev ⇒ 多分支任务**永远产不出冷备**，而 bundle
+  阶段是 optional ⇒ 同步仍报成功、冷备静默停止。修法：按 glob 展开成实际分支。
+- **backup_keep 没有任何消费者**（`executor/pipeline_stages.go`）：`rotateBundles`
+  全仓没有生产调用点 ⇒ 配置里"每任务保留最近 N 份"看着生效，实际只增不减。
+  修法：写完冷备后轮转。
+- **保留策略删除失败仍计入 removed**（`service/backup_service.go`）：错误被吞 ⇒
+  日志打 "cleaned: removed=N"，运维以为策略生效，实际原地不动。修法：删除失败
+  不计数，并返回错误。
+- **附件/Gists 截断无告警**（`service/metabackup.go`）：超上限直接返回 ⇒ 接口回
+  "assets=100" 零告警，灾备恢复时另外那些静默缺失。修法：截断如实告警。
+- **回灌历史同秒覆盖 + 写失败被吞**（`service/metadata_restore.go`）：文件名秒级 ⇒
+  同一秒两次回灌只剩 1 个文件；写失败静默 ⇒ 审计留痕无痕消失而结果看着成功。
+  修法：文件名用毫秒；写失败进 warnings。
+- **issue 快照混进 PR**（`service/metadata_service.go`）：平台的 issue 列表端点
+  （GitHub）把 PR 一起返回 ⇒ 同一个 PR 两份快照（重复）且**占掉 issue 预算**
+  （默认 500）⇒ PR 多的仓里真实 issue 可能整批落在预算外，快照缺项无告警。
+  修法：采集时剔除 PR 并如实告警剔除数量（需 SDK v0.98.0 的 `IsPullRequest` 标记）。
+
+### Changed
+
+- SDK pin 抬到 **v0.98.0**（零 replace）：`provider.Issue` 增加 `IsPullRequest`，
+  GitHub 后端按载荷的 `pull_request` 字段设置。
+
 ## [v0.20.1] - 2026-10-25
 
 ### Fixed
