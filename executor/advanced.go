@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -80,19 +81,17 @@ func isDivergent(err error) bool {
 // 策略: allow=放行 | block=拒绝覆盖(可经 Approver 放行) | backup_on_demand=先快照再覆盖。
 // checkDivergencePolicy 按显式策略做分歧保护。
 // 第二个返回值 usedApproval = 本次是否**用掉了**一次人工放行(调用方据此兑现"一次性")。
-func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string, repo *model.Repo, platform *model.Platform) (bool, error) {
+// 第三个返回值 approvalTargetRef = 放行所绑定的目标状态(目标分支 HEAD SHA):
+// 调用方**必须**拿它去消费那条放行 —— 消费若不绑定,可能被消费掉的是另一条放行,
+// 真正被授权的那条仍可反复使用(一次性形同常驻)。
+func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string, repo *model.Repo, platform *model.Platform) (bool, string, error) {
 	// 未 force 时 git 自己会拒绝非快进,无需额外检查
 	if !force {
-		return false, nil
+		return false, "", nil
 	}
-	switch policy {
-	case "allow":
-		return false, nil
-	case "block", "backup_on_demand", "":
-		// 继续检测分歧
-	default:
-		// 未知策略按最安全处理
-		policy = "block"
+	policy, ok := normalizeDivergencePolicy(policy)
+	if !ok {
+		return false, "", nil
 	}
 	// backup_on_demand 要求覆盖前先打回滚快照;没配 backup_dir 就打不了。
 	//
@@ -100,43 +99,105 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	// 若按 block 落审批,运维一次"放行"就会在**没有备份**的情况下覆盖目标侧独有提交 ——
 	// 那正是这个策略要防的数据丢失。配置没配好就该是配置错,不该被审批绕过。
 	if policy == "backup_on_demand" && backupDir == "" {
-		return false, errors.New("force_push_policy=backup_on_demand 需要先打回滚快照," +
+		return false, "", errors.New("force_push_policy=backup_on_demand 需要先打回滚快照," +
 			"但未配置 sync.backup_dir(备份目录);请配置备份目录后重试。" +
 			"本次未覆盖任何内容,也未产生审批申请 —— 避免在没有备份的情况下被放行覆盖")
 	}
-	// 本地 source 与 target 远端跟踪比对:target 有而 source 没有的提交
-	targetRef := "refs/remotes/" + RemoteTarget + "/" + targetBranch
-	// 远端跟踪可能尚未更新,先 fetch 目标分支。
-	//
-	// 必须带凭证:自建实例(私有仓 / 自签证书 / 过期证书)不带凭证就连不上,
-	// 而连不上时**不能**当作"无分歧"放行 —— 那等于给"覆盖目标侧独有提交"
-	// 开了一条静默通道(实测:目标侧分叉提交被 force push 覆盖,任务仍报成功)。
+	// 取目标端(一次 fetch);失败按 fail-closed 处理(见 fetchTargetForDivergence)。
+	if err := e.fetchTargetForDivergence(ctx, dir, []string{targetBranch}, repo, platform); err != nil {
+		return false, "", err
+	}
+	return e.checkDivergenceForBranch(ctx, dir, sourceBranch, targetBranch, force, policy, backupDir, taskKey)
+}
+
+// normalizeDivergencePolicy 归一策略;第二个返回值 false = 不需要做分歧检查。
+func normalizeDivergencePolicy(policy string) (string, bool) {
+	switch policy {
+	case "allow":
+		return policy, false
+	case "block", "backup_on_demand", "":
+		return policy, true
+	default:
+		// 未知策略按最安全处理
+		return "block", true
+	}
+}
+
+// fetchTargetForDivergence 取目标端(带凭证),用于算"目标侧独有提交"。
+//
+// **失败要分两种情况**:
+//   - 目标分支**压根不存在**(首次推送)⇒ 放行:没有独有提交可覆盖;
+//   - 目标分支**已知存在**却连不上 ⇒ fail-closed 报错:
+//     放行 = 允许覆盖目标侧独有提交(那正是分歧保护要防的事)。
+//
+// 远端跟踪可能尚未更新,先 fetch 目标分支。
+//
+// 必须带凭证:自建实例(私有仓 / 自签证书 / 过期证书)不带凭证就连不上,
+// 而连不上时**不能**当作"无分歧"放行 —— 那等于给"覆盖目标侧独有提交"
+// 开了一条静默通道(实测:目标侧分叉提交被 force push 覆盖,任务仍报成功)。
+func (e *Executor) fetchTargetForDivergence(ctx context.Context, dir string, branches []string, repo *model.Repo, platform *model.Platform) error {
 	if _, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   RemoteTarget,
-		Branches: []string{targetBranch},
+		Branches: branches,
 		Auth:     e.authConfig(ctx, repo, platform),
 	}); err != nil {
-		// 目标分支可能不存在(首次推送)⇒ 无分歧风险;此时本地也没有该远端跟踪 ref。
-		// 反过来:本地**有**这个 ref,说明目标仓确实存在这个分支,只是这次没连上 ——
-		// 这种情况下不能放行,必须报错让人工介入,否则会覆盖目标侧独有提交。
-		if _, rerr := e.backend.RevParse(ctx, dir, targetRef); rerr == nil {
-			return false, errors.Wrapf(err,
-				"cannot verify divergence for %q: target fetch failed while the target branch is known to exist", targetBranch)
+		if e.targetBranchKnown(ctx, dir, branches) {
+			return errors.Wrapf(err,
+				"cannot verify divergence: target fetch failed while the target branch is known to exist")
 		}
-		return false, nil
+		slog.Info("目标端没有这些分支(首次推送),按无分歧处理",
+			"branches", strings.Join(branches, ","), "error", err)
+		return nil
 	}
+	return nil
+}
+
+// targetBranchKnown 目标端是否**已知**存在这些分支(本地有对应的远端跟踪 ref)。
+func (e *Executor) targetBranchKnown(ctx context.Context, dir string, branches []string) bool {
+	for _, b := range branches {
+		if b == "" {
+			continue
+		}
+		if _, err := e.backend.RevParse(ctx, dir, "refs/remotes/"+RemoteTarget+"/"+b); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// checkDivergenceForBranch 单个分支的分歧判定(假定目标端已取过)。
+//
+// 与旧的整段实现相比,这里**不再吞掉"算不出来"的错误**:
+// 算不出来时只有一种情况可以放行 —— 目标分支压根不存在;
+// 目标分支存在却算不出来 ⇒ fail-closed(报错),否则 force 推送会覆盖独有提交。
+func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBranch, targetBranch string, force bool, policy, backupDir, taskKey string) (bool, string, error) {
+	// 本地 source 与 target 远端跟踪比对:target 有而 source 没有的提交
+	targetRef := "refs/remotes/" + RemoteTarget + "/" + targetBranch
 	// 原实现:git rev-list --right-only --count source...targetRef,
 	// 取的是右端(target)独有提交数 —— 即相对 source 的 behind。
 	// GetBranchSyncInfo(branch, upstream) 返回 (ahead, behind),
 	// upstream 侧前缀 refs/remotes/,故 upstream 传 RemoteTarget/targetBranch。
 	_, behind, err := e.backend.GetBranchSyncInfo(ctx, dir, sourceBranch, RemoteTarget+"/"+targetBranch)
 	if err != nil {
-		// ref 不存在等:保守放行,交给 push 决定
-		return false, nil
+		// **算不出来 ≠ 没分歧**。
+		//
+		// 旧实现在这里直接放行("保守放行,交给 push 决定")—— 可 force 推送
+		// **正是**会覆盖目标侧独有提交的那一步,交给 push 决定 = 没有保护。
+		// 多分支任务更糟:sourceBranch 传进来的是 glob("release/*"),
+		// git rev-list 对含 * 的 rev 必然报错 ⇒ 分歧保护**整体失效**:
+		// block 不拦、backup_on_demand 不备份,随后强推照常执行。
+		//
+		// 只有一种情况可以放行:目标分支**压根不存在**(首次推送,没有独有提交可覆盖)。
+		// 本地有该远端跟踪 ref 却算不出来 ⇒ fail-closed,报错让人工介入。
+		if _, rerr := e.backend.RevParse(ctx, dir, targetRef); rerr == nil {
+			return false, "", errors.Wrapf(err,
+				"cannot verify divergence for %q: target branch exists but the comparison failed", targetBranch)
+		}
+		return false, "", nil
 	}
 	if behind == 0 {
-		return false, nil
+		return false, "", nil
 	}
 	count := fmt.Sprintf("%d", behind)
 	// 列出目标独有提交(最多 5 条,便于日志)。
@@ -147,9 +208,9 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		snap := filepath.Join(backupDir,
 			fmt.Sprintf("predemote-%s-%s.bundle", strutil.SanitizeFileToken(targetBranch), time.Now().Format("20060102-150405")))
 		if _, berr := e.gitOutput(ctx, dir, "bundle", "create", snap, targetRef); berr != nil {
-			return false, errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
+			return false, "", errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
 		}
-		return false, nil
+		return false, "", nil
 	}
 	// block 策略：若已有审批放行则放行；否则登记 pending 并拒绝
 	//
@@ -160,12 +221,14 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 		if e.Approver.IsForcePushApproved(taskKey, targetBranch, targetSHA) {
 			// 放行通过 —— 标记"用掉了":本次强推成功后要把这条放行消费掉,
 			// 否则一次人工放行会变成该任务+分支上的常驻后门。
-			return true, nil
+			//
+			// 连同 targetSHA 一起带回去:消费必须落在**这条**放行上。
+			return true, targetSHA, nil
 		}
 		e.Approver.RequestApproval(taskKey, targetBranch,
 			fmt.Sprintf("divergent target has %s unique commits", count), targetSHA)
 	}
-	return false, &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
+	return false, "", &divergentError{Branch: targetBranch, Count: behind, Extra: extra}
 }
 
 // maxDivergentLog 与原 `log --oneline -5` 的条数上限一致。

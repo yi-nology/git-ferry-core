@@ -28,6 +28,26 @@ type BundleInfo struct {
 	RefSpecs []string  `json:"ref_specs,omitempty"`
 }
 
+// backupProductSuffixes 是"冷备产物"的全部形态。
+//
+// **必须一处定义**:清单扫描(ListBundles / BuildManifest)、轮转(rotateBundles)、
+// 保留策略清理、灾备演练各扫各的后缀,就会出现
+// 「清单只认 .bundle、轮转认 4 种」的错位 ——
+// 配了 backup_format=zip 或加密的部署,清单里一条都没有,
+// 校验却回"完整性校验通过"(零校验的假绿灯),真正发到异地的密文件
+// 也不在任何哈希覆盖范围内。
+var backupProductSuffixes = []string{".bundle", ".zip", ".bundle.enc", ".zip.enc"}
+
+// IsBackupProduct 该文件名是不是冷备产物。
+func IsBackupProduct(name string) bool {
+	for _, suf := range backupProductSuffixes {
+		if strings.HasSuffix(name, suf) {
+			return true
+		}
+	}
+	return false
+}
+
 // ListBundles 列出 backupDir 下的 bundle(按任务过滤,空=全部)。
 func ListBundles(backupDir, taskKey string) ([]BundleInfo, error) {
 	entries, err := os.ReadDir(backupDir)
@@ -43,7 +63,7 @@ func ListBundles(backupDir, taskKey string) ([]BundleInfo, error) {
 	}
 	out := []BundleInfo{}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".bundle") {
+		if e.IsDir() || !IsBackupProduct(e.Name()) {
 			continue
 		}
 		if prefix != "" && !strings.HasPrefix(e.Name(), prefix) {

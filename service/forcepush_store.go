@@ -174,16 +174,19 @@ func (st *ForcePushStore) IsForcePushApproved(taskKey, branch, targetRef string)
 //
 // 契约:"Admin 一次性放行后允许**本次** force" —— 用掉之后,同一任务同一分支
 // 再出现分歧必须重新审批。记录保留（标 consumed_at）,留住审计线索。
-func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch string) {
+//
+// **targetRef 必须与判定时用的那个一致**:消费要精确落在"判定通过的那条"上,
+// 否则被消费掉的可能是另一条放行,真正授权的那条仍可反复用(一次性形同常驻)。
+func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch, targetRef string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	found, err := st.dao.ConsumeApproved(taskKey, branch, time.Now().UTC())
+	found, err := st.dao.ConsumeApproved(taskKey, branch, targetRef, time.Now().UTC())
 	if err != nil {
-		slog.Error("consume force-push approval failed", "error", err, "taskKey", taskKey, "branch", branch)
+		slog.Error("consume force-push approval failed", "error", err, "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
 		return
 	}
 	if found {
-		slog.Info("force-push approval consumed", "taskKey", taskKey, "branch", branch)
+		slog.Info("force-push approval consumed", "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
 	}
 }
 

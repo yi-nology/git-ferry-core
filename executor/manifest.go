@@ -58,7 +58,7 @@ func BuildManifest(backupDir string) (*BackupManifest, error) {
 		Entries:   []ManifestEntry{},
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".bundle") {
+		if e.IsDir() || !IsBackupProduct(e.Name()) {
 			continue
 		}
 		path := filepath.Join(backupDir, e.Name())
@@ -172,7 +172,15 @@ func VerifyManifest(backupDir string) (*ManifestVerifyResult, error) {
 	}
 	res.OK = len(res.MissingFiles) == 0 && len(res.HashMismatch) == 0 &&
 		len(res.ExtraFiles) == 0 && fresh.MerkleRoot == stored.MerkleRoot
-	if res.OK {
+	// **零条目 = 一个文件都没校验**,不是"校验通过"。
+	//
+	// merkleRoot 对空列表返回 "" ⇒ 两边都是 "" 时 OK 判定成立,
+	// 消息还写着 "merkle root matches" —— 备份目录为空/只有非 .bundle 产物时,
+	// 运维看到的是**绿色通过**,而实际什么都没校验(发到异地的密文件也不在覆盖范围)。
+	if res.OK && len(fresh.Entries) == 0 {
+		res.OK = false
+		res.Message = "没有可校验的冷备产物(备份目录里没有 .bundle/.zip 产物)—— 校验未实际执行"
+	} else if res.OK {
 		res.Message = "backup integrity verified: merkle root matches"
 	} else {
 		parts := []string{}

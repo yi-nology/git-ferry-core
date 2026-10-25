@@ -140,3 +140,37 @@ func TestBackupManifest(t *testing.T) {
 	_, err = newBackupService("", 0, false).VerifyBackupManifest()
 	require.ErrorIs(t, err, ErrBackupDisabled)
 }
+
+// TestRPOReport_SeparatesTaskKeysWithSharedPrefix 任务 key 共享前缀时,
+// RPO 报告必须**分成多条指标**。
+//
+// 回归背景(P0):旧实现从文件名按 "-" 切第一段反推 taskKey ⇒
+// "prod-eu-main-*.bundle" 与 "prod-us-main-*.bundle" 都被推成 "prod" ⇒
+// **两个任务合成一条指标**,该指标取最新那份 bundle 的时间 ⇒
+// 停更 3 天的任务被另一个 5 分钟前备份的任务"洗白",超标不报警。
+func TestRPOReport_SeparatesTaskKeysWithSharedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	s := newBackupService(dir, 0, false)
+
+	oldB := filepath.Join(dir, "prod-eu-main-20260101-010101.bundle")
+	newB := filepath.Join(dir, "prod-us-main-20260101-020202.bundle")
+	require.NoError(t, os.WriteFile(oldB, make([]byte, 10), 0o600))
+	require.NoError(t, os.WriteFile(newB, make([]byte, 20), 0o600))
+	old := time.Now().Add(-10 * time.Hour)
+	require.NoError(t, os.Chtimes(oldB, old, old))
+
+	rep, err := s.RPOReport(3600)
+	require.NoError(t, err)
+	require.Len(t, rep.Metrics, 2, "两个任务必须是两条指标(旧实现会合成一条)")
+
+	// 停更的那个必须被标超标
+	var violated *RPOMetric
+	for i := range rep.Metrics {
+		if rep.Metrics[i].RPOViolated {
+			violated = &rep.Metrics[i]
+		}
+	}
+	require.NotNil(t, violated, "停更 10 小时的 prod-eu 必须被标超标(不能被另一个任务洗白)")
+	assert.Contains(t, violated.TaskKey, "prod-eu", "超标项必须归属到正确的任务")
+	assert.Equal(t, 1, rep.Violations)
+}

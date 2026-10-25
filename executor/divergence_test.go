@@ -45,7 +45,7 @@ func TestCheckDivergencePolicy_ErrorReportsRealCount(t *testing.T) {
 	commitToSrc(t, src, "v2", "c2")
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, _, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "has 1 commit(s) not in source",
 		"错误文案里的独有提交数必须是真实数量(目标侧只有 1 个独有提交)")
@@ -81,7 +81,7 @@ func TestCheckDivergencePolicy_TargetHasUniqueCommits_Blocks(t *testing.T) {
 	commitToSrc(t, src, "v2", "c2")
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
-	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, _, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err, "目标侧有独有提交时 block 策略必须拦下")
 }
 
@@ -117,7 +117,7 @@ func TestCheckDivergencePolicy_TargetUnreachable_FailsClosed(t *testing.T) {
 	// 把 target remote 指向不存在的路径 ⇒ 这次 fetch 必然失败
 	gitRun(t, work, "remote", "set-url", "target", filepath.Join(t.TempDir(), "does-not-exist.git"))
 
-	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, _, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err, "连不上目标时不能当作无分歧放行,必须报错")
 	require.Contains(t, err.Error(), "cannot verify divergence")
 }
@@ -142,7 +142,7 @@ func TestCheckDivergencePolicy_FirstPush_NoTargetBranch_Allows(t *testing.T) {
 	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
 
 	// 目标仓是空仓(没有 main 分支)⇒ 首次推送,无分歧风险
-	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	_, _, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.NoError(t, err)
 }
 
@@ -153,6 +153,9 @@ type stubApprover struct {
 	requested int
 	// checkedTargetRef 记录最近一次判定时传入的目标 SHA(验证"放行绑定目标状态")
 	checkedTargetRef string
+	// consumedTargetRef 记录消费时传入的目标 SHA:
+	// 消费必须落在"判定通过的那条"上,否则真正授权的放行仍可反复使用。
+	consumedTargetRef string
 }
 
 func (s *stubApprover) IsForcePushApproved(taskKey, branch, targetRef string) bool {
@@ -162,8 +165,12 @@ func (s *stubApprover) IsForcePushApproved(taskKey, branch, targetRef string) bo
 func (s *stubApprover) RequestApproval(taskKey, branch, reason, targetRef string) { s.requested++ }
 
 // ConsumeForcePushApproval 镜像真实 store 的语义:用掉之后不再算已放行。
-func (s *stubApprover) ConsumeForcePushApproval(taskKey, branch string) {
+//
+// 记录消费的 targetRef:真实实现按它精确落到"判定通过的那条"放行上,
+// 桩也要能断言这一点。
+func (s *stubApprover) ConsumeForcePushApproval(taskKey, branch, targetRef string) {
 	s.consumed++
+	s.consumedTargetRef = targetRef
 	s.approved = false
 }
 
@@ -200,14 +207,14 @@ func TestCheckDivergencePolicy_ReportsApprovalUsage(t *testing.T) {
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
 	// 没有放行 ⇒ 拦下
-	used, err := exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	used, _, err := exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.Error(t, err)
 	require.False(t, used, "没放行时不该报'用掉了放行'")
 
 	// 有放行 ⇒ 放行通过,且如实上报"用掉了"
 	ap := &stubApprover{approved: true}
 	exec.Approver = ap
-	used, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
+	used, _, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "block", "", task.Key, dstRepo, nil)
 	require.NoError(t, err, "有放行时应当放行")
 	require.True(t, used, "用了放行必须上报(调用方据此兑现一次性)")
 	require.Equal(t, 0, ap.consumed, "检查阶段不消费放行 —— 消费发生在推送成功之后")
@@ -245,7 +252,7 @@ func TestCheckDivergencePolicy_BackupOnDemandWithoutBackupDir_ExplainsWhy(t *tes
 	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
 
 	// backupDir 传空串 = 未配置 sync.backup_dir
-	used, err := exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
+	used, _, err := exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sync.backup_dir",
 		"backup_on_demand 兑现不了时,错误必须点名 backup_dir,否则看不出为什么被拦下")
@@ -255,7 +262,7 @@ func TestCheckDivergencePolicy_BackupOnDemandWithoutBackupDir_ExplainsWhy(t *tes
 	// 覆盖目标侧独有提交,那正是这个策略要防的数据丢失。
 	ap := &stubApprover{}
 	exec.Approver = ap
-	_, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
+	_, _, err = exec.checkDivergencePolicy(ctx, work, "main", "main", true, "backup_on_demand", "", task.Key, dstRepo, nil)
 	require.Error(t, err)
 	require.Equal(t, 0, ap.requested, "配置错时不得产生审批申请(否则能被放行成无备份覆盖)")
 }

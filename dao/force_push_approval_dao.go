@@ -115,11 +115,25 @@ func (d *ForcePushApprovalDAO) Revoke(id string, by string, at time.Time) (found
 
 // ConsumeApproved 把同 task+branch 的放行标记为已用掉(一次性放行的兑现)。
 // 没有可用放行时返回 found=false。
-func (d *ForcePushApprovalDAO) ConsumeApproved(taskKey, branch string, at time.Time) (found bool, err error) {
+//
+// **必须按 target_ref 精确消费**:判定"能不能推"走 IsApproved(它绑定 target_ref),
+// 这里若不绑定,消费掉的可能是**另一条**放行 ——
+// 真正被授权的那条仍然 approved 且未消费 ⇒ 同一次人工放行可以反复授权覆盖,
+// "一次性"变成常驻后门。
+//
+// 同时排除**已撤销**的放行:撤销 = 授权被收回,消费它等于把"已收回"记成"已用掉",
+// 两条记录的状态就都乱了(实测:撤销的记录被消费成 consumed=true)。
+func (d *ForcePushApprovalDAO) ConsumeApproved(taskKey, branch, targetRef string, at time.Time) (found bool, err error) {
 	a := &model.ForcePushApproval{}
 	q := d.db.Model(&model.ForcePushApproval{}).
-		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL", taskKey, branch, true).
-		Order("created_at DESC").First(a)
+		Where("task_key = ? AND branch = ? AND approved = ? AND consumed_at IS NULL AND revoked_at IS NULL",
+			taskKey, branch, true)
+	// 绑定语义与 IsApproved 完全一致:
+	// target_ref 为空的(早期版本创建的)视为未绑定,同样适用。
+	if targetRef != "" {
+		q = q.Where("target_ref = ? OR target_ref = ''", targetRef)
+	}
+	q = q.Order("created_at DESC").First(a)
 	if q.Error != nil {
 		if errors.Is(q.Error, gorm.ErrRecordNotFound) {
 			return false, nil

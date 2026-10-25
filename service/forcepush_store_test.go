@@ -140,7 +140,7 @@ func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
 	require.True(t, st.IsForcePushApproved("t1", "main", ""), "放行后应当生效")
 
 	// 用掉
-	st.ConsumeForcePushApproval("t1", "main")
+	st.ConsumeForcePushApproval("t1", "main", "sha-1")
 	assert.False(t, st.IsForcePushApproved("t1", "main", ""),
 		"放行被用掉后不再算数(否则一次人工放行 = 常驻后门)")
 
@@ -239,4 +239,81 @@ func TestForcePushStore_PendingRefreshesToCurrentState(t *testing.T) {
 	assert.Equal(t, firstID, pending.ID, "应是同一条记录(不重复建)")
 	assert.Equal(t, "sha-2", pending.TargetRef, "pending 必须绑到当前目标状态")
 	assert.Contains(t, pending.Reason, "50", "pending 的描述必须反映当前分歧")
+}
+
+// TestForcePushStore_ConsumeBindsTargetRef 消费必须**精确落在判定通过的那条**放行上。
+//
+// 回归背景(P0):判定"能不能推"走 IsApproved(它按 target_ref 绑定),
+// 而"用掉哪条放行"走 ConsumeApproved —— 原实现**不绑定 target_ref**,
+// 且取"最新一条 approved" ⇒ 被消费掉的可能是**另一条**放行,
+// 真正被授权的那条仍然 approved 且未消费 ⇒ 同一次人工放行可以反复授权覆盖,
+// "一次性"变成常驻后门。
+func TestForcePushStore_ConsumeBindsTargetRef(t *testing.T) {
+	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
+
+	// 两条已放行记录:A 绑 SHA_X(较早),B 绑 SHA_Y(较新)。
+	st.RequestApproval("t1", "main", "divergent at sha-x", "sha-x")
+	idA := approvalIDByTargetRef(t, st, "sha-x")
+	found, err := st.Approve(idA, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	st.RequestApproval("t1", "main", "divergent at sha-y", "sha-y")
+	idB := approvalIDByTargetRef(t, st, "sha-y")
+	found, err = st.Approve(idB, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// 目标侧此刻在 SHA_X ⇒ 判定命中的是 A。
+	require.True(t, st.IsForcePushApproved("t1", "main", "sha-x"), "A 应生效")
+
+	// 消费这次授权(必须落在 A 上)。
+	st.ConsumeForcePushApproval("t1", "main", "sha-x")
+
+	// 关键断言:A 已被用掉 —— 否则同一次放行还能再用。
+	assert.False(t, st.IsForcePushApproved("t1", "main", "sha-x"),
+		"被授权的那条放行必须被用掉(否则一次放行 = 常驻后门)")
+	// B 绑的是别的目标状态,不该被动到。
+	assert.True(t, st.IsForcePushApproved("t1", "main", "sha-y"),
+		"另一条绑不同目标状态的放行不该被这次消费误伤")
+}
+
+// TestForcePushStore_ConsumeSkipsRevoked 已撤销的放行不得被消费。
+//
+// 撤销 = 授权被收回;消费它等于把"已收回"记成"已用掉",
+// 两条记录的状态都乱了(而且撤销的授权本就不该兑现)。
+func TestForcePushStore_ConsumeSkipsRevoked(t *testing.T) {
+	st := NewForcePushStore(dao.NewForcePushApprovalDAO(newApprovalDB(t)), "")
+
+	st.RequestApproval("t1", "main", "divergent at sha-r", "sha-r")
+	idR := approvalIDByTargetRef(t, st, "sha-r")
+	found, err := st.Approve(idR, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	found, err = st.Revoke(idR, "admin")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.False(t, st.IsForcePushApproved("t1", "main", "sha-r"), "撤销后不该再算已放行")
+
+	// 消费时不能选中已撤销的那条(它没有 consumed_at,但已被收回)。
+	st.ConsumeForcePushApproval("t1", "main", "sha-r")
+
+	for _, a := range st.List() {
+		if a.ID == idR {
+			assert.Nil(t, a.ConsumedAt, "已撤销的放行不该被标记成已用掉")
+		}
+	}
+}
+
+// approvalIDByTargetRef 找出绑定了指定目标状态的放行 id。
+func approvalIDByTargetRef(t *testing.T, st *ForcePushStore, targetRef string) string {
+	t.Helper()
+	for _, a := range st.List() {
+		if a.TargetRef == targetRef {
+			return a.ID
+		}
+	}
+	t.Fatalf("没找到 target_ref=%q 的放行(现有:%+v)", targetRef, st.List())
+	return ""
 }

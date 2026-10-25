@@ -100,9 +100,26 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 		return ErrTaskDisabled
 	}
 
+	// **并发互斥必须在这里拿**(而不是只在 RunTaskWithTrigger 里):
+	//
+	// cron / webhook 走 RunTaskWithTrigger ⇒ 有同 taskKey 互斥;
+	// 而手动触发 / 重试 / 重建 / 自动补偿全走本函数 ⇒ 原先**完全没有互斥**,
+	// 同一个任务可以被并发跑多份 ——
+	// 而 workdir 是按 taskKey 共享的(service.GetTempDir),两个 executor
+	// 同时 fetch/update-ref/push 同一目录 ⇒ ref 锁竞争、推送时序失控。
+	//
+	// 注释里写的"并发快速失败"以前从未发生(函数体里根本没有 guard 调用)。
+	//
+	// 锁在**受理时**抢(同步),不是执行时抢 —— 否则两个请求都会先返回"已受理",
+	// 再排队跑同一份,那不叫互斥。
+	release, err := s.guard.Acquire(s.bgCtx, taskKey)
+	if err != nil {
+		return err
+	}
 	s.wg.Add(1)
 	async.GoSafe(func() {
 		defer s.wg.Done()
+		defer release()
 		run, err := s.executor.Execute(s.bgCtx, task, trigger, webhookEventID)
 		if err != nil {
 			// 结果已落 run 记录,这里仅留痕

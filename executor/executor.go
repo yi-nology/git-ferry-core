@@ -68,7 +68,10 @@ type ForcePushApprover interface {
 	// ConsumeForcePushApproval 消费掉一次放行。
 	// 放行是**一次性**的:一次成功的强推之后就要用掉,下次同任务同分支
 	// 再出现分歧必须重新审批(否则一次人工放行变成常驻后门)。
-	ConsumeForcePushApproval(taskKey, branch string)
+	//
+	// targetRef 是**判定时用的那个目标状态**:消费必须精确落在判定通过的那条上,
+	// 否则被消费掉的可能是另一条放行,真正授权的那条仍可反复使用。
+	ConsumeForcePushApproval(taskKey, branch, targetRef string)
 }
 
 func NewExecutor(svc Service) (*Executor, error) {
@@ -161,6 +164,11 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	return run, nil
 }
 
+// postExecTimeout 是 post_exec 脚本的最长运行时间。
+//
+// 收尾阶段不能被外部脚本无限期拖住:run 状态与互斥锁都压在它后面。
+var postExecTimeout = 5 * time.Minute
+
 // runPostExec 执行 sync.post_exec_script（ghorg post_exec_script 模式）。
 // 失败只记 details，不影响同步结果。
 func (e *Executor) runPostExec(task *model.SyncTask, run *model.SyncRun, details *strings.Builder) {
@@ -172,7 +180,20 @@ func (e *Executor) runPostExec(task *model.SyncTask, run *model.SyncRun, details
 	if run.Status == model.StatusSuccess {
 		result = "success"
 	}
-	cmd := exec.Command(cfg.Sync.PostExecScript) //nolint:gosec // 路径由部署方配置
+	// **必须有超时**:post_exec 脚本是部署方写的外部程序,可能挂住
+	// (等输入、等网络、sleep infinity)。而它跑在收尾的 defer 里 ——
+	// 挂住 ⇒ CompleteRunWithTaskUpdate 永不执行 ⇒ run 记录永远停在 running,
+	// 同时调用方持有的同 taskKey 互斥锁与全局并发槽一起被占住;
+	// 挂够 max_concurrent 次之后,整个服务的同步全部起不来。
+	//
+	// 超时后杀掉子进程并记进 details(脚本失败不影响同步结果,这是既有语义)。
+	execCtx, cancel := context.WithTimeout(context.Background(), postExecTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, cfg.Sync.PostExecScript) //nolint:gosec // 路径由部署方配置
+	// CommandContext 只杀**直接子进程**:脚本里再 fork 的孙子(sleep 等)仍持有
+	// stdout 管道 ⇒ CombinedOutput 会一直等管道关闭。
+	// WaitDelay 兜底:进程被杀后最多再等这么久就返回,不再挂住收尾。
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = append(os.Environ(),
 		"GITFERRY_TASK="+task.Key,
 		"GITFERRY_RESULT="+result,
@@ -181,6 +202,11 @@ func (e *Executor) runPostExec(task *model.SyncTask, run *model.SyncRun, details
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if execCtx.Err() != nil {
+			fmt.Fprintf(details, "\n=== post_exec_script 超时(%s 被终止): %v ===\n%s\n",
+				postExecTimeout, execCtx.Err(), out)
+			return
+		}
 		fmt.Fprintf(details, "\n=== post_exec_script error: %v ===\n%s\n", err, out)
 		return
 	}
@@ -329,7 +355,20 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	if err != nil {
 		return err
 	}
+	e.widenOriginFetchRefspec(ctx, dir)
 	e.excludeRefs(ctx, dir, task)
+	// **多分支:clone 之后也要对齐**。
+	//
+	// clone 只把默认分支建成**本地**分支,其余分支只存在于 refs/remotes/origin/*。
+	// 而 push 推的是 refs/heads/*(本地) ⇒ 不对齐的话:
+	//   - glob 不含默认分支 ⇒ 拼不出 refspec,整次同步失败
+	//     ("no local branches match");
+	//   - glob 含默认分支(如 *) ⇒ 只同步了默认分支,其余 N-1 个**静默没推**,
+	//     报告却是 success。
+	// 增量路径(fetch 之后)本来就有对齐,这里让首次与后续行为一致。
+	if strings.ContainsAny(task.SourceBranch, "*?[") {
+		return e.alignSourceBranches(ctx, dir, task.SourceBranch)
+	}
 	return nil
 }
 
@@ -383,6 +422,57 @@ func matchesInclude(include, branch string) bool {
 	return false
 }
 
+// widenOriginFetchRefspec 把 origin 的 fetch refspec 放宽到"全部分支"。
+//
+// **为什么必须放宽**:单分支 clone 走的是 --single-branch,git 会把本地的
+// fetch refspec 限定成那一个分支 ⇒ 源端删掉该分支后,后续
+// `git fetch --prune origin` 会报 "couldn't find remote ref refs/heads/<b>"
+// (fetch 的是**配置里的 refspec**,不是"远端现在有什么")⇒
+// 源端删分支 = 同步直接失败,而且错误信息完全指不到"镜像删除"这件事。
+//
+// 放宽后:源端删掉的分支只是**不存在**(--prune 会剪掉它的远端跟踪 ref),
+// fetch 不再报错,"源端删了分支 ⇒ 目标侧也删"这条镜像语义才有机会执行。
+//
+// 对 gogit 后端无副作用(它按入参构造 refspec,不看本地配置)。
+func (e *Executor) widenOriginFetchRefspec(ctx context.Context, dir string) {
+	const want = "+refs/heads/*:refs/remotes/" + RemoteOrigin + "/*"
+	cur, err := e.backend.GetConfig(ctx, dir, "remote."+RemoteOrigin+".fetch")
+	if err == nil && strings.TrimSpace(cur) == want {
+		return
+	}
+	if err := e.backend.SetConfig(ctx, dir, "remote."+RemoteOrigin+".fetch", want); err != nil {
+		slog.Warn("widenOriginFetchRefspec 失败,源端删除分支时可能报错",
+			"dir", dir, "error", err)
+	}
+}
+
+// sourceBranchGone 判断"源端是否已经删掉了这个分支"。
+//
+// 判据:refs/remotes/origin/<branch> 在一次**全量** fetch(--prune 恒开)之后
+// 仍然不存在 ⇒ 源端确实没有这个分支了。
+//
+// 为什么不能只看第一次 fetch 的失败:那也可能是网络/鉴权/证书问题 ——
+// 把"连不上"当成"源端删了"会让同步静默地不推送(数据不前进却报成功)。
+func (e *Executor) sourceBranchGone(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) bool {
+	if _, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
+		RepoPath: dir,
+		Remote:   RemoteOrigin,
+		Branches: nil, // 全量:让 --prune 有机会剪掉源端已删的分支
+		Tags:     task.GitTags,
+		Auth:     e.authConfig(ctx, repo, platform),
+	}); err != nil {
+		// 连不上就**不能**下"源端删了"的结论。
+		slog.Warn("sourceBranchGone: 全量 fetch 失败,无法判定源端是否删除了该分支",
+			"branch", task.SourceBranch, "error", err)
+		return false
+	}
+	ref := "refs/remotes/" + RemoteOrigin + "/" + task.SourceBranch
+	if _, err := e.backend.RevParse(ctx, dir, ref); err == nil {
+		return false // 源端还有这个分支
+	}
+	return true
+}
+
 func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) error {
 	// 克隆地址在 DB 里被修正(私有实例重写/仓库迁移)后,既有 workdir 的
 	// origin 仍指向旧地址;不同步会一直从错误源 fetch。
@@ -398,6 +488,10 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 		fetchBranches = nil
 	}
 
+	// 放宽 fetch refspec:单分支 clone 的 refspec 指向那一个分支,
+	// 源端删掉它之后 fetch 会直接报错(而不是"这个分支没了")。
+	e.widenOriginFetchRefspec(ctx, dir)
+
 	_, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir,
 		Remote:   RemoteOrigin,
@@ -407,6 +501,18 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 		Auth:     e.authConfig(ctx, repo, platform),
 	})
 	if err != nil {
+		// **源端可能已经删掉了这个分支**:按名字 fetch 一个远端不存在的分支,
+		// git 会直接报 "couldn't find remote ref" ⇒ 整次同步失败。
+		// 而正确行为是"目标侧同名分支也删掉"(镜像语义),不是失败。
+		//
+		// 区分办法:退化成一次**全量** fetch(SDK 的 --prune 恒开,
+		// 源端删掉的分支其远端跟踪 ref 会被剪掉),再看 refs/remotes/origin/<src>
+		// 还在不在:不在 = 源端确实删了(不是网络/鉴权问题)。
+		if len(fetchBranches) > 0 && e.sourceBranchGone(ctx, dir, task, repo, platform) {
+			slog.Info("fetchRepo: 源端已删除该分支,按镜像语义处理(不推送)",
+				"branch", task.SourceBranch, "dir", dir)
+			return nil
+		}
 		return err
 	}
 	e.excludeRefs(ctx, dir, task)
@@ -550,7 +656,8 @@ func (e *Executor) workdirUsable(ctx context.Context, dir string) bool {
 
 // push 推送分支到目标端。
 // 第二个返回值 usedApproval = 本次是否用掉了一次人工放行(调用方负责在成功后兑现"一次性")。
-func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) (bool, error) {
+// 第三个返回值 approvalTargetRef = 该放行绑定的目标状态(消费时必须原样带回)。
+func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) (bool, string, error) {
 	// 分歧保护:按 ForcePushPolicy(block/backup_on_demand/allow)处理
 	policy := task.ForcePushPolicy
 	if policy == "" {
@@ -564,47 +671,102 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	if cfg := e.service.GetConfig(); cfg != nil {
 		backupDir = cfg.Sync.BackupDir
 	}
-	usedApproval, err := e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key, repo, platform)
-	if err != nil {
-		return false, err
-	}
-
-	// LFS 对象先推,避免代码分支推上去了大文件缺失
-	if task.GitLFS {
-		if err := e.syncLFS(ctx, dir, RemoteTarget, false); err != nil {
-			return usedApproval, err
-		}
-	}
-
 	// 必须用完整 refspec:go-git 按全名严格匹配本地 ref,不做 git CLI 的
 	// 短名展开,"main:main" 匹配不到 refs/heads/main,会静默零推送
 	// (返回 already up-to-date,被误判成功)。
 	multi := strings.ContainsAny(task.SourceBranch, "*?[")
 	var refSpecs []string
+	var branches []string
 	if multi {
-		branches, err := e.listLocalBranches(dir)
-		if err == nil {
-			for _, b := range branches {
+		all, lerr := e.listLocalBranches(dir)
+		if lerr == nil {
+			for _, b := range all {
 				if !matchBranchGlob(task.SourceBranch, b) {
 					continue
 				}
 				if !matchesInclude(task.IncludeBranches, b) {
 					continue
 				}
-				refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
+				branches = append(branches, b)
 			}
 		}
-		if len(refSpecs) == 0 {
-			return usedApproval, fmt.Errorf("no local branches match %q", task.SourceBranch)
+		if len(branches) == 0 {
+			return false, "", fmt.Errorf("no local branches match %q", task.SourceBranch)
+		}
+		for _, b := range branches {
+			refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 		}
 	} else {
 		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
-			return usedApproval, fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+			return false, "", fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
 		}
+		// **源端还有这个分支吗?**
+		//
+		// 源端删掉分支后,本地那个 refs/heads/<src> 是**残留**
+		// (align 阶段不会删本地分支,只会在源端 ref 不存在时跳过对齐)。
+		// 把它推过去 = 把源端已经删掉的分支又搬回目标(目标侧"复活"了一个
+		// 源端已经不存在的分支)。
+		//
+		// 源端确实没有 ⇒ 本次**不推**,改为按镜像语义处理:
+		// 开了 git_push_prune 就把目标侧同名分支删掉,没开就保持不动。
+		sourceRef := "refs/remotes/" + RemoteOrigin + "/" + task.SourceBranch
+		if _, rerr := e.backend.RevParse(ctx, dir, sourceRef); rerr != nil {
+			if task.GitPushPrune {
+				if perr := e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform); perr != nil {
+					return false, "", perr
+				}
+				slog.Info("源端已删除该分支,已删除目标侧同名分支(镜像删除)",
+					"source", task.SourceBranch, "target", task.TargetBranch)
+			} else {
+				slog.Info("源端已删除该分支,本次不推送(git_push_prune 未开启,目标侧保持不动)",
+					"source", task.SourceBranch, "target", task.TargetBranch)
+			}
+			return false, "", nil
+		}
+		branches = []string{task.SourceBranch}
 		refSpecs = []string{fmt.Sprintf("refs/heads/%s:refs/heads/%s", task.SourceBranch, task.TargetBranch)}
 	}
 
-	_, err = e.backend.Push(ctx, gitbackend.PushOptions{
+	// 分歧保护:**逐分支**判定。
+	//
+	// 多分支任务以前把 glob("release/*")当分支名传进判定,
+	// git rev-list 对含 * 的 rev 必然报错 ⇒ 旧实现 fail-open 直接放行 ⇒
+	// block 策略不拦、backup_on_demand 不备份,随后强推照常执行 ——
+	// 分歧保护对多分支**整体失效**。现在按实际要推的分支逐个判定。
+	var usedApproval bool
+	var approvalTargetRef string
+	if multi {
+		// 目标端一次取回(逐分支 fetch 太慢)。
+		if err := e.fetchTargetForDivergence(ctx, dir, nil, repo, platform); err != nil {
+			return false, "", errors.Wrap(err,
+				"cannot verify divergence for multi-branch task: target fetch failed")
+		}
+		for _, b := range branches {
+			used, ref, derr := e.checkDivergenceForBranch(ctx, dir, b, b, task.GitForce, policy, backupDir, task.Key)
+			if derr != nil {
+				return false, ref, derr
+			}
+			if used {
+				usedApproval = true
+				approvalTargetRef = ref
+			}
+		}
+	} else {
+		var derr error
+		usedApproval, approvalTargetRef, derr = e.checkDivergencePolicy(ctx, dir, task.SourceBranch, task.TargetBranch, task.GitForce, policy, backupDir, task.Key, repo, platform)
+		if derr != nil {
+			return false, approvalTargetRef, derr
+		}
+	}
+
+	// LFS 对象先推,避免代码分支推上去了大文件缺失
+	if task.GitLFS {
+		if err := e.syncLFS(ctx, dir, RemoteTarget, false); err != nil {
+			return usedApproval, approvalTargetRef, err
+		}
+	}
+
+	_, err := e.backend.Push(ctx, gitbackend.PushOptions{
 		RepoPath: dir,
 		Remote:   RemoteTarget,
 		RefSpecs: refSpecs,
@@ -612,14 +774,23 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		Auth:     e.authConfig(ctx, repo, platform),
 	})
 	if err != nil {
-		return usedApproval, err
+		return usedApproval, approvalTargetRef, err
 	}
 
-	// 推送侧 prune:目标上源已删除的同名分支一并删掉(仅单分支任务,语义清晰)
-	if task.GitPushPrune && !multi {
-		return usedApproval, e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform)
+	// 推送侧 prune **只发生在"源端已删除该分支"的那条路径上**
+	// (见上面 sourceRef 不存在时的分支)。
+	//
+	// 原实现在这里**无条件**删目标分支 —— 也就是"推上去紧接着删掉",
+	// 任何勾了 git_push_prune 的单分支任务,每次同步结束目标侧该分支都没了,
+	// 而任务报 success。
+	if task.GitPushPrune && multi {
+		// 多分支的镜像删除需要列出目标侧全部分支再逐个比对,
+		// SDK 的 ListRemoteBranches 不带凭证(私有目标列不出来)⇒ 暂不实现。
+		// 明确告警,别让它看起来"生效了"。
+		slog.Warn("git_push_prune 对多分支任务暂未实现(本次不删目标侧任何分支)",
+			"sourcePattern", task.SourceBranch)
 	}
-	return usedApproval, nil
+	return usedApproval, approvalTargetRef, nil
 }
 
 // pushTags 把源端的 tag 推到目标端。

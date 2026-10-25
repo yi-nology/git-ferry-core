@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/pathx"
+	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 )
@@ -160,11 +162,18 @@ func (s *Service) RPOReport(rpoMaxSeconds int64) (*RPOReport, error) {
 		return nil, err
 	}
 	now := time.Now()
+	// 任务 key 的**权威来源是任务表**,不是文件名。
+	//
+	// 旧实现从文件名反推(按 "-" 切第一段)⇒ 任务 key 里带 "-" 时
+	// ("prod-eu" / "prod-us"、以及 UUID)反推出来的值要么对不上任何任务,
+	// 要么**两个任务被合成一条指标** —— 停更 3 天的任务被另一个
+	// 5 分钟前刚备份的任务"洗白",超标不报警。
+	known := s.knownTaskPrefixes()
 	byTask := map[string][]executor.BundleInfo{}
 	for _, b := range all {
 		key := b.TaskKey
 		if key == "" {
-			key = inferTaskFromBundle(b.Name)
+			key = resolveBundleTaskKey(b.Name, known)
 		}
 		byTask[key] = append(byTask[key], b)
 	}
@@ -223,6 +232,62 @@ func (s *Service) drillHistoryPath() string {
 	return filepath.Join(dir, "drill-history.jsonl")
 }
 
+
+// knownTaskPrefixes 返回"任务 key 文件名前缀 → 真实任务 key"的映射。
+//
+// 冷备文件名以 SanitizeFileToken(taskKey) + "-" 开头 ⇒ 用**最长前缀匹配**
+// 就能把文件映射回真实任务,不需要从文件名里"猜"。
+func (s *Service) knownTaskPrefixes() map[string]string {
+	out := map[string]string{}
+	if s == nil || s.tasks == nil {
+		// 没有任务服务(测试/精简装配)⇒ 退回"按文件名归组"。
+		return out
+	}
+	ctx := context.Background()
+	tasks, _, err := s.ListTasks(ctx, "", 0, dao.MaxPageSize)
+	if err != nil {
+		slog.Warn("RPO 报告:取任务列表失败,冷备将按文件名归组(可能不精确)", "error", err)
+		return out
+	}
+	for _, t := range tasks {
+		if t == nil || t.Key == "" {
+			continue
+		}
+		out[strutil.SanitizeFileToken(t.Key)+"-"] = t.Key
+	}
+	return out
+}
+
+// resolveBundleTaskKey 把冷备文件名映射回任务 key。
+//
+// 已知任务 ⇒ 最长前缀匹配(返回真实 key);
+// 未知任务(已删除/超出任务列表上限)⇒ 去掉扩展名与末尾时间戳,
+// **至少不把两个任务合成一条指标**(旧实现按 "-" 切第一段会)。
+func resolveBundleTaskKey(name string, known map[string]string) string {
+	best, bestKey := "", ""
+	for prefix, key := range known {
+		if strings.HasPrefix(name, prefix) && len(prefix) > len(best) {
+			best, bestKey = prefix, key
+		}
+	}
+	if bestKey != "" {
+		return bestKey
+	}
+	base := name
+	for _, suf := range []string{".bundle.enc", ".zip.enc", ".bundle", ".zip"} {
+		if strings.HasSuffix(base, suf) {
+			base = strings.TrimSuffix(base, suf)
+			break
+		}
+	}
+	// 末尾是 "-20060102-150405"(时间戳 15 字符 + 分隔符 = 16)⇒ 去掉
+	if len(base) > 16 && base[len(base)-16] == '-' {
+		base = base[:len(base)-16]
+	}
+	return base
+}
+
+// inferTaskFromBundle 已废弃:从文件名反推任务 key 不可靠(见 resolveBundleTaskKey)。
 func inferTaskFromBundle(name string) string {
 	base := strings.TrimSuffix(name, ".bundle")
 	parts := strings.Split(base, "-")
