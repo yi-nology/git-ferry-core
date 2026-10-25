@@ -449,6 +449,42 @@ func restoreMilestones(ctx context.Context, t restoreTarget, dir string, stat *R
 }
 
 // restoreIssues 回灌 issues；asPR=true 时读 pull_requests.json 并以 issue 形态落盘（标注来源）。
+
+// listExistingIssueTitles 拉取目标仓**全部** issue 的标题(去重用)。
+//
+// 必须翻页:只取第 1 页会让第 2 页以后的同名 issue 漏出去 ⇒ 重跑回灌产生重复。
+// 一侧失败时如实告警(调用方要能知道"去重表不完整")。
+func listExistingIssueTitles(ctx context.Context, im sdkprov.IssueManager, owner, repo string) (map[string]bool, []string) {
+	out := map[string]bool{}
+	var warns []string
+	const perPage = 100
+	page := 1
+	for {
+		items, _, err := im.ListIssues(ctx, sdkprov.ListIssuesOptions{
+			Owner: owner, Repo: repo, State: sdkprov.IssueState("all"),
+			Page: page, PerPage: perPage,
+		})
+		if err != nil {
+			warns = append(warns, "list target issues for dedup failed: "+err.Error())
+			return out, warns
+		}
+		for _, iss := range items {
+			if iss != nil {
+				out[iss.Title] = true
+			}
+		}
+		if len(items) < perPage {
+			return out, warns
+		}
+		page++
+		if page > 50 {
+			// 兜底:目标仓异常大时别无限翻页。
+			warns = append(warns, "list target issues for dedup stopped at 50 pages")
+			return out, warns
+		}
+	}
+}
+
 func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *RestoreKindStat, result *RestoreResult, asPR bool) {
 	kind := "issues"
 	if asPR {
@@ -459,14 +495,13 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 		result.Warnings = append(result.Warnings, "target does not support IssueManager")
 		return
 	}
-	existingTitles := map[string]bool{}
-	if cur, _, err := im.ListIssues(ctx, sdkprov.ListIssuesOptions{
-		Owner: t.owner, Repo: t.repo, State: sdkprov.IssueState("all"), PerPage: 100,
-	}); err == nil {
-		for _, iss := range cur {
-			existingTitles[iss.Title] = true
-		}
-	}
+	// 去重表必须**翻页拉全量**:
+	// 原来只取第 1 页(100 条)⇒ 目标仓 issue 超过 100 条后,
+	// 第二页以后的同名 issue 不在去重表里 ⇒ 灾备演练**重跑会重复创建**同名 issue
+	// (幂等性被破坏,DR 重演变脏数据);overwrite=false 也拦不住
+	// (同名检查根本没看到)。
+	existingTitles, dedupWarn := listExistingIssueTitles(ctx, im, t.owner, t.repo)
+	result.Warnings = append(result.Warnings, dedupWarn...)
 
 	if asPR {
 		var prs []*sdkprov.ChangeRequest

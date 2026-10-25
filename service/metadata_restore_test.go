@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -471,4 +472,39 @@ func TestRunRestore_OverwriteUnsupportedWarns(t *testing.T) {
 	}
 	assert.Contains(t, joined, "overwrite", "告警要说清是 overwrite 不支持该类型")
 	assert.Contains(t, joined, "milestones", "告警要点名具体类型")
+}
+
+// TestRunRestore_DedupSeesAllPages 去重表必须**翻页拉全量**。
+//
+// 回归背景(P1):去重只取第 1 页(100 条)⇒ 目标仓 issue 超过 100 条后,
+// 第二页以后的同名 issue 不在去重表里 ⇒ 灾备演练**重跑会重复创建**同名 issue
+// (幂等性被破坏,DR 重演变脏数据);overwrite=false 也拦不住(同名检查根本没看到)。
+func TestRunRestore_DedupSeesAllPages(t *testing.T) {
+	backupRoot := t.TempDir()
+	svc := newRestoreTestService(backupRoot)
+	snapDir := t.TempDir()
+	writeRestoreFixture(t, snapDir)
+	// 快照里只有一条 issue,标题与目标侧**第 2 页**的一条同名
+	require.NoError(t, os.WriteFile(filepath.Join(snapDir, "issues.json"),
+		[]byte(`[{"number":"120","title":"target-issue-120","state":"open","body":"b"}]`), 0o600))
+	snap, err := loadMetadataSnapshot(snapDir)
+	require.NoError(t, err)
+
+	// 目标侧:150 条 issue,第 120 条标题与快照同名(在第 2 页)
+	issues := make([]*sdkprov.Issue, 0, 150)
+	for i := 1; i <= 150; i++ {
+		issues = append(issues, &sdkprov.Issue{
+			Number: strconv.Itoa(i), Title: "target-issue-" + strconv.Itoa(i), State: "open",
+		})
+	}
+	prov := &fakeEngineProv{issues: issues}
+
+	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", Kinds: []string{"issues"}},
+		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
+
+	st := res.Stats["issues"]
+	require.NotNil(t, st)
+	assert.Equal(t, 0, st.Created, "同名 issue 已存在(第 2 页)⇒ 不得重复创建")
+	assert.Equal(t, 1, st.Skipped, "应识别为已存在并跳过")
+	assert.Empty(t, prov.createdIssues, "不得真的创建重复 issue")
 }

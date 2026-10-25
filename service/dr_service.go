@@ -100,6 +100,13 @@ func (s *Service) BuildBackupManifest() (*executor.BackupManifest, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 清单里的 task_key 用**任务表**解析(不从文件名猜):
+	// 旧实现按 "-" 切第一段 ⇒ key 带 "-" 时对不上任何任务,
+	// 清单的归属信息就是错的(merkle 根只算 name|size|sha,不受影响)。
+	known := s.knownTaskPrefixes()
+	for i := range m.Entries {
+		m.Entries[i].TaskKey = resolveBundleTaskKey(m.Entries[i].Name, known)
+	}
 	if _, err := executor.SaveManifest(m); err != nil {
 		return nil, err
 	}
