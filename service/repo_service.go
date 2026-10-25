@@ -192,7 +192,6 @@ func (rs *RepoService) GetRepoWithProvider(repoKey string) (*model.Repo, sdkprov
 // resolveRepoProvider 解析仓库对应的 provider:凭据一律取自关联平台;
 // 有关联平台记录时按平台配置构造(经 Manager 缓存),否则按 CloneURL 探测平台。
 func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, error) {
-	var token string
 	var platform *model.Platform
 	if repo.PlatformID > 0 && rs.platformDAO != nil {
 		var findErr error
@@ -200,14 +199,19 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 		if findErr != nil {
 			return nil, errors.Wrapf(findErr, "find platform %d for repo %s", repo.PlatformID, repo.Key)
 		}
-		if platform != nil {
-			token = platform.AccessToken
-		}
 	}
 	if platform != nil {
-		return rs.providerMgr.Get(providerConfig(platform, token, rs.hooks))
+		// **必须走 providerFromManager**:token 由 ResolvePlatformToken 解析
+		// (GitHub App installation token 优先,否则 PAT)。
+		//
+		// 以前这里直接 `providerMgr.Get(providerConfig(platform, platform.AccessToken, hooks))`
+		// —— 绕过了这一步 ⇒ **只配了 GitHub App(没有 PAT)的平台拿到空 token**
+		// ⇒ 仓库级 API 调用(webhook 注册 / webhook 事件处理)全部 401。
+		// 其余 provider 路径(platformProvider / ProviderForPlatform)都走
+		// ResolvePlatformToken,只有仓库这一条是例外。
+		return providerFromManager(rs.providerMgr, platform, "", rs.hooks)
 	}
-	return rs.providerMgr.GetByURL(repo.CloneURL, token)
+	return rs.providerMgr.GetByURL(repo.CloneURL, "")
 }
 
 // GetRepoByKey returns a repository by key.

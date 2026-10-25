@@ -54,8 +54,8 @@ func TestCreateRule(t *testing.T) {
 		BranchPattern: "main",
 		Action:        "sync",
 		TaskKeys:      []string{"task-1", "task-2"},
-		MinInterval:   60,
-		Enabled:       true,
+		MinInterval:   intPtr(60),
+		Enabled:       boolPtr(true),
 		Description:   "Test webhook rule",
 	}
 
@@ -104,7 +104,7 @@ func TestGetRule(t *testing.T) {
 		BranchPattern: "main",
 		Action:        "sync",
 		TaskKeys:      []string{"task-1"},
-		Enabled:       true,
+		Enabled:       boolPtr(true),
 	}
 
 	created, err := svc.CreateRule(context.TODO(), req)
@@ -136,7 +136,7 @@ func TestListRules(t *testing.T) {
 			EventType:     "push",
 			BranchPattern: "main",
 			Action:        "sync",
-			Enabled:       true,
+			Enabled:       boolPtr(true),
 		}
 		_, err := svc.CreateRule(context.TODO(), req)
 		if err != nil {
@@ -165,7 +165,7 @@ func TestUpdateRule(t *testing.T) {
 		BranchPattern: "main",
 		Action:        "sync",
 		TaskKeys:      []string{"task-1"},
-		Enabled:       true,
+		Enabled:       boolPtr(true),
 	}
 
 	created, err := svc.CreateRule(context.TODO(), req)
@@ -178,11 +178,11 @@ func TestUpdateRule(t *testing.T) {
 		ID:            created.ID,
 		Name:          "Updated Rule",
 		EventType:     "pull_request",
-		BranchPattern: "develop",
+		BranchPattern: strPtr("develop"),
 		Action:        "sync",
 		TaskKeys:      nil, // Don't change task keys
-		MinInterval:   120,
-		Enabled:       false,
+		MinInterval:   intPtr(120),
+		Enabled:       boolPtr(false),
 	}
 
 	updated, err := svc.UpdateRule(context.TODO(), updateReq)
@@ -235,7 +235,7 @@ func TestDeleteRule(t *testing.T) {
 		BranchPattern: "main",
 		Action:        "sync",
 		TaskKeys:      []string{"task-1"},
-		Enabled:       true,
+		Enabled:       boolPtr(true),
 	}
 
 	created, err := svc.CreateRule(context.TODO(), req)
@@ -372,3 +372,6 @@ func TestApplyRules_MarksEventProcessed(t *testing.T) {
 		t.Error("expected processed_at to be set")
 	}
 }
+
+// intPtr 取整型指针(请求里的可选数值字段)。
+func intPtr(i int) *int { return &i }

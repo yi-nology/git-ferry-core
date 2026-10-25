@@ -8,10 +8,33 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/oekit/concurrency/async"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 )
+
+// webhookEventID 决定入库用的事件 ID,以及是否需要按 ID 去重。
+//
+//   - 非空 ID ⇒ 原样使用并**需要去重**(平台投递 ID 是真幂等键:重投时值不变)。
+//   - 空 ID   ⇒ 合成一个唯一 ID 且**不去重**:拿空 ID 查重会把别的仓库的事件
+//     挡掉,拿空 ID 入库会撞唯一索引 ⇒ 第 2 条起的事件被静默丢弃。
+//
+// SDK 侧已保证事件 ID 非空,这里是数据完整性兜底(不依赖上游不变量)。
+func webhookEventID(raw string) (id string, needDedup bool) {
+	if s := strings.TrimSpace(raw); s != "" {
+		return s, true
+	}
+	return syntheticEventID(), false
+}
+
+// syntheticEventID 给"没有事件 ID"的平台合成一个唯一 ID。
+//
+// 只在没有可用去重键时使用(宁可重复处理,也不能丢事件);前缀 syn- 便于
+// 在库里一眼认出"这是合成 ID,不是平台投递 ID"。
+func syntheticEventID() string {
+	return "syn-" + uuid.NewString()
+}
 
 // isDuplicateKeyErr 判断错误是否为 DB 唯一约束冲突(MySQL 1062 / SQLite UNIQUE)。
 func isDuplicateKeyErr(err error) bool {
@@ -81,12 +104,24 @@ func (s *Service) ReceiveWebhook(ctx context.Context, repoKey string, payload *W
 		return fmt.Errorf("parse webhook event failed: %w", err)
 	}
 
-	existing, err := s.webhooks.FindEventByEventID(event.ID)
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		return nil
+	// 事件 ID 的处理:**绝不能用空 ID**。
+	//
+	// ① 去重键是 event_id(唯一索引)⇒ 空 ID 会与"第一条空 ID 事件"永久相撞
+	//    ⇒ 第 2 条起的事件被静默丢弃(不建事件、不匹配规则、不触发同步);
+	// ② 拿空 ID 去查重更糟:会把**别的仓库**的事件当成重复,直接挡掉。
+	//
+	// SDK 侧已保证事件 ID 非空(platform.WebhookEnvelope.NewEvent 用平台名兜底
+	// 前缀 + 优先用平台投递 ID),这里再兜一层:万一某个后端仍给出空 ID,
+	// 宁可重复处理也不丢事件。
+	eventID, needDedup := webhookEventID(event.ID)
+	if needDedup {
+		existing, err := s.webhooks.FindEventByEventID(eventID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			return nil
+		}
 	}
 
 	actorName := ""
@@ -95,7 +130,7 @@ func (s *Service) ReceiveWebhook(ctx context.Context, repoKey string, payload *W
 	}
 
 	whEvent := &model.WebhookEvent{
-		EventID:   event.ID,
+		EventID:   eventID,
 		RepoKey:   repoKey,
 		EventType: event.Type,
 		Source:    string(event.Source),
@@ -133,15 +168,22 @@ func (s *Service) applyRules(ctx context.Context, repoKey string, event *model.W
 	if _, err := s.webhooks.MarkEventProcessing(ctx, eventID); err != nil {
 		slog.Warn("mark event processing failed", "eventID", eventID, "error", err)
 	}
-	defer func() {
-		if err := s.webhooks.MarkEventProcessed(event); err != nil {
-			slog.Error("mark event processed failed", "eventID", eventID, "error", err)
-		}
-	}()
-
-	s.webhooks.ApplyRules(ctx, repoKey, event, &s.lastTriggerTime, func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error {
+	// **触发失败 ⇒ 事件落 failed 终态**(而不是 processed):
+	// 否则事件列表里与成功事件无法区分,运维看不出"这次没同步",
+	// 也没有可重试的对象。
+	if err := s.webhooks.ApplyRules(ctx, repoKey, event, &s.lastTriggerTime, func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error {
 		return s.RunTaskWithTrigger(ctx, taskKey, trigger, webhookEventID)
-	}, &eventID)
+	}, &eventID); err != nil {
+		slog.Error("webhook 触发失败,事件标记为 failed", "eventID", eventID, "error", err)
+		if mErr := s.webhooks.MarkEventFailed(event, err.Error()); mErr != nil {
+			slog.Error("mark event failed failed", "eventID", eventID, "error", mErr)
+		}
+		return
+	}
+
+	if err := s.webhooks.MarkEventProcessed(event); err != nil {
+		slog.Error("mark event processed failed", "eventID", eventID, "error", err)
+	}
 }
 
 func (s *Service) RetryEvent(ctx context.Context, eventID uint) error {

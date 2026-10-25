@@ -154,6 +154,45 @@ func TestEvaluateDimensions_ErrorFreeSignalSurfaced(t *testing.T) {
 		"error_free 缺失时不应报错误信息")
 }
 
+// TestEvaluateDimensions_DominantErrorSurfaced 钉住「最近失败主因」这条信号。
+//
+// 回归背景:`dominant_error`(最近若干次运行里出现最多的错误类型)**一直在采集,
+// 却没有任何消费方** ⇒ 运维看不到"最近失败主因"(是分歧?认证?网络?),
+// 排障只能逐条翻 run 记录。现在由 reliability 维度接管上报。
+//
+// 这条用例是**反向验证**:把 reliability 里那段 dominant_error 分支去掉,
+// 此用例变红。
+func TestEvaluateDimensions_DominantErrorSurfaced(t *testing.T) {
+	now := time.Now()
+	runs := []RunSnapshot{
+		{Status: "failed", ErrorMessage: "boom", ErrorType: "divergent", EndAt: now.Add(-1 * time.Hour)},
+		{Status: "failed", ErrorMessage: "boom", ErrorType: "divergent", EndAt: now.Add(-2 * time.Hour)},
+		{Status: "success", ErrorType: "", EndAt: now.Add(-3 * time.Hour)},
+	}
+	f := CollectRunFacts(runs, now)
+	require.Equal(t, "divergent", f["dominant_error"], "主导错误类型应是出现次数最多的那个")
+
+	res := EvaluateDimensions(nil, f)
+	var detail []string
+	for _, d := range res.Dimensions {
+		if d.Name == "reliability" {
+			detail = d.Detail
+		}
+	}
+	assert.Contains(t, detail, "最近失败主因: divergent",
+		"dominant_error 必须被 reliability 维度报出来(此前采集了没人用)")
+
+	// 没有失败 ⇒ 没有主导错误类型 ⇒ 不该出现该文案
+	clean := CollectRunFacts([]RunSnapshot{{Status: "success", EndAt: now.Add(-time.Hour)}}, now)
+	res2 := EvaluateDimensions(nil, clean)
+	for _, d := range res2.Dimensions {
+		if d.Name == "reliability" {
+			assert.NotContains(t, d.Detail, "最近失败主因",
+				"没有失败记录时不应报失败主因")
+		}
+	}
+}
+
 func TestDimensionWeightsSum(t *testing.T) {
 	total := 0
 	for _, s := range DefaultDimensions() {

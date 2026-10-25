@@ -86,6 +86,13 @@ func DefaultDimensions() []DimensionSpec {
 				if v, ok := f["error_free"]; ok && !truthy(v) {
 					detail = append(detail, "最近执行带有错误信息")
 				}
+				// dominant_error:最近若干次运行里的主导错误类型(出现次数最多的那个)。
+				// 这条 fact 一直在采集,却**没有任何消费方** ⇒ 运维看不到
+				// "最近失败主因"(是分歧?认证?网络?),排障只能逐条翻 run 记录。
+				// 由本维度接管上报(同样只报不改分)。
+				if dom := strings.TrimSpace(f["dominant_error"]); dom != "" {
+					detail = append(detail, "最近失败主因: "+dom)
+				}
 				score := rate
 				if !lastOK {
 					score = min(score, 40)

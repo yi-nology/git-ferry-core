@@ -48,6 +48,12 @@ func (d *WebhookEventDAO) UpdateStatus(id uint, status string, processedAt *time
 		Updates(map[string]interface{}{"status": status, "processed_at": processedAt}).Error
 }
 
+// UpdateStatusAndError 更新事件状态与失败原因(失败终态)。
+func (d *WebhookEventDAO) UpdateStatusAndError(id uint, status string, processedAt *time.Time, reason string) error {
+	return d.db.Model(&model.WebhookEvent{}).Where("id = ?", id).
+		Updates(map[string]interface{}{"status": status, "processed_at": processedAt, "error_message": reason}).Error
+}
+
 func (d *WebhookEventDAO) FindByID(id uint) (*model.WebhookEvent, error) {
 	return FindByID[model.WebhookEvent](d.db, id)
 }

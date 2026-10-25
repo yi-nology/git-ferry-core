@@ -138,28 +138,8 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		hist := histSlots[i]
 		runs := hist.Val
 		if hist.Err == nil && len(runs) > 0 {
-			snaps := make([]health.RunSnapshot, 0, len(runs))
-			for _, r := range runs {
-				end := time.Time{}
-				if r.EndTime != nil {
-					end = *r.EndTime
-				}
-				stepFails := 0
-				for si := range r.Steps {
-					if r.Steps[si].Status == "failed" {
-						stepFails++
-					}
-				}
-				snaps = append(snaps, health.RunSnapshot{
-					Status:       r.Status,
-					ErrorMessage: r.ErrorMessage,
-					EndAt:        end,
-					StepFails:    stepFails,
-					RetryTotal:   r.RetryTotal,
-					ErrorType:    r.ErrorType,
-				})
-			}
-			for k, v := range health.CollectRunFacts(snaps, now) {
+			// 快照映射是 health 包的唯一实现(core 与壳层 agent 工具共用)
+			for k, v := range health.CollectRunFacts(health.SnapshotsFromRuns(runs), now) {
 				facts[k] = v
 			}
 		} else {

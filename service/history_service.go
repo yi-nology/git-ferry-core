@@ -300,12 +300,16 @@ func toDTO(ch *model.HistoryChannel) *HistoryChannelDTO {
 }
 
 // toTargetDTO 把推送目标转成响应视图(不回显凭据)。
+//
+// 仓库地址也要脱敏:URL 里可能内嵌凭据(https://user:token@host/、
+// ?access_token=…) ⇒ 原样回显等于把凭据抄进 CLI 输出与 MCP/模型上下文。
+// (凭据本体走 CredType/Credential 字段,本来就只回 HasCredential。)
 func toTargetDTO(t *model.HistoryTarget) *HistoryTargetDTO {
 	return &HistoryTargetDTO{
 		ID:            t.ID,
 		ChannelID:     t.ChannelID,
 		Name:          t.Name,
-		RepoURL:       t.RepoURL,
+		RepoURL:       history.RedactRepoURL(t.RepoURL),
 		CredType:      t.CredType,
 		Username:      t.Username,
 		HasCredential: t.Credential != "",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,17 @@ func (ws *WebhookService) GetRule(ctx context.Context, id uint) (*model.WebhookR
 	return ws.ruleDAO.FindByID(id)
 }
 
+// 规则默认值。
+//
+// **默认值在 service 显式赋予,模型不再声明 gorm default**:
+// GORM 对带 default 标签的零值字段会用默认值替换 ⇒ 显式的
+// enabled=false / min_interval=0 被吞掉 ⇒ "先建一条禁用的规则、配好再启用"
+// 会变成"建出来就生效",规则立刻开始触发同步。
+const (
+	defaultRuleMinInterval = 60
+	defaultRuleEnabled     = true
+)
+
 // CreateRule creates a new webhook rule.
 func (ws *WebhookService) CreateRule(ctx context.Context, req *model.CreateRuleRequest) (*model.WebhookRule, error) {
 	rule := &model.WebhookRule{
@@ -46,9 +58,16 @@ func (ws *WebhookService) CreateRule(ctx context.Context, req *model.CreateRuleR
 		EventType:     req.EventType,
 		BranchPattern: req.BranchPattern,
 		Action:        req.Action,
-		MinInterval:   req.MinInterval,
-		Enabled:       req.Enabled,
+		MinInterval:   defaultRuleMinInterval,
+		Enabled:       defaultRuleEnabled,
 		Description:   req.Description,
+	}
+	// 显式值优先(指针非 nil):enabled=false / min_interval=0 都是有效意图。
+	if req.MinInterval != nil {
+		rule.MinInterval = *req.MinInterval
+	}
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
 	}
 	rule.SetTaskKeys(req.TaskKeys)
 
@@ -69,24 +88,34 @@ func (ws *WebhookService) UpdateRule(ctx context.Context, req *model.UpdateRuleR
 		return nil, ErrRuleNotFound
 	}
 
+	// **只改请求里带了字段**(指针/非空语义):
+	// 局部更新(只带 id+enabled,例如前端在列表里切换启用开关)以前会把
+	// branchPattern 清空 ⇒ 规则从"只跟 main"悄悄放宽成"任何分支都触发";
+	// 还把 enabled 写成 false ⇒ 规则被静默禁用 ⇒ 之后所有 webhook 都不再触发同步。
 	if req.Name != "" {
 		rule.Name = req.Name
 	}
 	if req.EventType != "" {
 		rule.EventType = req.EventType
 	}
-	rule.BranchPattern = req.BranchPattern
+	if req.BranchPattern != nil {
+		rule.BranchPattern = *req.BranchPattern
+	}
 	if req.Action != "" {
 		rule.Action = req.Action
 	}
 	if req.TaskKeys != nil {
 		rule.SetTaskKeys(req.TaskKeys)
 	}
-	if req.MinInterval > 0 {
-		rule.MinInterval = req.MinInterval
+	if req.MinInterval != nil {
+		rule.MinInterval = *req.MinInterval
 	}
-	rule.Enabled = req.Enabled
-	rule.Description = req.Description
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
+	}
+	if req.Description != nil {
+		rule.Description = *req.Description
+	}
 
 	if err := ws.ruleDAO.Update(rule); err != nil {
 		return nil, err
@@ -136,6 +165,22 @@ func (ws *WebhookService) MarkEventProcessed(event *model.WebhookEvent) error {
 	return nil
 }
 
+// MarkEventFailed 标记事件为 failed(触发同步失败时调用)。
+//
+// 事件必须有失败终态:否则"这次没同步"在事件列表里与成功事件无法区分,
+// 运维只能靠猜;而且没有失败对象可供重试。
+func (ws *WebhookService) MarkEventFailed(event *model.WebhookEvent, reason string) error {
+	now := time.Now()
+	event.ProcessedAt = &now
+	event.Status = model.StatusFailed
+	event.ErrorMessage = reason
+	if err := ws.eventDAO.UpdateStatusAndError(event.ID, model.StatusFailed, &now, reason); err != nil {
+		slog.Error("failed to update event status to failed", "eventID", event.ID, "error", err)
+		return err
+	}
+	return nil
+}
+
 // FindEventByEventID returns a webhook event by event ID (internal use).
 func (ws *WebhookService) FindEventByEventID(eventID string) (*model.WebhookEvent, error) {
 	return ws.eventDAO.FindByEventID(eventID)
@@ -147,15 +192,21 @@ func (ws *WebhookService) FindEventByID(id uint) (*model.WebhookEvent, error) {
 }
 
 // ApplyRules applies webhook rules to an event.
-func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event *model.WebhookEvent, lastTriggerTime *sync.Map, runTaskFn func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error, webhookEventID *uint) {
+//
+// **返回聚合错误**:触发同步失败时必须让调用方知道 ——
+// 以前失败只进日志,事件照样被标成 processed ⇒ 事件列表里与成功事件无法区分,
+// 也没有任何可观测信号说"这次没同步",更没有可自动重试的对象。
+func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event *model.WebhookEvent, lastTriggerTime *sync.Map, runTaskFn func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error, webhookEventID *uint) error {
 	rules, err := ws.ruleDAO.FindByRepoKey(repoKey)
 	if err != nil {
 		slog.Error("find rules failed", "repoKey", repoKey, "error", err)
-		return
+		return err
 	}
 
 	// 缓存已编译的 branch filter,避免同一 pattern 重复编译
 	filterCache := make(map[string]*branchfilter.BranchFilter)
+	// failures 收集触发失败(用于把事件标成 failed 而不是 processed)。
+	var failures []string
 	for _, rule := range rules {
 		if !rule.Enabled {
 			continue
@@ -197,10 +248,15 @@ func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event 
 				}
 				if err := runTaskFn(ctx, taskKey, model.TriggerWebhook, webhookEventID); err != nil {
 					slog.Error("run task failed", "taskKey", taskKey, "error", err)
+					failures = append(failures, fmt.Sprintf("触发任务 %s 失败:%v", taskKey, err))
 				}
 			}
 		}
 	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%d 个任务触发失败:%s", len(failures), strings.Join(failures, "; "))
+	}
+	return nil
 }
 
 // CreateWebhookEvent creates a new webhook event.

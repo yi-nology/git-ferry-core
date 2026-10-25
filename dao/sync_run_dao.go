@@ -21,10 +21,15 @@ func (d *SyncRunDAO) DB() *gorm.DB {
 	return d.db
 }
 
-// FindByTaskKey 列表查询,不加载 Steps(列表页不需要步骤详情,避免 N+1)。
+// FindByTaskKey 列表查询,**预加载 Steps**。
+//
+// 以前刻意不加载(注释写的是"避免 N+1")—— 但 GORM 的 Preload 是**一条**聚合查询
+// (`WHERE run_id IN (...)`),不是逐行查 ⇒ 本来就不存在 N+1。
+// 不加载的代价大得多:健康评分要的「步骤级失败」信号恒为 0(结构性失效),
+// 运维/AI 都看不到失败发生在哪一步。
 func (d *SyncRunDAO) FindByTaskKey(taskKey string, page Pagination) ([]*model.SyncRun, int64, error) {
 	var runs []*model.SyncRun
-	query := d.db.Where("task_key = ?", taskKey)
+	query := d.db.Preload("Steps").Where("task_key = ?", taskKey)
 	total, err := Paginate(query, page, &runs)
 	return runs, total, err
 }

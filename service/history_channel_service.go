@@ -414,13 +414,25 @@ func (h *HistoryService) CreateHistoryTarget(_ context.Context, channelID uint, 
 	if strings.TrimSpace(in.RepoURL) == "" {
 		return nil, fmt.Errorf("目标地址不能为空")
 	}
+	// 目标名在通道内必须唯一:推送时按名字定位目标/凭据,同名会让"推给谁"
+	// 变得不确定(历史上确实出现过凭据串号)。
+	name := strings.TrimSpace(in.Name)
+	existing, err := h.targets.FindByChannel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range existing {
+		if t.Name == name {
+			return nil, fmt.Errorf("通道 %d 已存在同名目标 %q:目标名必须唯一", channelID, name)
+		}
+	}
 	credType, credential, username, err := h.encryptCredential(in)
 	if err != nil {
 		return nil, err
 	}
 	t := &model.HistoryTarget{
 		ChannelID:  channelID,
-		Name:       strings.TrimSpace(in.Name),
+		Name:       name,
 		RepoURL:    strings.TrimSpace(in.RepoURL),
 		CredType:   credType,
 		Credential: credential,
@@ -442,7 +454,12 @@ func (h *HistoryService) UpdateHistoryTarget(_ context.Context, id uint, in Hist
 		t.Name = strings.TrimSpace(in.Name)
 	}
 	if in.RepoURL != "" {
-		t.RepoURL = strings.TrimSpace(in.RepoURL)
+		newURL := strings.TrimSpace(in.RepoURL)
+		// 客户端回传的是**脱敏后**的地址(响应里就是脱敏的)⇒ 视为"没改地址",
+		// 保留库里带凭据的原值;否则一次无关的更新就把凭据抹掉了。
+		if newURL != history.RedactRepoURL(t.RepoURL) {
+			t.RepoURL = newURL
+		}
 	}
 	if in.CredType != "" || in.Credential != "" {
 		credType, credential, username, err := h.encryptCredential(in)
@@ -998,13 +1015,16 @@ func (h *HistoryService) pushRun(ctx context.Context, run *model.HistoryRun, for
 		return nil, fmt.Errorf("通道 %d 没有配置推送目标", run.ChannelID)
 	}
 
-	auths := make(map[string]gitbackend.AuthConfig, len(targets))
+	// 凭据**按目标 ID 索引**,不按名字:同名目标(名字没有唯一约束)会让
+	// map 只留最后一个的凭据 ⇒ 先推的那个用错凭据 ⇒ 认证失败,而报错指向
+	// 凭据、看不出是"配置重复"。
+	auths := make(map[uint]gitbackend.AuthConfig, len(targets))
 	for _, t := range targets {
 		auth, err := h.targetAuth(t)
 		if err != nil {
 			return nil, err
 		}
-		auths[t.Name] = auth
+		auths[t.ID] = auth
 	}
 
 	// 逐个目标推送:用各自凭据。任一失败即中止,不推其余。
@@ -1066,7 +1086,7 @@ func (h *HistoryService) pushRun(ctx context.Context, run *model.HistoryRun, for
 			BackendType: h.svc.backendType(),
 			Targets:     []history.PushTarget{{Name: t.Name, URL: t.RepoURL}},
 			Branch:      branch,
-			Auth:        auths[t.Name],
+			Auth:        auths[t.ID],
 			Force:       true, // 分叉检查已在上面做过;通过后强推是安全的(幂等)。
 		})
 		if err != nil {
@@ -1126,23 +1146,10 @@ func (h *HistoryService) checkPushDivergence(ctx context.Context, run *model.His
 		return false, "远端没有分支 " + branch, nil
 	}
 	remoteHead := ref.Hash().String()
-	switch remoteHead {
-	case run.BaseHead:
-		return false, "远端与本地基线一致,推送是快进", nil
-	case run.Head:
-		return false, "远端已经是本次移植的结果(重复推送)", nil
-	}
-	// 远端领先(基线是远端的祖先)→ 强推会把远端的提交丢掉。
-	if isAncestorCommit(repo, run.BaseHead, remoteHead) {
-		return true, fmt.Sprintf("远端 HEAD %s 领先于本地基线 %s",
-			shortHash(remoteHead), shortHash(run.BaseHead)), nil
-	}
-	// 远端落后(远端是基线的祖先)→ 推送只是把远端往前推,不丢东西。
-	if isAncestorCommit(repo, remoteHead, run.BaseHead) {
-		return false, "远端落后于本地基线,推送会把它往前推", nil
-	}
-	// 历史无关 → 推送会替换远端的整段历史,必须显式确认。
-	return true, fmt.Sprintf("远端 HEAD %s 与本地基线 %s 历史无关", shortHash(remoteHead), shortHash(run.BaseHead)), nil
+	// 判定与预检共用同一份(classifyRemote):口径相反会让预检把"远端落后"
+	// "重复发布"报成"已分叉需强推",并把一次本可安全完成的同步卡住。
+	rel, note := classifyRemote(repo, remoteHead, run.BaseHead, run.Head)
+	return needForceForRelation(rel), note, nil
 }
 
 // ===== 执行记录与回滚 =====
@@ -1494,7 +1501,16 @@ func (h *HistoryService) resolveRepoDir(ctx context.Context, ch *model.HistoryCh
 	auth := h.repoAuth(repo)
 	if _, err := h.backend.Fetch(ctx, gitbackend.FetchOptions{
 		RepoPath: dir, Remote: "origin", Tags: true, Auth: auth,
-	}); err != nil {
+	}); err == nil {
+		// **拉取之后必须把本地分支快进到远端**:fetch 只更新
+		// refs/remotes/origin/*,不动本地 refs/heads/* ⇒ 不快进的话本地分支
+		// 永远停在首次克隆时 ⇒ 差异计算与基线判定都用陈旧基线 ⇒ 第二次起的
+		// 发布一律被判"远端已分叉"拦下(只能强推,强推又会丢掉远端的提交)。
+		if ffErr := fastForwardMirrorBranches(dir, "origin"); ffErr != nil {
+			// 快进失败不致命:推送闸门会按实际远端状态判定(分叉时报错而不是放行)。
+			slog.Warn("history: 快进镜像分支失败(基线可能陈旧)", "dir", dir, "error", ffErr)
+		}
+	} else {
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
 			return "", rmErr
 		}

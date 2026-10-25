@@ -365,18 +365,12 @@ func (h *HistoryService) checkTargetImpact(ctx context.Context, workRepoPath, ba
 	}
 	imp.RemoteHead = ref.Hash().String()
 
-	switch {
-	case imp.RemoteHead == baseHead:
-		imp.FastForward = true
-		imp.Note = "远端与本地基线一致,推送是快进"
-	case isAncestorCommit(repo, baseHead, imp.RemoteHead):
-		// 远端领先:本地基线是远端的祖先 → 推送会覆盖远端的新提交。
-		imp.Diverged = true
-		imp.Note = "远端已领先于本地基线,直接推送会覆盖远端的新提交,需重新计划或强推"
-	default:
-		imp.Diverged = true
-		imp.Note = "远端与本地基线已分叉,推送需要强推"
-	}
+	// 判定与推送闸门共用同一份(classifyRemote)。
+	// 以前这里只认"远端领先"与"其它"两种,把**远端落后**(推送闸门明确放行)
+	// 与**重复发布**都报成"已分叉需强推" ⇒ 报告与事实相反,且 NeedsForce
+	// 会把一次本可安全完成的同步卡住。
+	rel, note := classifyRemote(repo, imp.RemoteHead, baseHead, newHead)
+	applyRemoteRelation(&imp, rel, note)
 	return imp, nil
 }
 
