@@ -2,6 +2,58 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.25.0] - 2026-10-25
+
+### Removed（**破坏性**）
+
+上一版删的是"已失效的死兼容"，这一版删的是**仍在生效**的三处旧版本兼容。
+删除前同样先核过现网数据，三处对现网均为**零行为变化**。
+
+- **per-repo `AccessToken`**（`model/repo.go` / `model/requests.go` /
+  `dao/repo_dao.go` 三处加解密 / `executor/auth.go` 的 `BuildRepoAuth` /
+  `service/repo_service.go` 的 `resolveRepoProvider` /
+  `service/metadata_{service,restore}.go` / `service/orgbulk_service.go`）。
+  凭据口径**只留平台一处**。现状：现网 300+ 仓库的 `access_token` **全为空**，
+  4 个平台 token **均为密文** ⇒ 行为不变。
+- **`KeepDivergent` 布尔字段**（`model/sync_task.go` 三处结构体 /
+  `service/task_service.go` 建改映射 / `service/lifecycle_service.go` 兼容映射 /
+  `service/health_service.go` 与 `health/dimension.go` 评分事实 /
+  `executor/executor.go` 并行解析）。
+  它是 `ForcePushPolicy` 的**旧拼写**（`ForcePushAllow` 注释原文即
+  "原 keep_divergent=false 行为"；`backup_on_demand` 在布尔里无法表达）。
+  两套并存 ⇒ 调用方各选一个、可能各说各话：前端一度**按 `keep_divergent`
+  展示策略**，与实际生效的 `force_push_policy` 不一致。
+  策略解析现在**只有一份实现** `model.ResolveForcePushPolicy`：
+  空值 ⇒ `block`（最安全），非法值同样按 `block`（不静默放行）。
+  现状：现网 9 个任务的 `keep_divergent` **全为 1**（等价 block）且
+  `force_push_policy` 为空 ⇒ 行为不变。
+- **legacy `BackupS3` 配置**（`model/config.go` 的 `SyncConfig.BackupS3` /
+  `executor/bundle.go` 扇出分支）：已被 `BackupDestinations` 完全取代。
+  现状：现网配置**无 `backup_s3` 段** ⇒ 零影响。
+
+### Changed
+
+- **策略解析下沉到 `model`**（新增 `model/force_push_policy.go`）：
+  `service` 与 `executor` 此前各有一份平行实现（`service` import `executor`，
+  `executor` 不能再反向依赖 ⇒ 权威实现必须落在两者共同的下游）。
+  `service.ResolveForcePushPolicy` / `ValidForcePushPolicy` 改为别名转发，
+  对外 API 不变。
+- **分歧保护错误文案**：`enable keep_divergent=false to force overwrite`
+  → `set force_push_policy=allow to force overwrite`。
+
+### Tests
+
+- 新增行为钉 `TestPush_MultiBranch_EmptyPolicy_TreatedAsBlock`：
+  空策略必须按 `block` 拦下，目标侧独有提交不得被覆盖
+  （若有人再引入"空策略 ⇒ allow"的旁路，此用例会变红）。
+- 清理三条只测已删兼容行为的用例，并同步修正引用已删字段的断言与文案。
+
+### 数据库
+
+`sync_tasks.keep_divergent` 与 `repos.access_token` 两个**历史列保留未删**
+（GORM AutoMigrate 不删列）—— 已无任何代码读取，属惰性残留；
+保留是为了回滚到 v0.24.0 时不因缺列而启动失败。全新部署不会建这两列。
+
 ## [v0.24.0] - 2026-10-25
 
 ### Removed（**破坏性**）
