@@ -2,6 +2,59 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.22.0] - 2026-10-25
+
+### Fixed
+
+**上一轮改动的自查复查**（逐提交比对 + 真实 git 仓复现）发现我自己的改动里有一个 P0、
+三个 P1，另有此前清单里剩下的九条，一并修完：
+
+- **P0 多分支路径的 fail-closed 是死代码**（`executor/advanced.go`、`executor/executor.go`）：
+  多分支调 `fetchTargetForDivergence(nil)`，而"目标端是否已知存在"用的是**同一个参数**
+  ⇒ nil ⇒ 恒 false ⇒ fetch 失败被当成"目标端没有这些分支"放行；紧接着逐分支判定里
+  `RevParse("refs/remotes/target/<b>")` 在**新 workdir 上也必然失败** ⇒ 同样放行
+  ⇒ **目标侧独有提交被静默覆盖**（本轮声称堵死的通道）。
+  修法：①「要 fetch 的分支」与「本次要推的分支」分开；② 目标端状态**已知/未知**分开传；
+  ③「本地查不到目标 ref」只有在状态已知时才等于「目标端没这个分支」，否则是「状态未知」
+  ⇒ fail-closed。
+- **P1 多分支 allow 策略回归**：策略归一只在单分支入口做 ⇒ 多分支下 "allow" 落到
+  `behind>0` 分支 ⇒ 显式允许覆盖的任务反而被拒（错误文案还建议 "enable
+  keep_divergent=false"，而用户已经显式设了）。修法：策略归一与 `!force` 早退下沉到
+  `checkDivergenceForBranch` 内部。
+- **P1 多分支的人工放行永远不被消费**：判定按**具体分支**记，消费点用
+  `task.TargetBranch`（多分支里是 glob）⇒ DAO 匹配不到任何行 ⇒ `found=false` 且不报错
+  ⇒ `approved` 一直挂着 ⇒「一次性放行」退化成常驻后门。修法：`push()` 把「这次放行对应的
+  分支」带回，消费时用它。
+- **P2 多分支在 force=false 时也做判定**：多一次目标端全量 fetch，还会往审批队列塞待批
+  记录（任务根本没在强推）。修法：`!force` 早退下沉（同上）。
+- **增量 `since` 漏老条目**：平台 issue 列表默认按 created 倒序 ⇒「上次备份后被改动的
+  **老** issue」正好被挤在第一页之外。修法：SDK 加 `ListIssuesOptions.Sort`/`Direction`
+  （GitHub 透传 `sort=updated`）；核心的增量模式请求 updated 排序 + 扫描上限放大 10 倍 +
+  扫完仍没覆盖到列表末尾时如实告警「可能还有未扫到的更新」。
+- **PR 剔除没修掉「预算被 PR 吃掉」**：剔除发生在采集**之后** ⇒ PR 仍占着 500 的额度
+  ⇒ 真实 issue 依旧整批落在预算外。修法：在采集回调里直接跳过 PR（不占额度）并继续翻页。
+- **manifest 写失败仍返回成功**：manifest.json 是回灌定位快照的唯一依据 ⇒ 写失败却 success
+  ＝「备份成功但对灾备不可用」。修法：任一分片/manifest 写失败 ⇒ 返回错误。
+- **DR 演练不解密**：配了加密后，真正发到异地的密文件**无法演练**。修法：复用
+  `DecryptToTemp`；演练报告写不进哈希链也要报错。
+- **core 的 VerifyBundle/RestoreBundle 不校验文件名**：core 是给多个壳用的库，不能假设
+  每个壳都校验过 ⇒ 名字里带 `../` 就能把路径拼到备份目录之外（纵深防御）。
+- **SampleMetadataVerify 无快照时返回 ok=true**：一个都没抽到却报「通过」。
+- **UpdateTask 无法清空 `force_push_policy`/`include_branches`/`exclude_ref_patterns`**：
+  普通 string ⇒ 空串与「没传」不可区分 ⇒ 一旦设过就再也改不回去。修法：指针化（与 Cron 同款）。
+- **回灌历史目录不在保留策略清理范围** ⇒ 无限增长。修法：按同一保留期清理。
+- **RevParse 失败被忽略**：targetSHA 为空 ＝「未绑定」⇒ 旧审批能被用到任意目标状态。
+  修法：算不出来就不放行。
+- **wiki 的 non-fast-forward 关键词误判**：裸 `"rejected"` 会命中受保护分支拒收 ⇒
+  把「平台策略拒收」说成「目标有独有提交」，并引导去开 `git_force`（对受保护分支无用）。
+- **rotateBundles 静默吞掉删除失败** ⇒ 「轮转在生效」是假的；未配置 `backup_keep` 时
+  明确记「不轮转」。
+- **漂移检测的专用仓库不自愈**：被超时杀掉的 clone 会残留 `.git` ⇒ 下次认定「已存在」
+  ⇒ 该任务的漂移检测**被永久打瞎**（报告里看着像「没问题」）。修法：做可用性校验、
+  坏了就重建；glob 任务不再拿 glob 当 refspec（必然失败）。
+- **契约门禁的路由源写死两个文件**：新增第三个注册文件时，那个文件里的接口
+  **两个方向都测不到** ⇒ 门禁静默失去覆盖。修法：改成 glob。
+
 ## [v0.21.0] - 2026-10-25
 
 ### Fixed
