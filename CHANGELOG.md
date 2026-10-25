@@ -2,6 +2,78 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.27.0] - 2026-10-25
+
+### Fixed
+
+**P0**
+
+- **入站 webhook 第 2 条起被静默丢弃**（配合 SDK v0.99.3）：GitHub / GitCode 的
+  envelope 没有 `IDPrefix` ⇒ 事件 ID 恒为 `""` ⇒ 按 `event_id` 唯一索引 + 去重时，
+  第一条空 ID 事件入库后**后续所有事件**都被它挡掉（不建事件、不匹配规则、
+  不触发同步）⇒ GitHub 上配了入站同步，第一条之后就完全失效。
+  core 侧兜底：空 ID **绝不**拿去查重（会把别的仓库的事件挡掉）也**绝不**入库
+  （撞唯一索引）⇒ 合成唯一 ID 放行（宁可重复处理也不丢事件）。
+- **历史同步的目标树基线永不前进**：`gitbackend.Fetch` 只更新
+  `refs/remotes/origin/*`，不动本地 `refs/heads/*` ⇒ 本地分支永远停在首次克隆时
+  ⇒ ① 已发布的文件每次仍判「需移植」；② **第二次起的发布一律被判「远端已分叉」
+  拦下**（只能强推，而强推会丢掉远端上的人工提交），报错还让操作者「先更新目标仓」
+  —— 而系统自己的「拉取最新」恰恰不做这件事。
+  修法：拉取后把本地分支**快进**到远端跟踪分支（只快进；分叉时不动，交给推送
+  闸门报告）。
+
+**P1**
+
+- **预检与推送闸门的分叉判定口径相反**（报告与事实相反）：预检只认「远端领先」
+  与「其它」两种 ⇒ **远端落后**（推送闸门明确放行）被报成「已分叉、需强推」，
+  **重复发布**也被报成需强推 ⇒ `NeedsForce` 把一次本可安全完成的同步**卡住**，
+  还把操作者引向不需要的强推。⇒ 抽出唯一判定 `classifyRemote`，两处共用。
+- **建规则时显式的 `enabled=false` / `min_interval=0` 被吞掉**：模型上的
+  `gorm:"default:true"` / `default:60` 会让 GORM 把**零值字段**替换成默认值
+  ⇒ 「先建一条禁用的规则、配好再启用」建出来就生效，立刻开始触发同步。
+  修法：默认值改由 service 显式赋予，模型不再声明 default；请求字段改指针。
+- **局部更新静默改规则**：`UpdateRule` 无条件回写 enabled / branchPattern /
+  description ⇒ 前端在列表里切换启用开关时提交的是 `{id, enabled}`
+  ⇒ **分支模式被清空**（规则从「只跟 main」悄悄放宽成「任何分支都触发」）、
+  描述被清空、enabled 被写成 false。修法：改指针，nil = 不修改。
+- **触发失败的事件仍标 processed**：失败只进日志 ⇒ 事件列表里与成功事件无法
+  区分，没有「这次没同步」的可观测信号，也没有可重试的对象。
+  修法：`ApplyRules` 返回聚合错误，失败落 **failed 终态** + `error_message`。
+
+**P2**
+
+- **推送目标的地址回显凭据**：URL 里可能内嵌凭据（`https://user:token@host/`、
+  `?access_token=`）⇒ CRUD 响应原样回显 ⇒ 凭据被抄进 CLI 输出与 MCP/模型上下文。
+  修法：响应统一走 `RedactRepoURL`；更新时若回传值等于脱敏值则保留库里的原值
+  （否则一次无关的更新就把凭据抹掉了）。
+- **同名目标的凭据串号**：凭据按**目标名**索引，而名字没有唯一约束 ⇒ 同名目标
+  只留最后一个的凭据 ⇒ 先推的那个用错凭据，报错却指向凭据、看不出是配置重复。
+  修法：按目标 ID 索引 + 同一通道内目标名必须唯一。
+- **演练链检不出尾部截断与坏行**：链只证明「前后接得上」⇒ 删掉最后一条后剩下的
+  前缀仍是合法链（校验报通过）；解析失败的行被当噪声跳过 ⇒ 被篡改的记录完全不可见。
+  修法：坏行计入 broken + 加**链尾锚点**（与历史同步链的 `LastEntryHash` 同构）。
+
+**顺带修掉的**
+
+- **只配 GitHub App（无 PAT）的平台，仓库级 provider 拿到空 token**：
+  `resolveRepoProvider` 绕过 `providerFromManager` 直接用 `platform.AccessToken`
+  ⇒ webhook 注册 / webhook 事件处理全部 401。其它 provider 路径都走
+  `ResolvePlatformToken`（GitHub App 感知）⇒ 只有仓库这一条是例外。
+- **`dominant_error` 采集了没人消费**：「最近失败主因」这条信号一直在采集却无任何
+  消费方 ⇒ 运维看不到失败主因（是分歧？认证？网络？）。⇒ 由 reliability 维度接管上报。
+- **健康评分口径漂移**：运行记录列表查询不加载 Steps ⇒ `step_fail_count` **恒为 0**
+  ⇒ 「步骤级失败」结构性失效；壳层 AI 工具又另写一份事实采集，漏了
+  `StepFails`/`RetryTotal`/`ErrorType` ⇒ **同一个任务，AI 看到的健康分比 API 给
+  运维看的乐观**。⇒ 列表查询预加载 Steps（GORM Preload 是一条聚合查询，本来就
+  不是 N+1）+ 快照映射收敛为 `health.SnapshotsFromRuns` 唯一实现。
+
+### Changed
+
+- **webhook 规则的请求字段改指针**（**破坏性**）：`CreateRuleRequest.MinInterval` /
+  `Enabled`、`UpdateRuleRequest.MinInterval` / `Enabled` / `BranchPattern` /
+  `Description` 由值类型改为指针 —— nil = 不修改/用默认值，显式零值 = 调用方的
+  明确意图。
+
 ## [v0.26.1] - 2026-10-25
 
 ### Changed
