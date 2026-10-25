@@ -114,16 +114,14 @@ func newMockService() *mockService {
 		tasks: make([]*model.SyncTask, 0),
 		repos: map[string]*model.Repo{
 			"source-repo": {
-				Key:         "source-repo",
-				Name:        "Source Repo",
-				CloneURL:    "https://github.com/source/repo.git",
-				AccessToken: "source-token",
+				Key:      "source-repo",
+				Name:     "Source Repo",
+				CloneURL: "https://github.com/source/repo.git",
 			},
 			"target-repo": {
-				Key:         "target-repo",
-				Name:        "Target Repo",
-				CloneURL:    "https://github.com/target/repo.git",
-				AccessToken: "target-token",
+				Key:      "target-repo",
+				Name:     "Target Repo",
+				CloneURL: "https://github.com/target/repo.git",
 			},
 		},
 		tempDir: "/tmp/git-sync-test",
@@ -241,21 +239,6 @@ func TestExecute_CreateRunError(t *testing.T) {
 	ctx := context.Background()
 	_, err = exec.Execute(ctx, task, "manual", nil)
 	require.Error(t, err, "expected error when run creation fails")
-}
-
-func TestAuthConfig_WithToken(t *testing.T) {
-	svc := newMockService()
-	exec, err := NewExecutor(svc)
-	require.NoError(t, err, "NewExecutor failed")
-
-	repo := &model.Repo{
-		AccessToken: "test-token",
-	}
-
-	config := exec.authConfig(context.Background(), repo, nil)
-	assert.Equal(t, gitbackend.AuthHTTPBasic, config.Type, "expected HTTP Basic auth")
-	assert.Equal(t, "test-token", config.Password, "expected password 'test-token'")
-	assert.NotEmpty(t, config.Username, "expected non-empty placeholder username for HTTP Basic")
 }
 
 func TestAuthConfig_WithoutToken(t *testing.T) {
@@ -451,28 +434,12 @@ func TestAuthConfig_WithPlatform(t *testing.T) {
 	require.NoError(t, err, "NewExecutor failed")
 
 	repo := &model.Repo{
-		AccessToken: "",
-		PlatformID:  1,
+		PlatformID: 1,
 	}
 
 	config := exec.authConfig(context.Background(), repo, nil)
 	// mockService returns a platform with AccessToken="test-token"
 	assert.Equal(t, "test-token", config.Password, "expected platform token as password")
-}
-
-func TestAuthConfig_RepoTokenOverridesPlatform(t *testing.T) {
-	svc := newMockService()
-	exec, err := NewExecutor(svc)
-	require.NoError(t, err, "NewExecutor failed")
-
-	repo := &model.Repo{
-		AccessToken: "repo-specific-token",
-		PlatformID:  1,
-	}
-
-	config := exec.authConfig(context.Background(), repo, nil)
-	// Repo token should take precedence
-	assert.Equal(t, "repo-specific-token", config.Password, "expected repo token as password")
 }
 
 func TestAuthConfig_NoPlatformID(t *testing.T) {
@@ -481,8 +448,7 @@ func TestAuthConfig_NoPlatformID(t *testing.T) {
 	require.NoError(t, err, "NewExecutor failed")
 
 	repo := &model.Repo{
-		AccessToken: "",
-		PlatformID:  0,
+		PlatformID: 0,
 	}
 
 	config := exec.authConfig(context.Background(), repo, nil)

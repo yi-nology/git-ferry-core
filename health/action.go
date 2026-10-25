@@ -111,7 +111,7 @@ func RouteActions(brief TaskBrief, dims []Dimension) []Action {
 			}
 			out = append(out, Action{
 				Kind: "manual", Dimension: d.Name, Priority: 2,
-				Title:   "复核 force_push_policy / keep_divergent",
+				Title:   "复核 force_push_policy",
 				Command: fmt.Sprintf("gitferry task +info --key %s --format json", key),
 				Reason:  d.Reason,
 			})

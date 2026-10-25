@@ -60,7 +60,7 @@ func TestDivergentError_Classify(t *testing.T) {
 	err := &divergentError{Branch: "main", Extra: []string{"abc fix"}}
 	assert.True(t, isDivergent(err))
 	assert.Equal(t, model.ErrorDivergent, ClassifyError(err))
-	assert.Contains(t, err.Error(), "keep_divergent")
+	assert.Contains(t, err.Error(), "force_push_policy=allow")
 }
 
 func TestClassifyError_Conflict(t *testing.T) {

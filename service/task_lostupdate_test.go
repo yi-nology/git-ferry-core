@@ -21,11 +21,10 @@ import (
 func TestUpdateTaskLastRun_DoesNotRevertConcurrentChanges(t *testing.T) {
 	svc, db := setupCronTestService(t)
 
-	keep := true
 	created, err := svc.tasks.CreateTask(t.Context(), &model.CreateTaskRequest{
 		Name: "lost-update", SourceRepoKey: "src/repo", TargetRepoKey: "dst/repo",
 		SourceBranch: "main", TargetBranch: "main", SyncMode: "single",
-		KeepDivergent: &keep, ForcePushPolicy: "block",
+		ForcePushPolicy: "block",
 	})
 	require.NoError(t, err)
 
@@ -111,14 +110,12 @@ func TestUpdateTask_CronCanBeCleared(t *testing.T) {
 func TestUpdateTask_CanClearFields(t *testing.T) {
 	svc, _ := setupCronTestService(t)
 
-	keep := true
 	policy := "block"
 	include := "release/*"
 	exclude := "refs/pull/*"
 	created, err := svc.tasks.CreateTask(t.Context(), &model.CreateTaskRequest{
 		Name: "clear-fields", SourceRepoKey: "src/repo", TargetRepoKey: "dst/repo",
 		SourceBranch: "main", TargetBranch: "main", SyncMode: "single",
-		KeepDivergent:      &keep,
 		ForcePushPolicy:    policy,
 		IncludeBranches:    include,
 		ExcludeRefPatterns: exclude,

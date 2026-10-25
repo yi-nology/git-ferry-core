@@ -76,29 +76,23 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		return nil, err
 	}
 	task := &model.SyncTask{
-		Key:           uuid.New().String(),
-		Name:          req.Name,
-		SourceRepoKey: req.SourceRepoKey,
-		SourceBranch:  req.SourceBranch,
-		TargetRepoKey: req.TargetRepoKey,
-		TargetBranch:  req.TargetBranch,
-		SyncMode:      req.SyncMode,
-		Cron:          req.Cron,
-		WebhookToken:  uuid.New().String(),
-		Enabled:       true,
-		GitTags:       req.GitTags,
-		GitForce:      req.GitForce,
-		GitLFS:        req.GitLFS,
-		SyncWiki:      req.SyncWiki,
-		GitBundle:     req.GitBundle,
-		Submodules:    req.Submodules,
-		GitPushPrune:  req.GitPushPrune,
-		KeepDivergent: func() bool {
-			if req.KeepDivergent == nil {
-				return true // 默认保护分歧
-			}
-			return *req.KeepDivergent
-		}(),
+		Key:                uuid.New().String(),
+		Name:               req.Name,
+		SourceRepoKey:      req.SourceRepoKey,
+		SourceBranch:       req.SourceBranch,
+		TargetRepoKey:      req.TargetRepoKey,
+		TargetBranch:       req.TargetBranch,
+		SyncMode:           req.SyncMode,
+		Cron:               req.Cron,
+		WebhookToken:       uuid.New().String(),
+		Enabled:            true,
+		GitTags:            req.GitTags,
+		GitForce:           req.GitForce,
+		GitLFS:             req.GitLFS,
+		SyncWiki:           req.SyncWiki,
+		GitBundle:          req.GitBundle,
+		Submodules:         req.Submodules,
+		GitPushPrune:       req.GitPushPrune,
 		ForcePushPolicy:    req.ForcePushPolicy,
 		IncludeBranches:    req.IncludeBranches,
 		ExcludeRefPatterns: req.ExcludeRefPatterns,
@@ -167,9 +161,6 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 	}
 	if req.GitPushPrune != nil {
 		task.GitPushPrune = *req.GitPushPrune
-	}
-	if req.KeepDivergent != nil {
-		task.KeepDivergent = *req.KeepDivergent
 	}
 	if req.ForcePushPolicy != nil {
 		task.ForcePushPolicy = *req.ForcePushPolicy

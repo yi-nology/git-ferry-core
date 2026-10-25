@@ -54,13 +54,12 @@ func setupTestService(t *testing.T) (*Service, *gorm.DB) {
 }
 
 func TestCreateRepo_ValidGitHubURL(t *testing.T) {
-	svc, db := setupTestService(t)
+	svc, _ := setupTestService(t)
 	ctx := context.Background()
 
 	req := &model.CreateRepoRequest{
-		Name:        "test-repo",
-		RemoteURL:   "https://github.com/owner/repo.git",
-		AccessToken: "ghp_testtoken123",
+		Name:      "test-repo",
+		RemoteURL: "https://github.com/owner/repo.git",
 	}
 
 	repo, err := svc.CreateRepo(ctx, req)
@@ -87,12 +86,6 @@ func TestCreateRepo_ValidGitHubURL(t *testing.T) {
 		t.Error("expected non-empty key")
 	}
 
-	// Verify the token is encrypted in the database
-	var stored model.Repo
-	db.Where("`key` = ?", repo.Key).First(&stored)
-	if stored.AccessToken == "ghp_testtoken123" {
-		t.Error("access token should be encrypted in database")
-	}
 }
 
 func TestCreateRepo_ValidGitLabURL(t *testing.T) {
@@ -100,9 +93,8 @@ func TestCreateRepo_ValidGitLabURL(t *testing.T) {
 	ctx := context.Background()
 
 	req := &model.CreateRepoRequest{
-		Name:        "gitlab-repo",
-		RemoteURL:   "https://gitlab.com/group/project.git",
-		AccessToken: "glpat-testtoken",
+		Name:      "gitlab-repo",
+		RemoteURL: "https://gitlab.com/group/project.git",
 	}
 
 	repo, err := svc.CreateRepo(ctx, req)
@@ -120,9 +112,8 @@ func TestCreateRepo_UnsupportedPlatform(t *testing.T) {
 	ctx := context.Background()
 
 	req := &model.CreateRepoRequest{
-		Name:        "unsupported-repo",
-		RemoteURL:   "https://unknown-host.example.com/owner/repo.git",
-		AccessToken: "some-token",
+		Name:      "unsupported-repo",
+		RemoteURL: "https://unknown-host.example.com/owner/repo.git",
 	}
 
 	_, err := svc.CreateRepo(ctx, req)
@@ -140,9 +131,8 @@ func TestCreateRepo_InvalidURL(t *testing.T) {
 	ctx := context.Background()
 
 	req := &model.CreateRepoRequest{
-		Name:        "invalid-repo",
-		RemoteURL:   "not-a-valid-url",
-		AccessToken: "some-token",
+		Name:      "invalid-repo",
+		RemoteURL: "not-a-valid-url",
 	}
 
 	_, err := svc.CreateRepo(ctx, req)
@@ -158,9 +148,8 @@ func TestCreateRepo_NestedGroupPath(t *testing.T) {
 	// DetectPlatform 对已知平台会拆 (owner, rest);这里主要防手工 URL 解析回退
 	// 再次把嵌套群组截成两段。
 	req := &model.CreateRepoRequest{
-		Name:        "nested",
-		RemoteURL:   "https://gitlab.com/obs/sdk/server.git",
-		AccessToken: "glpat-x",
+		Name:      "nested",
+		RemoteURL: "https://gitlab.com/obs/sdk/server.git",
 	}
 
 	repo, err := svc.CreateRepo(ctx, req)
@@ -182,9 +171,8 @@ func TestCreateRepo_SSHURL(t *testing.T) {
 	ctx := context.Background()
 
 	req := &model.CreateRepoRequest{
-		Name:        "ssh-repo",
-		RemoteURL:   "git@github.com:owner/repo.git",
-		AccessToken: "ghp_testtoken",
+		Name:      "ssh-repo",
+		RemoteURL: "git@github.com:owner/repo.git",
 	}
 
 	repo, err := svc.CreateRepo(ctx, req)
@@ -200,45 +188,6 @@ func TestCreateRepo_SSHURL(t *testing.T) {
 	}
 	if repo.PlatformRepo != "repo" {
 		t.Errorf("expected repo 'repo', got %q", repo.PlatformRepo)
-	}
-}
-
-// TestCryptoManager_Integration verifies that encryption works end-to-end
-// through the DAO layer (Create -> FindByKey should return decrypted token)
-func TestCryptoManager_Integration(t *testing.T) {
-	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
-
-	db := setupTestDB(t)
-	repoDAO, err := dao.NewRepoDAO(db)
-	if err != nil {
-		t.Fatalf("failed to create RepoDAO: %v", err)
-	}
-
-	originalToken := "ghp_supersecrettoken12345"
-	repo := &model.Repo{
-		Key:         "test-key-1",
-		Name:        "test-repo",
-		Platform:    "github",
-		CloneURL:    "https://github.com/owner/repo.git",
-		AccessToken: originalToken,
-		Status:      "active",
-	}
-
-	// Create should encrypt the token
-	if err := repoDAO.Create(repo); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	// FindByKey should return the decrypted token
-	found, err := repoDAO.FindByKey("test-key-1")
-	if err != nil {
-		t.Fatalf("FindByKey failed: %v", err)
-	}
-	if found == nil {
-		t.Fatal("expected to find repo, got nil")
-	}
-	if found.AccessToken != originalToken {
-		t.Errorf("expected decrypted token %q, got %q", originalToken, found.AccessToken)
 	}
 }
 

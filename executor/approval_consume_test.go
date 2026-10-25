@@ -41,7 +41,7 @@ func TestExecute_ForcePush_ConsumesApprovalOnce(t *testing.T) {
 	task := &model.SyncTask{
 		Key: "consume-approval", SourceRepoKey: "source-repo", TargetRepoKey: "target-repo",
 		SourceBranch: "main", TargetBranch: "main", SyncMode: "single",
-		GitForce: true, KeepDivergent: true, ForcePushPolicy: "block",
+		GitForce: true, ForcePushPolicy: "block",
 	}
 
 	// 第一次:有放行 ⇒ 强推成功,且放行被用掉
@@ -77,7 +77,7 @@ func TestExecute_MultiBranch_ConsumesApprovalOnce(t *testing.T) {
 	task := &model.SyncTask{
 		Key: "consume-multi", SourceRepoKey: "source-repo", TargetRepoKey: "target-repo",
 		SourceBranch: "release/*", TargetBranch: "release/*", SyncMode: "single",
-		GitForce: true, KeepDivergent: true, ForcePushPolicy: "block",
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	_ = work
 

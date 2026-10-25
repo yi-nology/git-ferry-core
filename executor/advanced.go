@@ -67,7 +67,7 @@ type divergentError struct {
 }
 
 func (e *divergentError) Error() string {
-	return fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); enable keep_divergent=false to force overwrite", e.Branch, e.Count)
+	return fmt.Sprintf("target branch %q has %d commit(s) not in source (divergent); set force_push_policy=allow to force overwrite", e.Branch, e.Count)
 }
 
 // isDivergent 判断是否分歧保护错误。

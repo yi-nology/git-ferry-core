@@ -452,7 +452,7 @@ func TestBackupMetadata_BackupDirNotConfigured(t *testing.T) {
 	require.NoError(t, db.Create(plat).Error)
 	repo := &model.Repo{
 		Key: "gh/acme/app", Name: "app", PlatformID: plat.ID, Platform: model.PlatformTypeGitHub,
-		PlatformOwner: "acme", PlatformRepo: "app", AccessToken: "tok", Status: model.RepoStatusActive,
+		PlatformOwner: "acme", PlatformRepo: "app", Status: model.RepoStatusActive,
 	}
 	require.NoError(t, db.Create(repo).Error)
 

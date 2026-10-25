@@ -34,7 +34,7 @@ func TestCollectRunFacts_StreakAndRate(t *testing.T) {
 func TestEvaluateDimensions_AllGreen(t *testing.T) {
 	f := Facts{
 		"has_name": "true", "has_cron": "true", "cron": "0 2 * * *",
-		"enabled": "true", "keep_divergent": "true", "force_push_policy": "block",
+		"enabled": "true", "force_push_policy": "block",
 		"backup_enabled": "true", "sync_wiki": "true",
 		"has_history": "true", "run_total": "10", "run_success": "10",
 		"fail_streak": "0", "recent_success": "true", "last_run_age_hours": "1",

@@ -1,16 +1,14 @@
 package model
 
 type CreateRepoRequest struct {
-	Name        string `json:"name"`
-	RemoteURL   string `json:"remoteUrl"`
-	AccessToken string `json:"accessToken"`
-	PlatformID  uint   `json:"platformId"`
+	Name       string `json:"name"`
+	RemoteURL  string `json:"remoteUrl"`
+	PlatformID uint   `json:"platformId"`
 }
 
 type UpdateRepoRequest struct {
-	Key         string `json:"key"`
-	Name        string `json:"name"`
-	AccessToken string `json:"accessToken"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
 }
 
 type TestConnectionResult struct {

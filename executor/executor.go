@@ -728,15 +728,9 @@ func (e *Executor) workdirUsable(ctx context.Context, dir string) bool {
 // 第二个返回值 usedApproval = 本次是否用掉了一次人工放行(调用方负责在成功后兑现"一次性")。
 // 第三个返回值 approvalTargetRef = 该放行绑定的目标状态(消费时必须原样带回)。
 func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, repo *model.Repo, platform *model.Platform) (bool, string, string, error) {
-	// 分歧保护:按 ForcePushPolicy(block/backup_on_demand/allow)处理
-	policy := task.ForcePushPolicy
-	if policy == "" {
-		if task.KeepDivergent {
-			policy = "block"
-		} else {
-			policy = "allow"
-		}
-	}
+	// 分歧保护:按 ForcePushPolicy(block/backup_on_demand/allow)处理。
+	// 解析走 model.ResolveForcePushPolicy(唯一实现):空值 ⇒ block(最安全)。
+	policy := string(model.ResolveForcePushPolicy(task))
 	backupDir := ""
 	if cfg := e.service.GetConfig(); cfg != nil {
 		backupDir = cfg.Sync.BackupDir

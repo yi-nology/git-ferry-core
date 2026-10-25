@@ -107,7 +107,6 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 		PlatformOwner: platformOwner,
 		PlatformRepo:  platformRepo,
 		CloneURL:      req.RemoteURL,
-		AccessToken:   req.AccessToken,
 		Status:        model.RepoStatusActive,
 	}
 
@@ -137,9 +136,6 @@ func (rs *RepoService) UpdateRepo(ctx context.Context, req *model.UpdateRepoRequ
 
 	if req.Name != "" {
 		repo.Name = req.Name
-	}
-	if req.AccessToken != "" {
-		repo.AccessToken = req.AccessToken
 	}
 
 	if err := rs.repoDAO.Update(repo); err != nil {
@@ -193,10 +189,10 @@ func (rs *RepoService) GetRepoWithProvider(repoKey string) (*model.Repo, sdkprov
 	return repo, prov, nil
 }
 
-// resolveRepoProvider 解析仓库对应的 provider:repo token 优先,回退关联平台 token;
+// resolveRepoProvider 解析仓库对应的 provider:凭据一律取自关联平台;
 // 有关联平台记录时按平台配置构造(经 Manager 缓存),否则按 CloneURL 探测平台。
 func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, error) {
-	token := repo.AccessToken
+	var token string
 	var platform *model.Platform
 	if repo.PlatformID > 0 && rs.platformDAO != nil {
 		var findErr error
@@ -204,7 +200,7 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 		if findErr != nil {
 			return nil, errors.Wrapf(findErr, "find platform %d for repo %s", repo.PlatformID, repo.Key)
 		}
-		if platform != nil && token == "" {
+		if platform != nil {
 			token = platform.AccessToken
 		}
 	}

@@ -236,10 +236,9 @@ func (s *Service) BulkMirrorOrg(ctx context.Context, req BulkMirrorRequest) (*Bu
 			tURL = RewriteRepoURL(req.TargetPlatform.InstanceURL, tOwner, tRepo)
 		}
 		tRepoRec, terr := s.CreateRepo(ctx, &model.CreateRepoRequest{
-			Name:        tName,
-			RemoteURL:   tURL,
-			PlatformID:  req.TargetPlatform.ID,
-			AccessToken: r.AccessToken,
+			Name:       tName,
+			RemoteURL:  tURL,
+			PlatformID: req.TargetPlatform.ID,
 		})
 		if terr != nil {
 			// 已存在等错误：尝试按名称找

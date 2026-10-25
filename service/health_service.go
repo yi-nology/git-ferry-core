@@ -130,7 +130,6 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 			"has_cron":          strutil.BoolFact(t.Cron != ""),
 			"cron":              t.Cron,
 			"enabled":           strutil.BoolFact(t.Enabled),
-			"keep_divergent":    strutil.BoolFact(t.KeepDivergent),
 			"git_force":         strutil.BoolFact(t.GitForce),
 			"force_push_policy": t.ForcePushPolicy,
 			"backup_enabled":    strutil.BoolFact(t.GitBundle),

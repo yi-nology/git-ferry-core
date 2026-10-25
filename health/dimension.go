@@ -150,7 +150,6 @@ func DefaultDimensions() []DimensionSpec {
 			Weight: 15,
 			Evaluate: func(f Facts) (int, string, []string, string) {
 				policy := f["force_push_policy"] // allow|block|backup_on_demand|""
-				keepDiv := truthy(f["keep_divergent"])
 				var detail []string
 				score := 100
 				switch policy {
@@ -163,14 +162,9 @@ func DefaultDimensions() []DimensionSpec {
 					score = 40
 					detail = append(detail, "force 策略为 allow，可能覆盖目标历史")
 				default:
-					// 空：按 keep_divergent 兼容
-					if !keepDiv {
-						score = 50
-						detail = append(detail, "keep_divergent=false 且无 force_push_policy")
-					} else {
-						score = 90
-						detail = append(detail, "keep_divergent=true（默认安全）")
-					}
+					// 空：未显式配置 ⇒ 按最安全的 block 处理
+					score = 90
+					detail = append(detail, "force_push_policy 未设置（默认 block）")
 				}
 				if truthy(f["git_force"]) && score > 60 {
 					score = 60

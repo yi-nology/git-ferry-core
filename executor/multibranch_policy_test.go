@@ -52,7 +52,7 @@ func TestPush_MultiBranch_TargetFetchFails_FailsClosed(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "multi-fetch-fail", SourceBranch: "release/*", TargetBranch: "release/*",
-		GitForce: true, ForcePushPolicy: "block", KeepDivergent: true,
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	dstRepo := &model.Repo{CloneURL: dstBare}
@@ -86,7 +86,7 @@ func TestPush_MultiBranch_TargetFetchFails_FailsClosed(t *testing.T) {
 // 而策略归一(normalizeDivergencePolicy)只在单分支入口做 ⇒
 // "allow" 落到 behind>0 分支 ⇒ 返回 divergentError ⇒
 // 显式允许覆盖的任务反而被拒,错误文案还建议"enable keep_divergent=false"
-// (而用户已经显式设了 keep_divergent=false)。
+// (而用户已经显式把策略设成了 allow)。
 func TestPush_MultiBranch_AllowPolicy_AllowsForcePush(t *testing.T) {
 	srcBare, dstBare, work := multiDivergentLab(t)
 
@@ -96,7 +96,7 @@ func TestPush_MultiBranch_AllowPolicy_AllowsForcePush(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "multi-allow", SourceBranch: "release/*", TargetBranch: "release/*",
-		GitForce: true, KeepDivergent: false, // ⇒ 策略解析为 allow
+		GitForce: true, ForcePushPolicy: "allow", // 显式允许覆盖
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	dstRepo := &model.Repo{CloneURL: dstBare}
@@ -112,6 +112,42 @@ func TestPush_MultiBranch_AllowPolicy_AllowsForcePush(t *testing.T) {
 	// 覆盖确实发生了(force 推送)
 	out := gitOut(t, dstBare, "log", "--oneline", "release/1.0")
 	assert.NotContains(t, out, "target-only", "allow + force ⇒ 目标独有提交被覆盖")
+}
+
+// TestPush_MultiBranch_EmptyPolicy_TreatedAsBlock 空策略必须按最安全的 block 处理。
+//
+// 回归背景(删除旧版本兼容时):旧的 keep_divergent 布尔字段曾提供一条旁路 ——
+// 策略字段没配时,布尔字段说了算(keep_divergent=false ⇒ allow)。
+// 该字段已删除,策略空值只能有一个含义:block(最安全)。
+//
+// 这条用例是**反向验证**:若有人再引入"空策略 ⇒ allow"或"布尔旁路",
+// 本用例会变红(目标侧独有提交被覆盖 / 不再报分歧错误)。
+func TestPush_MultiBranch_EmptyPolicy_TreatedAsBlock(t *testing.T) {
+	srcBare, dstBare, work := multiDivergentLab(t)
+
+	svc := newMockService()
+	exec, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	task := &model.SyncTask{
+		Key: "multi-empty-policy", SourceBranch: "release/*", TargetBranch: "release/*",
+		GitForce: true, // ForcePushPolicy 留空 ⇒ 必须按 block 处理
+	}
+	srcRepo := &model.Repo{CloneURL: srcBare}
+	dstRepo := &model.Repo{CloneURL: dstBare}
+	ctx := context.Background()
+
+	require.NoError(t, exec.cloneRepo(ctx, work, srcRepo, task, nil))
+	require.NoError(t, exec.ensureRemote(ctx, work, dstRepo))
+	require.NoError(t, exec.fetchRepo(ctx, work, task, srcRepo, nil))
+
+	_, _, _, err = exec.push(ctx, work, task, dstRepo, nil)
+	require.Error(t, err, "空策略必须按 block 拦下(目标侧有独有提交)")
+	assert.True(t, isDivergent(err), "必须是分歧保护错误,实际: %v", err)
+
+	// 目标独有提交必须还在(没被覆盖)
+	out := gitOut(t, dstBare, "log", "--oneline", "release/1.0")
+	assert.Contains(t, out, "target-only", "空策略不得覆盖目标侧独有提交")
 }
 
 // TestPush_MultiBranch_ApprovalIsConsumed 多分支的人工放行**必须被消费掉**。
@@ -133,7 +169,7 @@ func TestPush_MultiBranch_ApprovalIsConsumed(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "multi-approve", SourceBranch: "release/*", TargetBranch: "release/*",
-		GitForce: true, ForcePushPolicy: "block", KeepDivergent: true,
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	dstRepo := &model.Repo{CloneURL: dstBare}
@@ -168,7 +204,7 @@ func TestCheckDivergenceForBranch_UnknownTargetState_FailsClosed(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "unknown-state", SourceBranch: "release/*", TargetBranch: "release/*",
-		GitForce: true, ForcePushPolicy: "block", KeepDivergent: true,
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	ctx := context.Background()

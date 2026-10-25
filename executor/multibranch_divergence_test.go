@@ -42,7 +42,7 @@ func TestPush_MultiBranch_BlockPolicyBlocksDivergentBranch(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "multi-div", SourceBranch: "release/*", TargetBranch: "release/*",
-		GitForce: true, ForcePushPolicy: "block", KeepDivergent: true,
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	dstRepo := &model.Repo{CloneURL: dstBare}
@@ -83,7 +83,7 @@ func TestPush_MultiBranch_BlockPolicyAllowsWhenNoDivergence(t *testing.T) {
 
 	task := &model.SyncTask{
 		Key: "multi-ok", SourceBranch: "release/*", TargetBranch: "release/*",
-		GitForce: true, ForcePushPolicy: "block", KeepDivergent: true,
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	dstRepo := &model.Repo{CloneURL: dstBare}
@@ -117,7 +117,7 @@ func TestPush_SingleBranch_BlockPolicyFailsClosedWhenCompareFails(t *testing.T) 
 
 	task := &model.SyncTask{
 		Key: "fail-closed", SourceBranch: "main", TargetBranch: "main",
-		GitForce: true, ForcePushPolicy: "block", KeepDivergent: true,
+		GitForce: true, ForcePushPolicy: "block",
 	}
 	srcRepo := &model.Repo{CloneURL: srcBare}
 	dstRepo := &model.Repo{CloneURL: dstBare}

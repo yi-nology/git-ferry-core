@@ -88,7 +88,6 @@ func TestSyncTask_Fields(t *testing.T) {
 		t.Error("expected git force to be false")
 	}
 
-
 	if tk.LastStatus != "success" {
 		t.Errorf("expected last status 'success', got '%s'", tk.LastStatus)
 	}

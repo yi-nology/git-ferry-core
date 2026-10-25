@@ -129,7 +129,7 @@ func (s *Service) RestoreMetadata(ctx context.Context, req RestoreRequest) (*Res
 	if repoName == "" {
 		repoName = repo.PlatformRepo
 	}
-	prov, err := s.ProviderForPlatform(plat, repo.AccessToken)
+	prov, err := s.ProviderForPlatform(plat, "")
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
 	}

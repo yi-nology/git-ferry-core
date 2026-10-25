@@ -188,21 +188,8 @@ func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *mod
 		}
 	}
 
-	// 2) 组装目的地列表(legacy BackupS3 + BackupDestinations)
+	// 2) 组装目的地列表(BackupDestinations)
 	var dests []Destination
-	if cfg.Sync.BackupS3.Bucket != "" {
-		dests = append(dests, Destination{
-			Type:      DestS3,
-			Name:      "s3",
-			Endpoint:  cfg.Sync.BackupS3.Endpoint,
-			Region:    cfg.Sync.BackupS3.Region,
-			Bucket:    cfg.Sync.BackupS3.Bucket,
-			Prefix:    cfg.Sync.BackupS3.Prefix,
-			AccessKey: cfg.Sync.BackupS3.AccessKey,
-			SecretKey: cfg.Sync.BackupS3.SecretKey,
-			PathStyle: cfg.Sync.BackupS3.PathStyle,
-		})
-	}
 	for _, d := range cfg.Sync.BackupDestinations {
 		dests = append(dests, Destination{
 			Type:        DestinationType(d.Type),

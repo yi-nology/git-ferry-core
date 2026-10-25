@@ -118,7 +118,6 @@ func TestGitHubApp_UsedByPlatformProvider(t *testing.T) {
 	p := &model.Platform{
 		Key: "ghp", Type: "github", APIURL: srv.URL,
 		GitHubAppID: 7, GitHubInstallationID: 8, GitHubPrivateKey: pemStr,
-		AccessToken: "fallback_pat",
 	}
 	tok, err := ResolvePlatformToken(p)
 	require.NoError(t, err)

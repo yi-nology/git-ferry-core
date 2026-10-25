@@ -428,39 +428,28 @@ func driftRepoUsable(ctx context.Context, backend gitbackend.GitBackend, dir str
 }
 
 // ForcePushPolicy 强制推送保护策略。
-type ForcePushPolicy string
+// **权威实现在 model 包**(model.ResolveForcePushPolicy)——service 与 executor
+// 共用同一份,避免两份平行实现漂移。此处保留别名,保持既有调用点不变。
+type ForcePushPolicy = model.ForcePushPolicy
 
 const (
-	// ForcePushAllow 允许强制覆盖(原 keep_divergent=false 行为)
-	ForcePushAllow ForcePushPolicy = "allow"
+	// ForcePushAllow 允许强制覆盖目标侧独有提交
+	ForcePushAllow = model.ForcePushAllow
 	// ForcePushBlock 遇分歧直接失败,不覆盖
-	ForcePushBlock ForcePushPolicy = "block"
+	ForcePushBlock = model.ForcePushBlock
 	// ForcePushBackupOnDemand 覆盖前自动打 bundle 快照(可回滚)
-	ForcePushBackupOnDemand ForcePushPolicy = "backup_on_demand"
+	ForcePushBackupOnDemand = model.ForcePushBackupOnDemand
 )
 
 // ResolveForcePushPolicy 从任务配置解析策略。
-// 优先 task.ForcePushPolicy;否则按 keep_divergent 兼容映射。
+// 委托 model.ResolveForcePushPolicy(唯一实现):空值 ⇒ block(最安全)。
 func ResolveForcePushPolicy(t *model.SyncTask) ForcePushPolicy {
-	if t == nil {
-		return ForcePushBlock
-	}
-	if t.ForcePushPolicy != "" {
-		return ForcePushPolicy(t.ForcePushPolicy)
-	}
-	if t.KeepDivergent {
-		return ForcePushBlock
-	}
-	return ForcePushAllow
+	return model.ResolveForcePushPolicy(t)
 }
 
 // ValidForcePushPolicy 校验策略字符串。
 func ValidForcePushPolicy(p string) bool {
-	switch ForcePushPolicy(p) {
-	case ForcePushAllow, ForcePushBlock, ForcePushBackupOnDemand:
-		return true
-	}
-	return false
+	return model.ValidForcePushPolicy(p)
 }
 
 // gitRevParse 解析引用为完整 SHA;任何失败(ref 不存在是正常分支、真错误同理)

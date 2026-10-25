@@ -113,7 +113,7 @@ func (s *Service) BackupMetadata(ctx context.Context, o MetadataBackupOptions) (
 	if err != nil || plat == nil {
 		return nil, ErrPlatformNotFound
 	}
-	prov, err := s.ProviderForPlatform(plat, repo.AccessToken)
+	prov, err := s.ProviderForPlatform(plat, "")
 	if err != nil {
 		return nil, fmt.Errorf("create provider: %w", err)
 	}

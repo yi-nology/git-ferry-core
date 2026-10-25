@@ -16,7 +16,8 @@ import (
 //   - native backend 落地时写入 0600 临时文件 + credential.helper / GIT_ASKPASS，
 //     **不进 git 进程 argv，也不进 environ 明文**（见 gitbackend/credhelper.go）
 //   - 临时凭证目录随 git 命令结束删除（RAII）
-//   - 仓库 token 优先于平台 token；均空则 AuthNone
+//   - 凭据**只来自平台**：per-repo token 字段已删除（旧的兼容开关），
+//     平台 token 为空则 AuthNone
 //
 // SSH 密钥内容同样经临时 0600 文件注入 GIT_SSH_COMMAND，命令结束后删除。
 //
@@ -33,13 +34,9 @@ func BuildRepoAuth(repo *model.Repo, p *model.Platform) gitbackend.AuthConfig {
 		fingerprint = p.SSHHostKeyFingerprint
 		knownHosts = p.SSHKnownHostsPath
 	}
-	var token string
-	if repo != nil {
-		token = repo.AccessToken
-	}
-	if token == "" {
-		token = platformToken
-	}
+	// 凭据**只来自平台**:per-repo 的 token 字段已删除(旧版本兼容用的死开关,
+	// 现网所有仓库都是空的)⇒ 认证口径只有一处:平台。
+	token := platformToken
 
 	applySSHHostKey := func(auth gitbackend.AuthConfig) gitbackend.AuthConfig {
 		auth.InsecureSkipTLS = skipTLS
@@ -75,7 +72,7 @@ func (e *Executor) authConfig(ctx context.Context, repo *model.Repo, platform *m
 	if auth.Type == gitbackend.AuthNone {
 		slog.Debug("no auth configured", "repo", repo.Key)
 	} else {
-		slog.Debug("using access token", "repo", repo.Key, "fromPlatform", repo.AccessToken == "")
+		slog.Debug("using platform access token", "repo", repo.Key)
 	}
 	return auth
 }

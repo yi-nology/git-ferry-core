@@ -46,8 +46,11 @@ func TestAuditHashChain(t *testing.T) {
 }
 
 func TestResolveForcePushPolicy(t *testing.T) {
-	assert.Equal(t, ForcePushBlock, ResolveForcePushPolicy(&model.SyncTask{KeepDivergent: true}))
-	assert.Equal(t, ForcePushAllow, ResolveForcePushPolicy(&model.SyncTask{KeepDivergent: false}))
+	// 空策略 ⇒ block(最安全)。旧的 keep_divergent 布尔字段已删除,不再参与解析。
+	assert.Equal(t, ForcePushBlock, ResolveForcePushPolicy(&model.SyncTask{}))
+	assert.Equal(t, ForcePushAllow, ResolveForcePushPolicy(&model.SyncTask{ForcePushPolicy: "allow"}))
+	// 非法策略同样按最安全处理,不静默放行。
+	assert.Equal(t, ForcePushBlock, ResolveForcePushPolicy(&model.SyncTask{ForcePushPolicy: "nope"}))
 	assert.Equal(t, ForcePushBackupOnDemand,
 		ResolveForcePushPolicy(&model.SyncTask{ForcePushPolicy: "backup_on_demand"}))
 	assert.Equal(t, ForcePushBlock, ResolveForcePushPolicy(nil))

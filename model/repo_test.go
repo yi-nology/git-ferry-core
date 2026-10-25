@@ -27,7 +27,6 @@ func TestRepo_Fields(t *testing.T) {
 		CloneURL:      "https://github.com/testuser/test-repo.git",
 		SSHURL:        "git@github.com:testuser/test-repo.git",
 		DefaultBranch: "main",
-		AccessToken:   "test-token",
 		Status:        "active",
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -71,10 +70,6 @@ func TestRepo_Fields(t *testing.T) {
 
 	if r.DefaultBranch != "main" {
 		t.Errorf("expected default branch 'main', got '%s'", r.DefaultBranch)
-	}
-
-	if r.AccessToken != "test-token" {
-		t.Errorf("expected access token 'test-token', got '%s'", r.AccessToken)
 	}
 
 	if r.Status != "active" {

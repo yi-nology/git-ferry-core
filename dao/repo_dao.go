@@ -63,12 +63,6 @@ func (d *RepoDAO) FindByKey(key string) (*model.Repo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Decrypt access token
-	if repo.AccessToken != "" {
-		if decrypted, err := d.cm.Decrypt(repo.AccessToken); err == nil {
-			repo.AccessToken = decrypted
-		}
-	}
 	// Decrypt webhook secret
 	if repo.WebhookSecret != "" {
 		if decrypted, err := d.cm.Decrypt(repo.WebhookSecret); err == nil {
@@ -79,13 +73,6 @@ func (d *RepoDAO) FindByKey(key string) (*model.Repo, error) {
 }
 
 func (d *RepoDAO) Create(repo *model.Repo) error {
-	if repo.AccessToken != "" {
-		encrypted, err := d.cm.Encrypt(repo.AccessToken)
-		if err != nil {
-			return err
-		}
-		repo.AccessToken = encrypted
-	}
 	if repo.WebhookSecret != "" {
 		encrypted, err := d.cm.Encrypt(repo.WebhookSecret)
 		if err != nil {
@@ -97,13 +84,6 @@ func (d *RepoDAO) Create(repo *model.Repo) error {
 }
 
 func (d *RepoDAO) Update(repo *model.Repo) error {
-	if repo.AccessToken != "" {
-		encrypted, err := d.cm.Encrypt(repo.AccessToken)
-		if err != nil {
-			return err
-		}
-		repo.AccessToken = encrypted
-	}
 	if repo.WebhookSecret != "" {
 		encrypted, err := d.cm.Encrypt(repo.WebhookSecret)
 		if err != nil {
@@ -117,13 +97,6 @@ func (d *RepoDAO) Update(repo *model.Repo) error {
 // BatchCreate 批量创建仓库(用于同步场景,逐条加密后批量插入)。
 func (d *RepoDAO) BatchCreate(repos []*model.Repo, batchSize int) error {
 	for _, r := range repos {
-		if r.AccessToken != "" {
-			encrypted, err := d.cm.Encrypt(r.AccessToken)
-			if err != nil {
-				return err
-			}
-			r.AccessToken = encrypted
-		}
 		if r.WebhookSecret != "" {
 			encrypted, err := d.cm.Encrypt(r.WebhookSecret)
 			if err != nil {

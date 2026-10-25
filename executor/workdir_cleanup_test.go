@@ -40,7 +40,7 @@ func TestExecute_FailedRun_KeepsUsableWorkdir(t *testing.T) {
 	task := &model.SyncTask{
 		Key: "keep-workdir", SourceRepoKey: "source-repo", TargetRepoKey: "target-repo",
 		SourceBranch: "main", TargetBranch: "main", SyncMode: "single",
-		GitForce: true, KeepDivergent: true, ForcePushPolicy: "block",
+		GitForce: true, ForcePushPolicy: "block",
 	}
 
 	_, _ = exec.Execute(context.Background(), task, "manual", nil)

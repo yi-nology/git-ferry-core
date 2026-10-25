@@ -17,7 +17,6 @@ type Repo struct {
 	CloneURL      string         `json:"clone_url" gorm:"size:500"`
 	SSHURL        string         `json:"ssh_url" gorm:"size:500"`
 	DefaultBranch string         `json:"default_branch" gorm:"size:100;default:main"`
-	AccessToken   string         `json:"-" gorm:"type:text"` // 保留用于兼容，优先使用 Platform 的 Token
 	WebhookSecret string         `json:"-" gorm:"size:255"`
 	WebhookID     int64          `json:"webhook_id"`
 	Status        string         `json:"status" gorm:"size:20;default:active"`

@@ -30,11 +30,8 @@ type SyncTask struct {
 	Submodules bool `json:"submodules" gorm:"default:false"`
 	// GitPushPrune 推送后删除目标上源已不存在的同名分支(refspec prune)
 	GitPushPrune bool `json:"git_push_prune" gorm:"default:false"`
-	// KeepDivergent true=目标分支有源没有的提交时拒绝 force 覆盖(防丢代码);
-	// false=允许强制覆盖分歧分支。默认 true(安全)。
-	KeepDivergent bool `json:"keep_divergent" gorm:"default:true"`
 	// ForcePushPolicy 强制推送保护策略:allow | block | backup_on_demand。
-	// 空值按 KeepDivergent 兼容映射(keep_divergent=true → block)。
+	// 空值 = 未显式配置 ⇒ block(最安全)。解析见 ResolveForcePushPolicy。
 	ForcePushPolicy string `json:"force_push_policy" gorm:"size:32"`
 	// IncludeBranches 逗号分隔分支 glob 白名单(如 "main,release/*")。
 	// 空=不过滤；非空时推送侧仅同步匹配分支(在 SourceBranch 基础上再收窄)。
@@ -68,9 +65,7 @@ type CreateTaskRequest struct {
 	GitBundle     bool   `json:"git_bundle"`
 	Submodules    bool   `json:"submodules"`
 	GitPushPrune  bool   `json:"git_push_prune"`
-	// KeepDivergent nil/缺省=true(安全);显式 false 才允许覆盖分歧
-	KeepDivergent *bool `json:"keep_divergent"`
-	// ForcePushPolicy allow|block|backup_on_demand;空=按 KeepDivergent 映射
+	// ForcePushPolicy allow|block|backup_on_demand;空=block(默认最安全)
 	ForcePushPolicy string `json:"force_push_policy"`
 	// IncludeBranches 逗号分隔 glob 白名单;空=全部
 	IncludeBranches string `json:"include_branches"`
@@ -91,15 +86,14 @@ type UpdateTaskRequest struct {
 	Cron *string `json:"cron"`
 	// bool 字段用指针:nil=不修改,false=显式关闭。
 	// 替代旧 bool 零值语义——此前客户端只改 name 也会把任务静默禁用。
-	Enabled       *bool `json:"enabled"`
-	GitTags       *bool `json:"git_tags"`
-	GitForce      *bool `json:"git_force"`
-	GitLFS        *bool `json:"git_lfs"`
-	SyncWiki      *bool `json:"sync_wiki"`
-	GitBundle     *bool `json:"git_bundle"`
-	Submodules    *bool `json:"submodules"`
-	GitPushPrune  *bool `json:"git_push_prune"`
-	KeepDivergent *bool `json:"keep_divergent"`
+	Enabled      *bool `json:"enabled"`
+	GitTags      *bool `json:"git_tags"`
+	GitForce     *bool `json:"git_force"`
+	GitLFS       *bool `json:"git_lfs"`
+	SyncWiki     *bool `json:"sync_wiki"`
+	GitBundle    *bool `json:"git_bundle"`
+	Submodules   *bool `json:"submodules"`
+	GitPushPrune *bool `json:"git_push_prune"`
 	// ForcePushPolicy 用指针:nil=不修改,**空串=清空**。
 	// 之前是普通 string,空串与"没传"不可区分 ⇒ 一旦设过就再也改不回去
 	// (只能删任务重建)。与 Cron 同一口径。

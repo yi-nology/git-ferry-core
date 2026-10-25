@@ -94,18 +94,8 @@ type SyncConfig struct {
 	HistoryWorkDir string `yaml:"history_work_dir" env:"GIT_SYNC_HISTORY_WORK_DIR"`
 	// BackupKeep 每任务保留最近 N 份 bundle(0=不轮转,全部保留)
 	BackupKeep int `yaml:"backup_keep" env:"GIT_SYNC_BACKUP_KEEP"`
-	// BackupS3 bundle 异地冷备(S3 兼容);空配置=只存本地
-	BackupS3 struct {
-		Endpoint  string `yaml:"endpoint"`
-		Region    string `yaml:"region"`
-		Bucket    string `yaml:"bucket"`
-		Prefix    string `yaml:"prefix"`
-		AccessKey string `yaml:"access_key"`
-		SecretKey string `yaml:"secret_key"`
-		PathStyle bool   `yaml:"path_style"`
-	} `yaml:"backup_s3"`
-	// BackupDestinations 多目的地扇出(s3/webdav/azure/local),与 BackupS3 并存;
-	// 两者都配置时全部尝试,逐目的地独立成功/失败。
+	// BackupDestinations 多目的地扇出(s3/webdav/azure/local);
+	// 逐目的地独立成功/失败。
 	BackupDestinations []BackupDestinationConfig `yaml:"backup_destinations"`
 	// BackupEncryptKey 冷备加密密钥(base64 32 字节 AES-256-GCM);空=不加密。
 	// 加密文件后缀 .bundle.enc,恢复时需同一密钥。
