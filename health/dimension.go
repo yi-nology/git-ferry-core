@@ -1,3 +1,9 @@
+// Package health 实现仓库/任务的健康评分(借鉴 Port Scorecards / OpenSSF Scorecards)。
+//
+// 评分 = 若干**维度**(reliability / freshness / schedule / safety / completeness)
+// 按权重加权聚合;每个维度产出 (分数, 结论 reason, 明细 detail, 建议动作 action)。
+//
+// 事实(Facts)由调用方从 DAO 采集后传入,本包是纯逻辑,便于单测。
 package health
 
 import (
@@ -67,6 +73,18 @@ func DefaultDimensions() []DimensionSpec {
 				}
 				if retryHeavy {
 					detail = append(detail, "重试次数偏高")
+				}
+				// error_free:上一次执行带了错误信息(即便整体算成功)。
+				// 这条信号原先由旧规则引擎单独上报,引擎删除后由本维度接管 ——
+				// 采集到的 fact 不能没人用。
+				//
+				// 刻意**不参与打分**:旧引擎的权重从未进入最终分数(分数一直由
+				// 维度引擎给出),这里只保留"报出来"的行为,避免改变既有分数。
+				//
+				// 只有**采到了**该 fact 且为 false 才报:事实缺失 = 不知道,
+				// 不能当成"有错误"(否则不采集该 fact 的调用方会一直误报)。
+				if v, ok := f["error_free"]; ok && !truthy(v) {
+					detail = append(detail, "最近执行带有错误信息")
 				}
 				score := rate
 				if !lastOK {
@@ -291,6 +309,19 @@ func levelFromScore(score int) string {
 }
 
 // ---- facts 采集（纯函数，便于测试）----
+
+// Facts 评分对象的属性快照。
+// key 是属性名，value 是字符串形式的取值（"true"/"false"/数字/文本）。
+type Facts map[string]string
+
+// toFloat 字符串转 float64，解析失败回落 0。
+//
+// 语义：委托 oekit/pkg/convert.Str2Float64（内部为 strconv.ParseFloat），
+// 遇到任何非纯数字串（如 "12abc"、""、带空白）一律解析失败并回落 0。
+// facts 全部由内部代码生成（数值均为合法十进制），故实际行为一致。
+func toFloat(s string) float64 {
+	return convert.Str2Float64(s, 0)
+}
 
 // RunSnapshot 历史采集输入（由 handler 从 SyncRun 映射）。
 type RunSnapshot struct {

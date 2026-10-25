@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/oekit/concurrency/syncx"
-	"github.com/oekit/pkg/slicex"
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
@@ -18,11 +17,8 @@ import (
 // 规则与维度实现在 git-ferry-core/health（纯逻辑包）；本文件负责从 DAO 取事实、
 // 拼 Facts、跑规则并聚合成壳层可直接序列化的快照。壳层只做入参与响应包装。
 
-// healthRules / healthDims 全局唯一来源；壳层不再各自持有。
-var (
-	healthRules = health.DefaultConfig()
-	healthDims  = health.DefaultDimensions()
-)
+// healthDims 全局唯一来源；壳层不再各自持有。
+var healthDims = health.DefaultDimensions()
 
 // HealthScoreItem 单仓库/任务健康分（含 Scorecards 风格维度）。
 // JSON 标签与壳层历史响应逐字一致，前端/CLI 依赖。
@@ -171,8 +167,7 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		}
 
 		dimRes := health.EvaluateDimensions(healthDims, facts)
-		legacy := healthRules.Evaluate(facts)
-		issues := uniqueStrings(append(legacy.Issues, dimRes.Issues...))
+		issues := dimRes.Issues
 
 		// 最近失败 run_id(动作路由)
 		var failRunID int64
@@ -203,11 +198,4 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		})
 	}
 	return items, nil
-}
-
-// uniqueStrings 保序去重并丢弃空串。
-// 用 oekit pkg/slicex:Unique 保序去重,Filter 滤空串——
-// 与 health/dimension.go 的 uniqueKeepOrder 是同一份逻辑,不再两处各写一遍。
-func uniqueStrings(in []string) []string {
-	return slicex.Unique(slicex.Filter(in, func(s string) bool { return s != "" }))
 }

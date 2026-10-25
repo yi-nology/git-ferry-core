@@ -98,6 +98,62 @@ func TestEvaluateDimensions_NoHistory(t *testing.T) {
 	assert.True(t, found)
 }
 
+// TestEvaluateDimensions_ErrorFreeSignalSurfaced 钉住"最近执行带有错误信息"这条信号。
+//
+// 回归背景(删除旧规则引擎时):`error_free` 这个 fact 原先**只有**旧规则引擎
+// 消费(旧引擎单独报这条,权重 10)。旧引擎删掉后若没人接手,采集到的信号就
+// 静默消失了 —— fact 不能没人用。现在由 reliability 维度接管。
+//
+// 这条用例是**反向验证**:把 reliability 里那段 error_free 分支去掉,此用例变红。
+func TestEvaluateDimensions_ErrorFreeSignalSurfaced(t *testing.T) {
+	base := Facts{
+		"has_name": "true", "has_cron": "true", "enabled": "true",
+		"has_history": "true", "recent_success": "true",
+		"run_total": "3", "run_success": "3", "fail_streak": "0",
+		"step_fail_count": "0", "retry_total": "0",
+		"last_run_age_hours": "1",
+		"force_push_policy":  "block",
+		"backup_enabled":     "true", "sync_wiki": "true",
+	}
+
+	detailOf := func(f Facts, dim string) []string {
+		res := EvaluateDimensions(nil, f)
+		for _, d := range res.Dimensions {
+			if d.Name == dim {
+				return d.Detail
+			}
+		}
+		return nil
+	}
+
+	// error_free=false ⇒ 必须报出来
+	bad := Facts{}
+	for k, v := range base {
+		bad[k] = v
+	}
+	bad["error_free"] = "false"
+	assert.Contains(t, detailOf(bad, "reliability"), "最近执行带有错误信息",
+		"error_free=false 必须被 reliability 维度报出来")
+
+	// error_free=true ⇒ 不报
+	good := Facts{}
+	for k, v := range base {
+		good[k] = v
+	}
+	good["error_free"] = "true"
+	assert.NotContains(t, detailOf(good, "reliability"), "最近执行带有错误信息",
+		"error_free=true 不应报错误信息")
+
+	// fact 缺失 = 不知道 ⇒ 不能当成"有错误"(不采集该 fact 的调用方不该被误报)
+	missing := Facts{}
+	for k, v := range base {
+		missing[k] = v
+	}
+	delete(missing, "error_free")
+	assert.NotContains(t, detailOf(missing, "reliability"), "最近执行带有错误信息",
+		"error_free 缺失时不应报错误信息")
+}
+
 func TestDimensionWeightsSum(t *testing.T) {
 	total := 0
 	for _, s := range DefaultDimensions() {
