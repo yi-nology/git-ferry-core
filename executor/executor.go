@@ -497,8 +497,19 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 		Remote:   RemoteOrigin,
 		Branches: fetchBranches,
 		Tags:     task.GitTags,
-		Prune:    task.GitPrune,
-		Auth:     e.authConfig(ctx, repo, platform),
+		// **恒剪枝**(不再跟 task.GitPrune 走):
+		//
+		// 剪掉"源端已删分支"的远端跟踪 ref,是镜像语义的基石 ——
+		// 不剪的话:① 陈旧的跟踪 ref 留在本地 ⇒ align 把本地分支对齐到旧提交
+		// ⇒ **源端已删的分支又被推回目标**(分支"复活");
+		// ② sourceBranchGone 判断"源端是否还在"靠的就是 ref 被剪掉
+		// ⇒ 不剪的话镜像删除(git_push_prune)永远不触发。
+		//
+		// 注意:native 后端本来就恒传 --prune,而 gogit 后端(生产用的那个)
+		// 只在 Prune=true 时才剪 ⇒ **同一份配置在两个后端行为不同**,
+		// 生产上镜像删除其实一直没生效。这里显式传 true,两个后端口径一致。
+		Prune: true,
+		Auth:  e.authConfig(ctx, repo, platform),
 	})
 	if err != nil {
 		// **源端可能已经删掉了这个分支**:按名字 fetch 一个远端不存在的分支,
@@ -564,6 +575,11 @@ func (e *Executor) alignSourceBranchesExcluded(ctx context.Context, dir, sourceB
 			continue
 		}
 		name := strings.TrimPrefix(ref, RemoteOrigin+"/")
+		// "origin" 是 origin/HEAD 这个**符号引用**的短名(不是分支):
+		// 对齐它必然失败,只会刷一条 "source ref missing" 噪音日志。
+		if name == ref || name == "" || name == "HEAD" {
+			continue
+		}
 		if !matchBranchGlob(sourceBranch, name) {
 			continue
 		}
@@ -851,13 +867,94 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 	// 任何勾了 git_push_prune 的单分支任务,每次同步结束目标侧该分支都没了,
 	// 而任务报 success。
 	if task.GitPushPrune && multi {
-		// 多分支的镜像删除需要列出目标侧全部分支再逐个比对,
-		// SDK 的 ListRemoteBranches 不带凭证(私有目标列不出来)⇒ 暂不实现。
-		// 明确告警,别让它看起来"生效了"。
-		slog.Warn("git_push_prune 对多分支任务暂未实现(本次不删目标侧任何分支)",
-			"sourcePattern", task.SourceBranch)
+		if perr := e.pruneRemoteBranchesMirror(ctx, dir, task, repo, platform); perr != nil {
+			return usedApproval, approvalTargetRef, approvalBranch, perr
+		}
 	}
 	return usedApproval, approvalTargetRef, approvalBranch, nil
+}
+
+// pruneRemoteBranchesMirror 多分支的镜像删除:删掉目标上**源端已不存在**的分支。
+//
+// 判定依据是两端 fetch 之后的远端跟踪 ref:
+//   - 目标侧有哪些分支:refs/remotes/target/*(这里现取一次目标端)
+//   - 源端有哪些分支:refs/remotes/origin/*(源端 fetch 恒剪枝 ⇒ 源端删掉的分支不会留下 ref)
+//
+// **三条安全阀,少一条都不删**:
+//
+//	① 源端分支列表为空 ⇒ 源端 fetch 没成功 ⇒ 什么都不删;
+//	② 目标端 fetch 失败 ⇒ 不知道目标有哪些分支 ⇒ 什么都不删;
+//	③ 只删"目标有、源端没有"的分支,其余一律不碰。
+func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, task *model.SyncTask,
+	repo *model.Repo, platform *model.Platform) error {
+	if _, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
+		RepoPath: dir,
+		Remote:   RemoteTarget,
+		Branches: nil, // 全量:要知道目标端**所有**分支
+		Auth:     e.authConfig(ctx, repo, platform),
+	}); err != nil {
+		return errors.Wrap(err, "fetch target for mirror prune failed")
+	}
+	srcBranches, err := e.remoteTrackingBranches(ctx, dir, RemoteOrigin)
+	if err != nil {
+		return err
+	}
+	tgtBranches, err := e.remoteTrackingBranches(ctx, dir, RemoteTarget)
+	if err != nil {
+		return err
+	}
+	if len(srcBranches) == 0 {
+		slog.Warn("镜像删除跳过:源端分支列表为空(源端 fetch 未成功?)",
+			"task", task.Key, "sourcePattern", task.SourceBranch)
+		return nil
+	}
+	srcSet := map[string]bool{}
+	for _, b := range srcBranches {
+		srcSet[b] = true
+	}
+	var victims []string
+	for _, b := range tgtBranches {
+		if !srcSet[b] {
+			victims = append(victims, b)
+		}
+	}
+	if len(victims) == 0 {
+		return nil
+	}
+	var failures []string
+	for _, b := range victims {
+		if perr := e.pruneRemoteBranch(ctx, dir, b, repo, platform); perr != nil {
+			failures = append(failures, b+": "+perr.Error())
+		}
+	}
+	if len(failures) > 0 {
+		return errors.Errorf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+	}
+	slog.Info("已删除目标上源端已不存在的分支",
+		"task", task.Key, "count", len(victims), "branches", strings.Join(victims, ","))
+	return nil
+}
+
+// remoteTrackingBranches 列出某个远端的远端跟踪分支(跳过 origin/HEAD 这类伪 ref)。
+func (e *Executor) remoteTrackingBranches(ctx context.Context, dir, remote string) ([]string, error) {
+	out, err := e.gitOutput(ctx, dir, "for-each-ref", "--format=%(refname:short)",
+		"refs/remotes/"+remote+"/")
+	if err != nil {
+		return nil, err
+	}
+	var res []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		l := strings.TrimSpace(line)
+		if l == "" {
+			continue
+		}
+		name := strings.TrimPrefix(l, remote+"/")
+		if name == l || name == "" || name == "HEAD" {
+			continue // origin/HEAD 这类符号引用不是分支
+		}
+		res = append(res, name)
+	}
+	return res, nil
 }
 
 // pushTags 把源端的 tag 推到目标端。

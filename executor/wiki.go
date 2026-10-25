@@ -72,8 +72,10 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 		if _, err := e.backend.Fetch(ctx, gitbackend.FetchOptions{
 			RepoPath: wikiDir,
 			Remote:   RemoteOrigin,
-			Prune:    task.GitPrune,
-			Auth:     srcAuth,
+			// 恒剪枝:wiki 与主仓同语义(源端删了 wiki 分支,本地也不该留着它)。
+			// gogit 后端只在 Prune=true 时才剪 ⇒ 不显式传 true 两后端行为不同。
+			Prune: true,
+			Auth:  srcAuth,
 		}); err != nil {
 			return errors.Wrap(err, "fetch wiki failed")
 		}
@@ -97,27 +99,49 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	}
 
 	details.WriteString("  wiki: push\n")
-	// **refspec 不带 "+"**:原来 "+refs/heads/*:refs/heads/*" 是无条件强推 ——
-	// 目标 wiki 上有人工提交也会被直接覆盖,而 task.GitForce 形同虚设。
+	// **逐分支推**,不整批推。
+	//
+	// 整批推("refs/heads/*:refs/heads/*")时,目标上**任一**分支非快进
+	// ⇒ 平台拒收整批 ⇒ 其它无分歧的分支也同步不了(一个分支的冲突拖垮全部)。
+	// 逐分支推:有分歧的那个分支失败,其它照常送达。
+	//
+	// 而且 refspec 不带 "+":原来 "+refs/heads/*:refs/heads/*" 是无条件强推 ——
+	// 目标 wiki 上的人��提交被直接覆盖,而 task.GitForce 形同虚设。
 	// 现在:快进照推;目标有独有提交 ⇒ git 拒绝(非快进),
 	// 要覆盖必须显式开 git_force。
-	if _, err := e.backend.Push(ctx, gitbackend.PushOptions{
-		RepoPath: wikiDir,
-		Remote:   RemoteTarget,
-		RefSpecs: []string{"refs/heads/*:refs/heads/*"},
-		Force:    task.GitForce,
-		Auth:     dstAuth,
-	}); err != nil {
-		if isWikiNotFound(err) {
-			details.WriteString("  wiki: target not found, skip\n")
-			return nil
+	branches, berr := e.remoteTrackingBranches(ctx, wikiDir, RemoteOrigin)
+	if berr != nil {
+		return errors.Wrap(berr, "list wiki branches")
+	}
+	if len(branches) == 0 {
+		details.WriteString("  wiki: no branches to push\n")
+		return nil
+	}
+	var failed []string
+	for _, b := range branches {
+		_, perr := e.backend.Push(ctx, gitbackend.PushOptions{
+			RepoPath: wikiDir,
+			Remote:   RemoteTarget,
+			RefSpecs: []string{"refs/heads/" + b + ":refs/heads/" + b},
+			Force:    task.GitForce,
+			Auth:     dstAuth,
+		})
+		if perr != nil {
+			if isWikiNotFound(perr) {
+				details.WriteString("  wiki: target not found, skip\n")
+				return nil
+			}
+			if !task.GitForce && isNonFastForward(perr) {
+				failed = append(failed, b+": target wiki has commits not in source (non-fast-forward)")
+				continue
+			}
+			failed = append(failed, b+": "+perr.Error())
 		}
-		if !task.GitForce && isNonFastForward(err) {
-			return errors.Wrap(err,
-				"push wiki failed: target wiki has commits not in source (non-fast-forward); "+
-					"refused to overwrite — enable git_force to allow overwriting")
-		}
-		return errors.Wrap(err, "push wiki failed")
+	}
+	if len(failed) > 0 {
+		// 逐分支推:失败的分支明确点名,其它分支已经送达。
+		return errors.Errorf("push wiki failed for %d/%d branch(es):%s",
+			len(failed), len(branches), strings.Join(failed, "; "))
 	}
 	details.WriteString("  wiki: done\n")
 	return nil

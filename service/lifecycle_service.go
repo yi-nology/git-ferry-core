@@ -290,11 +290,18 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 		if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 			return "", err
 		}
-		if err := backend.Clone(ctx, gitbackend.CloneOptions{
+		// 套用与 executor 相同的部分克隆配置:
+		// 不套的话,漂移仓库会把源端**完整历史**拷一份
+		// (executor 的工作区是部分克隆)⇒ 大仓下磁盘与首轮耗时都翻倍。
+		cloneOpts := gitbackend.CloneOptions{
 			URL:  srcRepo.CloneURL,
 			Path: dir,
 			Auth: executor.BuildRepoAuth(srcRepo, srcPlat),
-		}); err != nil {
+		}
+		if cfg := s.GetConfig(); cfg != nil {
+			cloneOpts.Filter = cfg.Sync.PartialClone
+		}
+		if err := backend.Clone(ctx, cloneOpts); err != nil {
 			return "", err
 		}
 	}
