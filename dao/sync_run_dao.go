@@ -34,6 +34,24 @@ func (d *SyncRunDAO) FindByTaskKey(taskKey string, page Pagination) ([]*model.Sy
 	return runs, total, err
 }
 
+// FindByTaskKeyAndRunID 精确查某个任务下的某一条执行记录。
+//
+// 之前 CLI 的 `history +detail --run-id` 只能靠"翻页找到那条"——
+// 服务端没有按 run_id 过滤的能力 ⇒ 翻不到就静默返回空列表,
+// 用户以为"这条记录不存在"。
+func (d *SyncRunDAO) FindByTaskKeyAndRunID(taskKey string, runID uint) (*model.SyncRun, error) {
+	var run model.SyncRun
+	q := d.db.Preload("Steps").Where("id = ?", runID)
+	// taskKey 为空 = 不按任务限定(按 ID 全局查唯一一条)。
+	if taskKey != "" {
+		q = q.Where("task_key = ?", taskKey)
+	}
+	if err := q.First(&run).Error; err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 // FindByIDWithSteps 单条详情查询,加载 Steps 子记录。
 func (d *SyncRunDAO) FindByIDWithSteps(id uint) (*model.SyncRun, error) {
 	var run model.SyncRun

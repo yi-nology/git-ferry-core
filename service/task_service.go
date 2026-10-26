@@ -57,6 +57,17 @@ func (ts *TaskService) ListTasks(ctx context.Context, repoKey string, offset, li
 	return ts.taskDAO.FindAll(page)
 }
 
+// ListTasksFiltered 按仓库与最近一次执行状态过滤任务。
+//
+// status 为空串 = 不按状态过滤(与 ListTasks 等价)。
+func (ts *TaskService) ListTasksFiltered(ctx context.Context, repoKey, status string, offset, limit int) ([]*model.SyncTask, int64, error) {
+	if repoKey == "" && status == "" {
+		return ts.ListTasks(ctx, repoKey, offset, limit)
+	}
+	page := dao.DefaultPagination(offset, limit)
+	return ts.taskDAO.FindFiltered(repoKey, status, page)
+}
+
 // CountTasksByStatus returns task counts grouped by last_status (key "total" = overall).
 func (ts *TaskService) CountTasksByStatus() (map[string]int64, error) {
 	return ts.taskDAO.CountByStatus()
@@ -215,6 +226,16 @@ func (ts *TaskService) PreviewSync(ctx context.Context, req *model.PreviewSyncRe
 func (ts *TaskService) ListHistory(ctx context.Context, taskKey string, offset, limit int) ([]*model.SyncRun, int64, error) {
 	page := dao.DefaultPagination(offset, limit)
 	return ts.runDAO.FindByTaskKey(taskKey, page)
+}
+
+// GetHistoryRun 按执行记录 ID 精确取某一条(带步骤)。
+//
+// taskKey 为空 = 不按任务限定(ID 全局唯一)。
+//
+// 之前只有 ListHistory(按任务翻页)⇒ CLI 的 `history +detail --run-id`
+// 只能"翻页找那条",找不到就静默返回空列表。
+func (ts *TaskService) GetHistoryRun(ctx context.Context, taskKey string, runID uint) (*model.SyncRun, error) {
+	return ts.runDAO.FindByTaskKeyAndRunID(taskKey, runID)
 }
 
 // DeleteHistory deletes a sync run by ID.

@@ -65,6 +65,24 @@ func (d *SyncTaskDAO) FindAll(page Pagination) ([]*model.SyncTask, int64, error)
 	return tasks, total, err
 }
 
+// FindFiltered 按仓库与最近一次执行状态过滤任务(空串=该维度不过滤)。
+//
+// status 匹配的是 `last_status`(最近一次执行的状态),不是"是否启用"。
+// 之前 CLI 的 --status 传过来但服务端没有这个能力 ⇒ 静默返回全量,
+// 用户以为筛过了。
+func (d *SyncTaskDAO) FindFiltered(repoKey, status string, page Pagination) ([]*model.SyncTask, int64, error) {
+	var tasks []*model.SyncTask
+	query := d.db.Model(&model.SyncTask{})
+	if repoKey != "" {
+		query = query.Where("source_repo_key = ? OR target_repo_key = ?", repoKey, repoKey)
+	}
+	if status != "" {
+		query = query.Where("last_status = ?", status)
+	}
+	total, err := Paginate(query, page, &tasks)
+	return tasks, total, err
+}
+
 // CountByStatus 按_last_status 聚合计数,返回 map[status]count;
 // 总数放在 "total" 键。用于面板计数,避免全表加载进内存。
 func (d *SyncTaskDAO) CountByStatus() (map[string]int64, error) {
