@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -60,9 +61,15 @@ func buildVersionCells(runs []*model.MirrorRun) map[string]map[uint]*versionCell
 					}
 				}
 			default:
-				c.state = st.Status
-				c.executedAt = formatTime(run.StartedAt)
-				c.commit, c.tree = st.Commit, st.Tree
+				// **首个即最新**:runs 按 id 倒序 ⇒ 第一次遇到的才是最近一次执行。
+				// 以前是无条件覆盖 ⇒ 最后一次迭代(最旧那条)反而赢了 ⇒
+				// 矩阵报的状态与事实相反(先失败后修好重发 ⇒ 仍报 failed;
+				// 或最近一次被判定 divergent ⇒ 仍报 success)。
+				if c.state == "unpublished" {
+					c.state = st.Status
+					c.executedAt = formatTime(run.StartedAt)
+					c.commit, c.tree = st.Commit, st.Tree
+				}
 			}
 		}
 	}
@@ -105,8 +112,10 @@ func assembleVersionMatrix(mode string, targets []*model.MirrorTarget,
 	for tag := range tagCommits {
 		appendVersion(tag)
 	}
+	// **按版本序排,不是字符串序**:字符串倒序会把 v1.9.0 排在 v1.10.0 前面
+	// (v1.9.0 > v1.10.0 成立)⇒ 矩阵首行不是最新版本,运维按首行判断会拿错版本。
 	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].Tag > versions[j].Tag
+		return mirror.CompareVersions(versions[i].Tag, versions[j].Tag) > 0
 	})
 	return versions
 }

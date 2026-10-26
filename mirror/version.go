@@ -16,6 +16,14 @@ import (
 //   - 解析不了的部分退回字符串比较 —— 宁可行为保守,不要随机。
 //
 // 返回 -1/0/+1(a 小于/等于/大于 b)。
+// CompareVersions 比较两个版本号(tag)的大小:>0 表示 a 更新。
+//
+// 导出给 core 的 service 层用 —— 版本矩阵的排序必须与发布侧同一套语义,
+// 否则矩阵首行不是最新版本(按字符串倒序时 v1.9.0 会排在 v1.10.0 前面)。
+//
+// 非 semver 的 tag 退化成逐段字符串比较(不会 panic)。
+func CompareVersions(a, b string) int { return compareVersions(a, b) }
+
 func compareVersions(a, b string) int {
 	av, apre := splitVersion(a)
 	bv, bpre := splitVersion(b)
