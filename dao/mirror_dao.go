@@ -1,6 +1,8 @@
 package dao
 
 import (
+	"time"
+
 	errors "github.com/cockroachdb/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
@@ -140,3 +142,22 @@ func (d *MirrorRunDAO) HasRunningByChannel(channelID uint) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+// FindStuckRuns 找出卡在进行中(pending/running)且**超过 olderThan** 的执行记录。
+//
+// 时间基准:优先 started_at(真正开跑的时刻),没有 started_at 的 pending 记录
+// 用 created_at(记录创建的时刻)—— pending 说明还没开跑,创建多久了就是卡多久。
+func (d *MirrorRunDAO) FindStuckRuns(olderThan time.Duration) ([]*model.MirrorRun, error) {
+	cutoff := time.Now().Add(-olderThan)
+	var runs []*model.MirrorRun
+	err := d.db.Where(
+		"status IN ? AND (started_at IS NULL AND created_at < ? OR started_at < ?)",
+		[]string{model.MirrorRunPending, model.MirrorRunRunning},
+		cutoff, cutoff,
+	).Find(&runs).Error
+	if err != nil {
+		return nil, errors.Wrap(err, "query stuck mirror runs failed")
+	}
+	return runs, nil
+}
+

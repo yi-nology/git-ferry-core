@@ -183,6 +183,16 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		defer svc.wg.Done()
 		svc.recoverStuckWebhookEvents()
 	})
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.cleanupOldHistory()
+	})
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.recoverStuckMirrorRuns()
+	})
 	svc.startLifecycleJobs()
 
 	return svc, nil
