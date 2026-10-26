@@ -24,7 +24,24 @@ const (
 	TriggerManual  = "manual"
 	TriggerCron    = "cron"
 	TriggerWebhook = "webhook"
+	// TriggerRebuild 全量重建:执行前**清空任务工作目录**,强制从源重新克隆。
+	TriggerRebuild = "rebuild"
+	// TriggerAIRebuild AI 侧发起的全量重建,语义与 TriggerRebuild 相同。
+	//
+	// 它单独列一个常量而不是复用 TriggerRebuild,是为了让 run 记录里
+	// 保留"是谁发起的"这一维(运维要能区分人工重建和 AI 重建)。
+	TriggerAIRebuild = "ai_rebuild"
 )
+
+// IsRebuildTrigger 判断该触发器语义是否为"全量重建"(清 workdir + 重克隆)。
+//
+// **这是 rebuild 语义的唯一事实源**:清工作目录这件事必须由 core 在
+// 拿到执行权之后做,不能由调用方各自去删 ——
+// 调用方在拿到执行权之前删,会和正在跑的同步抢同一个目录
+// (workdir 是按 taskKey 共享的),把跑着的同步的工作树删掉。
+func IsRebuildTrigger(trigger string) bool {
+	return trigger == TriggerRebuild || trigger == TriggerAIRebuild
+}
 
 // Webhook rule action constants
 const (

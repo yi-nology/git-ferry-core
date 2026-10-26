@@ -17,6 +17,15 @@ func (s *Service) ListTasks(ctx context.Context, repoKey string, offset, limit i
 	return s.tasks.ListTasks(ctx, repoKey, offset, limit)
 }
 
+// ListTasksFiltered 按仓库与最近一次执行状态过滤任务(status 空串=不过滤)。
+//
+// 存在的理由:CLI 的 `task +list --status` 一直在发这个过滤条件,
+// 但服务端没有对应能力 ⇒ hertz 静默忽略未知 query 参数 ⇒
+// 用户拿到全量却以为筛过了(契约漂移表现成"过滤没用")。
+func (s *Service) ListTasksFiltered(ctx context.Context, repoKey, status string, offset, limit int) ([]*model.SyncTask, int64, error) {
+	return s.tasks.ListTasksFiltered(ctx, repoKey, status, offset, limit)
+}
+
 // GetTask returns a sync task by key.
 func (s *Service) GetTask(ctx context.Context, key string) (*model.SyncTask, error) {
 	return s.tasks.GetTask(ctx, key)
@@ -121,6 +130,11 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 	async.GoSafe(func() {
 		defer s.wg.Done()
 		defer release()
+		// rebuild 语义:拿到执行权之后再清工作目录(见 service/rebuild.go)。
+		if err := s.runWithRebuildPrep(taskKey, trigger); err != nil {
+			slog.Error("rebuild: 清空工作目录失败,本次执行中止", "task", taskKey, "error", err)
+			return
+		}
 		run, err := s.executor.Execute(s.bgCtx, task, trigger, webhookEventID)
 		if err != nil {
 			// 结果已落 run 记录,这里仅留痕
@@ -165,6 +179,10 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 
 	run, execErr := func() (*model.SyncRun, error) {
 		defer release()
+		// rebuild 语义:拿到执行权之后再清工作目录(见 service/rebuild.go)。
+		if err := s.runWithRebuildPrep(taskKey, trigger); err != nil {
+			return nil, err
+		}
 		return s.executor.Execute(ctx, task, trigger, webhookEventID)
 	}()
 	s.emitRunCompleted(taskKey, trigger, run, execErr)
@@ -200,6 +218,14 @@ func (s *Service) PreviewSync(ctx context.Context, req *model.PreviewSyncRequest
 // ListHistory returns a paginated list of sync run history.
 func (s *Service) ListHistory(ctx context.Context, taskKey string, offset, limit int) ([]*model.SyncRun, int64, error) {
 	return s.tasks.ListHistory(ctx, taskKey, offset, limit)
+}
+
+// GetSyncRunByID 按执行记录 ID 精确取某一条(带步骤)。
+//
+// 命名说明:不叫 GetHistoryRun —— 那个名字已经被**历史同步通道**的
+// GetHistoryRun(ctx, id) 占了(两套完全不同的东西)。
+func (s *Service) GetSyncRunByID(ctx context.Context, taskKey string, runID uint) (*model.SyncRun, error) {
+	return s.tasks.GetHistoryRun(ctx, taskKey, runID)
 }
 
 // DeleteHistory deletes a sync run by ID.
