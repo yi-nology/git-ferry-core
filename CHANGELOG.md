@@ -2,6 +2,62 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.30.0] - 2026-10-26
+
+### Changed
+
+- **抬 `go-git-platform` 至 v0.99.7**：
+  - **v0.99.7**：跨 host 重定向**泄漏 URL query 里的凭据**（go-gitee 的
+    `tokenTransport` 把令牌放 `access_token` 且每跳都重加 ⇒ 平台 302 到 CDN
+    时令牌发给第三方主机）—— 本仓 `service/metadata_service.go` 的 GetArchive
+    走的正是会被 302 的归档端点；Gitee 归档下载 100% 失败；Gitee / GitCode
+    文件内容返回 base64 串；`ListCRs` 零值 State 在 giteafamily / Gitee /
+    GitCode 被当成「只看 open」。
+
+### Fixed
+
+- **rebuild 语义下沉到 core**：清工作目录必须在**拿到执行权之后**做。
+  ① 壳层 `POST /api/v1/ops/rebuild` 原来「先删目录、再受理」—— 任务正在跑时
+  目录已经被删（跑着的工作树被删 ⇒ 那次同步必炸），受理又因 `ErrTaskRunning`
+  失败 ⇒ 净效果是「把活着的同步搞死，重建还没排上」；② MCP 的 `rebuild_task`
+  描述写「清空工作目录并全量重建」，实现却只是重新触发一次同步 ⇒
+  **workdir 损坏 / 浅克隆永远修不了**；③ rebuild 语义没有唯一事实源。
+  修法：`model.IsRebuildTrigger` 是唯一事实源，core 在拿到执行权后清目录，
+  抢不到执行权就一步都不动；壳层不再自己删目录。
+- **卡在进行中的镜像执行永不回收 ⇒ 通道永久占用**：`HasRunningByChannel` 只是
+  跨进程兜底，DB 里的**僵尸 run**（进程被 SIGKILL / 崩溃 / OOM 杀掉）没人回收
+  ⇒ 状态永远停在 `pending|running` ⇒ 该通道**永久**报「该通道有执行中的任务」，
+  再也无法触发任何发布 / 校验，历史里也看不出「这次没跑完」。
+  修法：新增 `RecoverStuckMirrorRuns` + 周期任务（10 分钟一轮，阈值 1 小时，
+  不误伤长任务）。
+- **版本矩阵取最旧一次执行**：归并时按 run id 正序遍历并覆盖写 ⇒ 同一个
+  (tag,target) 的最终状态是**最早**那次执行的结果 ⇒ 运维按矩阵判断
+  「这个版本发过没有」会拿错。修法：runs 按 id 倒序，首个即最新。
+- **版本矩阵的 tag 用字符串序排序**：字符串倒序会把 `v1.9.0` 排在 `v1.10.0`
+  前面 ⇒ 首行不是最新版本。修法：导出 `mirror.CompareVersions`，按**版本序**排。
+- **verify 列永远 unverified**：`VerifyMirrorTargetVersion` 建 run 时不写
+  `TagStatuses` ⇒ 矩阵只从 `run.TagStatuses` 取行级结果 ⇒ 连这一行都没有，
+  验证成功了也看不到。修法：写入 `TagStatuses`（并修正 `Tags` 字段：它是
+  逗号分隔的 tag 列表，不是 JSON 数组）。
+- **第 2 个及以后的镜像通道复用 `channel-0` 目录 ⇒ 永远发不出去**：
+  `CreateMirrorChannel` 原来「先 clone 再落库」⇒ 建通道时 `ch.ID` 必为 0 ⇒
+  工作目录键 `mirror/channel-<ID>` 对**所有**通道都是 `mirror/channel-0/repo`
+  ⇒ 第 2 个通道拿到的是**上一个通道的克隆** ⇒ 源 module 身份记成 A 的
+  ⇒ 之后发布时身份校验必然不通过。修法：先落库拿真实 ID 再拉源仓库
+  （失败回滚，不留半成品通道）。
+
+### Added
+
+- **任务列表支持 `status` 过滤、执行历史支持按 `run_id` 精确查**：
+  壳层 CLI 的 `task +list --status` / `history +detail --run-id` 一直在发这些
+  参数，但契约里没有 ⇒ hertz 静默忽略 ⇒ **用户以为筛过了、拿到的却是全量**。
+  新增 `Service.ListTasksFiltered`（按 `last_status`）与
+  `Service.GetSyncRunByID`（按执行记录 ID 精确取，带步骤）。
+- **执行历史按保留期清理**：`CleanupOldData`（清 webhook 事件 / 同步运行 /
+  运行步骤）写好了却**从未被调用** ⇒ 三张表随运行次数无限增长（现网两个月
+  已有 92 次运行 / 355 条步骤）。新增 `sync.history_retention_days` 配置
+  （天，0=不清理）+ 周期任务（6 小时一轮）。
+
 ## [v0.29.0] - 2026-10-25
 
 ### Changed
