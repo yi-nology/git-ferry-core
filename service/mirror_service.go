@@ -304,6 +304,26 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		}
 		ch.ScrubRules = string(raw)
 	}
+	// **先落库拿真实 ID,再拉源仓库**。
+	//
+	// 以前是"先 clone 再落库" ⇒ 建通道时 ch.ID 必为 0 ⇒
+	// ① 工作目录键是 `mirror/channel-<ID>` ⇒ **所有通道共用 mirror/channel-0/repo**
+	//    ⇒ 第 2 个通道拿到的是**上一个通道的克隆** ⇒ 只对 origin(A) 做增量 fetch、
+	//    从不克隆 B ⇒ 源 module 身份记成 A 的 ⇒ 该通道之后**永远发不出去**
+	//    (发布时的身份校验必然不通过);
+	// ② 跨实例锁键同样是 mirror-channel-0 ⇒ 并发建通道互相误报"忙碌"。
+	//
+	// 落库后任何失败都回滚(不留半成品通道)。
+	if err := m.channels.Create(ch); err != nil {
+		return nil, errors.Wrap(err, "create mirror channel failed")
+	}
+	rollback := true
+	defer func() {
+		if rollback {
+			_ = m.channels.Delete(ch.ID)
+		}
+	}()
+
 	if in.Mode == model.MirrorModePublish {
 		dir, cleanup, err := m.ensureRepo(ctx, ch)
 		if err != nil {
@@ -314,17 +334,18 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		if err != nil {
 			return nil, fmt.Errorf("读取源仓库 go.mod 失败: %w", err)
 		}
+		// module 是建通道时从克隆里读出来的 ⇒ 回写
+		if err := m.channels.Update(ch); err != nil {
+			return nil, errors.Wrap(err, "update mirror channel failed")
+		}
 	}
 
-	if err := m.channels.Create(ch); err != nil {
-		return nil, errors.Wrap(err, "create mirror channel failed")
-	}
 	for i := range in.Targets {
 		if _, err := m.createTarget(ch, &in.Targets[i]); err != nil {
-			_ = m.channels.Delete(ch.ID)
 			return nil, err
 		}
 	}
+	rollback = false
 	return m.GetMirrorChannel(ch.ID)
 }
 
@@ -972,9 +993,16 @@ func (m *MirrorService) VerifyMirrorTargetVersion(ctx context.Context, channelID
 		ChannelID: channelID,
 		TargetID:  targetID,
 		Kind:      model.MirrorKindVerify,
-		Tags:      `"` + tag + `"`,
-		Status:    model.MirrorRunSuccess,
-		Report:    marshalJSON(map[string]string{"module": t.TargetModule, "version": tag}),
+		// Tags 是**逗号分隔的 tag 列表**(不是 JSON 数组)⇒ 直接写 tag 本体。
+		Tags: tag,
+		// **TagStatuses 必须写**:版本矩阵只从 run.TagStatuses 取行级结果
+		// (verify 列也从这里来)⇒ 不写 ⇒ 矩阵里连这一行都没有,
+		// verify 列永远停在 unverified(验证成功了也看不到)。
+		TagStatuses: marshalJSON(map[string]model.TagStatus{
+			tag: {Tag: tag, Status: model.MirrorRunSuccess, Detail: "module 身份校验通过"},
+		}),
+		Status: model.MirrorRunSuccess,
+		Report: marshalJSON(map[string]string{"module": t.TargetModule, "version": tag}),
 	}
 	now := time.Now()
 	run.StartedAt, run.FinishedAt = &now, &now
