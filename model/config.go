@@ -121,6 +121,12 @@ type SyncConfig struct {
 	// BackupRemotes 额外备份远端（GitHub/GitLab 等），同步成功后 push 镜像副本。
 	// 与「镜像中心开源发布」区分：此处不改写 module 身份，纯备份。
 	BackupRemotes []BackupRemoteConfig `yaml:"backup_remotes"`
+	// HistoryRetentionDays 执行历史（webhook 事件 / 同步运行 / 运行步骤）保留天数。
+	// 0=不按天清理（默认）。非 0 时由后台周期任务按天清理过期数据。
+	//
+	// **为什么需要它**：这三张表此前**没有任何清理入口** ⇒ 随运行次数无限增长
+	// （现网两个月已有 92 次运行 / 355 条步骤）。
+	HistoryRetentionDays int `yaml:"history_retention_days" env:"GIT_SYNC_HISTORY_RETENTION_DAYS"`
 }
 
 // BackupRemoteConfig 备份远端（git push）。

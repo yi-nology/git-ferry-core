@@ -25,6 +25,13 @@ func setupWebhookServiceTestDB(t *testing.T) (*gorm.DB, *WebhookService) {
 	if err := db.AutoMigrate(&model.WebhookRule{}, &model.WebhookRuleTask{}, &model.WebhookEvent{}, &model.Repo{}); err != nil {
 		t.Fatalf("failed to migrate test db: %v", err)
 	}
+	// sqlite ":memory:" 每个连接是独立库 ⇒ 强制单连接,否则写入与读取可能落在不同库上
+	// (表现为"单跑通过、全量跑失败"的偶发失败)。
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get underlying db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 
 	ruleDAO := dao.NewWebhookRuleDAO(db)
 	eventDAO := dao.NewWebhookEventDAO(db)

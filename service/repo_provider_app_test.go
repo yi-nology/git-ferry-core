@@ -65,6 +65,10 @@ func TestResolveRepoProvider_GitHubAppOnlyPlatform(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Platform{}, &model.Repo{}))
+	// sqlite ":memory:" 每个连接是独立库 ⇒ 强制单连接
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
 
 	repoDAO, err := dao.NewRepoDAO(db)
 	require.NoError(t, err)

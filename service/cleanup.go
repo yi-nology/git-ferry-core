@@ -78,6 +78,37 @@ func (s *Service) recoverStuckWebhookEvents() {
 	}).Wait()
 }
 
+// cleanupOldHistory 周期清理过期的执行历史(webhook 事件 / 同步运行 / 运行步骤)。
+//
+// 这三张表此前**没有任何清理入口**(`CleanupOldData` 写好了却没人调)
+// ⇒ 随运行次数无限增长(现网两个月已有 92 次运行 / 355 条步骤)。
+//
+// 保留期由 `sync.history_retention_days` 配置(0=不清理,默认)。
+// 用 oekit concurrency/loop:自带 panic 隔离与 ctx 取消退出。
+func (s *Service) cleanupOldHistory() {
+	const interval = 6 * time.Hour
+	loop.Run(s.bgCtx, loop.Config{
+		Interval:   interval,
+		FirstDelay: interval,
+		Name:       "cleanup-old-history",
+	}, func(ctx context.Context) {
+		maxAge := s.historyRetention()
+		if maxAge <= 0 {
+			return
+		}
+		events, runs, steps, err := s.CleanupOldData(ctx, maxAge)
+		if err != nil {
+			slog.Error("清理过期执行历史失败", "error", err)
+			return
+		}
+		if events+runs+steps > 0 {
+			slog.Info("已清理过期执行历史",
+				"events", events, "runs", runs, "steps", steps,
+				"retention", maxAge)
+		}
+	}).Wait()
+}
+
 // cleanupTriggerTimes 周期清理过期的触发时间缓存。
 // 用 oekit concurrency/loop:自带 panic 隔离(单轮失败只记日志,不中断循环)
 // 与 ctx 取消退出(随 bgCancel 收敛),不再自维护 ticker + stop channel。
@@ -96,4 +127,15 @@ func (s *Service) cleanupTriggerTimes() {
 			return true
 		})
 	}).Wait()
+}
+
+// historyRetention 执行历史的保留期(0 = 不清理)。
+//
+// 由 `sync.history_retention_days` 配置决定(天)。
+func (s *Service) historyRetention() time.Duration {
+	cfg := s.GetConfig()
+	if cfg == nil || cfg.Sync.HistoryRetentionDays <= 0 {
+		return 0
+	}
+	return time.Duration(cfg.Sync.HistoryRetentionDays) * 24 * time.Hour
 }
