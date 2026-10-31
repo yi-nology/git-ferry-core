@@ -158,8 +158,8 @@ github.com/next-bin/go-gitee v0.0.0-20260521141902-36ce436eee18 h1:hMf3u2RMBoIjR
 github.com/next-bin/go-gitee v0.0.0-20260521141902-36ce436eee18/go.mod h1:GvqteloYLLcJ0N3W6n+qNQXV/voE1Vuo3x7o/5H8EqM=
 github.com/oekit/concurrency v0.22.0 h1:0daVHV1pEnbFoKGxxAvCpqj6RbUi4+/W6QwwLvTlLRA=
 github.com/oekit/concurrency v0.22.0/go.mod h1:lwbExjpKR1eWmT0qAQr0hUcEw/IzpMdkcPSsJvNFmV0=
-github.com/oekit/logx v0.7.1 h1:u+AbbPn0iCnzt11brLXpfj+2CIQhThFEsAwBDXzAfyE=
-github.com/oekit/logx v0.7.1/go.mod h1:mU3HRko52yW+XVuJD5ZtiND5zIbBAIZ23Yhu+Mqzy/Q=
+github.com/oekit/logx v0.8.0 h1:S0KQOiI6h4GGktsv0fl1KtHBcOGZZgj6M6cUCLRk41E=
+github.com/oekit/logx v0.8.0/go.mod h1:mU3HRko52yW+XVuJD5ZtiND5zIbBAIZ23Yhu+Mqzy/Q=
 github.com/oekit/pkg v0.28.0 h1:I3zrO2keJri8a4/h8Up8gHHUYOzktlQqjKtf+yOK3wo=
 github.com/oekit/pkg v0.28.0/go.mod h1:sVeOtmG1sLY2aSnzFIbUAF2Qoh7G8R5vnWtWmLCv8NM=
 github.com/oekit/redisx v0.10.4 h1:wXMCOTe4YDz1VIV0U+1d6khODcVoKEldeO1XapMSQYs=
