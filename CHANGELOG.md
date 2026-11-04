@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.31.0] - 2026-11-05
+
+### Changed
+
+- **错误构造全面统一到 oekit `pkg/errors`**（对齐 go-git-platform v0.108.0 的「容忍区取消」口径）：
+  - 39 个文件 262 处 `fmt.Errorf` 全量迁移 `oekiterrors.Errorf`（同型替换，nil-safe 为增益）；
+  - 27 个文件 250+ 处 `cockroachdb/errors` 别名全量收编：`Wrap`/`New`/`Is`/`As`/`Errorf` 同名迁移，
+    `Newf` → `Errorf`（同签名）、`Wrapf` → `Wrap` + `fmt.Sprintf`（等语义改写）；
+    `go.mod` 里 **cockroachdb 直接依赖清零**（依赖面 -1）；
+  - 错误文本形状基本不变（Wrap 无 kv 时 `msg: cause` 同型）；`errors.Join` 等标准库用法不受影响。
+- **依赖地板追最新发布**（2026-11-04 前后的上游一轮发布潮）：
+  oekit concurrency v0.23.4（gopool Close 竞态 / singleflight DoChan Forget 竞态 / budget 溢出修复）、
+  logx v0.8.2、pkg v0.33.0（v0.29.0 的 `Errorf("%w")` 空报文吞错修复上浮）、redisx v0.11.0
+  （BREAKING：`Pipeline()` 返回类型变更——本仓无调用面，零影响）、
+  go-git-platform v0.99.7 → v0.108.0。
+
 ## [v0.30.0] - 2026-10-26
 
 ### Changed
