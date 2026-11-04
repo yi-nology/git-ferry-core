@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.31.1] - 2026-11-05
+
+### Fixed
+
+- **清偿 20 项 CI lint 债**（golangci-lint v2.15.0 首次在 CI 以默认集跑出，随 v0.31.0 tag 暴露）：
+  - `errcheck`：`writeSnapshotPart` 的 5 处 fire-and-forget 调用显式 `_ =`
+    （函数内部已聚合错误到 `snap.Warnings/writeErr`，忽略返回值是设计意图）；
+    测试里 4 处 `svc.ApplyRules` 同款。
+  - `unused`：删除 6 个死符号——`inferTaskFromBundle`（自述废弃）、
+    `gitLsRemote`、`fetchDriftSource`（被 `fetchDriftBothSides` 取代的旧实现）、
+    `countPullRequests`/`withoutPullRequests`、测试字段 `wantConflict`、
+    测试常量 `githubPushBody`；顺带把漂移预算注释里的旧函数引用改为
+    `fetchDriftBothSides`。
+  - `staticcheck`/`ineffassign`：并查集闭包声明合并、两处 De Morgan 化简、
+    `tx.Config.NowFunc` 嵌入字段化简、`WriteString(Sprintf)` → `Fprintf`、
+    `service.go` 里表存储化后失效的 `tplPath` 死赋值清理。
+
 ## [v0.31.0] - 2026-11-05
 
 ### Changed

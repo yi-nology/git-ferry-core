@@ -314,16 +314,6 @@ func resolveBundleTaskKey(name string, known map[string]string) string {
 	return base
 }
 
-// inferTaskFromBundle 已废弃:从文件名反推任务 key 不可靠(见 resolveBundleTaskKey)。
-func inferTaskFromBundle(name string) string {
-	base := strings.TrimSuffix(name, ".bundle")
-	parts := strings.Split(base, "-")
-	if len(parts) >= 3 {
-		return parts[0]
-	}
-	return "unknown"
-}
-
 func humanSeconds(sec int64) string {
 	if sec < 0 {
 		return "n/a"

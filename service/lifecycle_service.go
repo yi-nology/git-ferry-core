@@ -125,7 +125,7 @@ type DriftReport struct {
 
 // DriftDetectBudget 漂移检测的**总**预算。
 //
-// 每个漂移任务都要 fetch 一次源端才能算出 ahead/behind(见 fetchDriftSource),
+// 每个漂移任务都要 fetch 两端才能算出 ahead/behind(见 fetchDriftBothSides),
 // 耗时与"漂移任务数 × 单次 fetch 耗时"成正比。上游慢、任务多时(200 个漂移任务
 // × 30s 拨号超时)整轮能跑到几十分钟,而调用方(HTTP/健康评分)早超时了 ——
 // 服务端还在空转。
@@ -465,49 +465,6 @@ func gitRevParse(ctx context.Context, dir, ref string) string {
 		return ""
 	}
 	return strings.TrimSpace(sha)
-}
-
-func gitLsRemote(ctx context.Context, dir, remote, ref string) string {
-	out, err := runGitQuiet(ctx, dir, "ls-remote", remote, ref)
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(strings.TrimSpace(out))
-	if len(fields) >= 2 {
-		return fields[0]
-	}
-	return ""
-}
-
-// fetchDriftSource 把源端分支 fetch 到工作区,让 ahead/behind 能算出来。
-//
-// 为什么要 fetch:rev-list --count <shaA>..<shaB> 要求两个 sha 都在本地对象库里;
-// 远端(ls-remote 拿到的)那个 sha 若没被 fetch 过,命令直接失败 ⇒
-// ahead/behind 只能报"未知"。
-//
-// 必须带凭证:源仓可能是私有仓,裸 git fetch 会 401。
-func (s *Service) fetchDriftSource(ctx context.Context, gitDir string, t *model.SyncTask) error {
-	backend := lifecycleBackend()
-	if backend == nil {
-		return oekiterrors.New("git backend 不可用")
-	}
-	repo, err := s.GetRepoByKey(t.SourceRepoKey)
-	if err != nil || repo == nil {
-		return oekiterrors.New("源仓记录不存在")
-	}
-	var p *model.Platform
-	if repo.PlatformID > 0 {
-		if got, gerr := s.GetPlatformByID(ctx, repo.PlatformID); gerr == nil {
-			p = got
-		}
-	}
-	_, err = backend.Fetch(ctx, gitbackend.FetchOptions{
-		RepoPath: gitDir,
-		Remote:   "origin",
-		Branches: []string{t.SourceBranch},
-		Auth:     executor.BuildRepoAuth(repo, p),
-	})
-	return err
 }
 
 // revListCounts 统计 a/b 两端各自独有的提交数。

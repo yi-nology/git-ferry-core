@@ -23,12 +23,6 @@ import (
 	_ "github.com/yi-nology/go-git-platform/backends/all"
 )
 
-// githubPushBody 一条最小的 GitHub push 载荷。
-const githubPushBody = `{"ref":"refs/heads/main","before":"1111111111111111111111111111111111111111",` +
-	`"after":"2222222222222222222222222222222222222222",` +
-	`"repository":{"id":1,"full_name":"octo/demo"},` +
-	`"sender":{"id":2,"login":"tester"},"commits":[]}`
-
 // githubSign GitHub 的 X-Hub-Signature-256 头格式:sha256=<hex(hmac-sha256(body, secret))>。
 func githubSign(secret, body string) string {
 	mac := hmac.New(sha256.New, []byte(secret))

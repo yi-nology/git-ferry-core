@@ -294,7 +294,7 @@ func (s *Service) collectLabelsMilestones(ctx context.Context, prov sdkprov.Prov
 		if lerr != nil {
 			snap.Warnings = append(snap.Warnings, "labels: "+lerr.Error())
 		} else {
-			writeSnapshotPart(snap, "labels.json", labels)
+			_ = writeSnapshotPart(snap, "labels.json", labels)
 			snap.Counts["labels"] = int32(len(labels))
 		}
 	}
@@ -303,7 +303,7 @@ func (s *Service) collectLabelsMilestones(ctx context.Context, prov sdkprov.Prov
 		if merr != nil {
 			snap.Warnings = append(snap.Warnings, "milestones: "+merr.Error())
 		} else {
-			writeSnapshotPart(snap, "milestones.json", ms)
+			_ = writeSnapshotPart(snap, "milestones.json", ms)
 			snap.Counts["milestones"] = int32(len(ms))
 		}
 	}
@@ -361,7 +361,7 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 			iss.CommentList = comments
 		}
 	}
-	writeSnapshotPart(snap, "issues.json", issues)
+	_ = writeSnapshotPart(snap, "issues.json", issues)
 	snap.Counts["issues"] = int32(len(issues))
 }
 
@@ -370,29 +370,6 @@ func (s *Service) collectIssues(ctx context.Context, prov sdkprov.Provider, repo
 // 平台不支持按 updated 排序时,只能靠多扫几页来覆盖"被改过的老 issue";
 // 放大倍数越大越全,但 API 调用也越多。
 const incrementalScanFactor = 10
-
-// countPullRequests 数一数里有多少条其实是 PR。
-func countPullRequests(issues []*issueRow) int {
-	n := 0
-	for _, iss := range issues {
-		if iss != nil && iss.IsPullRequest {
-			n++
-		}
-	}
-	return n
-}
-
-// withoutPullRequests 去掉 PR,只留真正的 issue。
-func withoutPullRequests(issues []*issueRow) []*issueRow {
-	out := issues[:0]
-	for _, iss := range issues {
-		if iss != nil && iss.IsPullRequest {
-			continue
-		}
-		out = append(out, iss)
-	}
-	return out
-}
 
 // filterIssuesSince 仅保留 UpdatedAt >= since(RFC3339) 的 issue。
 func filterIssuesSince(issues []*issueRow, since string) []*issueRow {
@@ -451,7 +428,7 @@ func (s *Service) collectPullRequests(ctx context.Context, prov sdkprov.Provider
 	if maxItems > 0 && len(all) > maxItems {
 		all = all[:maxItems]
 	}
-	writeSnapshotPart(snap, "pull_requests.json", all)
+	_ = writeSnapshotPart(snap, "pull_requests.json", all)
 	snap.Counts["pull_requests"] = int32(len(all))
 }
 
@@ -510,7 +487,7 @@ func (s *Service) collectReleases(ctx context.Context, prov sdkprov.Provider, re
 	if len(rels) > maxItems {
 		rels = rels[:maxItems]
 	}
-	writeSnapshotPart(snap, "releases.json", rels)
+	_ = writeSnapshotPart(snap, "releases.json", rels)
 	snap.Counts["releases"] = int32(len(rels))
 	return rels
 }

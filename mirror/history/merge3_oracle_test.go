@@ -64,8 +64,6 @@ type diff3Case struct {
 	base   string
 	ours   string
 	theirs string
-	// wantConflict 为期望的冲突块数;-1 表示不校验(只比内容)。
-	wantConflict int
 }
 
 func TestMerge3AgainstGitOracle(t *testing.T) {

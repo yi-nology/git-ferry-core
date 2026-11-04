@@ -782,8 +782,8 @@ func gateFailureDetail(g GateReport) string {
 		b.WriteString("\n类型检查:" + g.TypeCheckErr)
 	}
 	if len(g.GofmtViolations) > 0 {
-		b.WriteString(fmt.Sprintf("\ngofmt 违规 %d 个文件:%s",
-			len(g.GofmtViolations), strings.Join(g.GofmtViolations, ", ")))
+		fmt.Fprintf(&b, "\ngofmt 违规 %d 个文件:%s",
+			len(g.GofmtViolations), strings.Join(g.GofmtViolations, ", "))
 	}
 	return b.String()
 }
@@ -1907,7 +1907,7 @@ func isCommitHash(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}

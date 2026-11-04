@@ -257,8 +257,7 @@ func buildRegions(base, ours, theirs []string) []diffRegion {
 	for i := range parent {
 		parent[i] = i
 	}
-	var find func(int) int
-	find = func(x int) int {
+	find := func(x int) int {
 		for parent[x] != x {
 			parent[x] = parent[parent[x]]
 			x = parent[x]
@@ -396,7 +395,7 @@ func pairAsSameInsertion(base []string, a, b diffRegion) (diffRegion, bool) {
 	aTheirsOnly := a.TheirsChanged && !a.OursChanged
 	bOursOnly := b.OursChanged && !b.TheirsChanged
 	bTheirsOnly := b.TheirsChanged && !b.OursChanged
-	if !((aOursOnly && bTheirsOnly) || (aTheirsOnly && bOursOnly)) {
+	if (!aOursOnly || !bTheirsOnly) && (!aTheirsOnly || !bOursOnly) {
 		return diffRegion{}, false
 	}
 	// base 位置要近。

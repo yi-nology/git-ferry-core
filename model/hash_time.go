@@ -61,8 +61,8 @@ func HashTimeStringPtr(t *time.Time) string {
 
 // nowFunc 取数据库层的时间源(测试可替换)。
 func nowFunc(tx *gorm.DB) time.Time {
-	if tx != nil && tx.Config != nil && tx.Config.NowFunc != nil {
-		return tx.Config.NowFunc()
+	if tx != nil && tx.Config != nil && tx.NowFunc != nil {
+		return tx.NowFunc()
 	}
 	return time.Now()
 }

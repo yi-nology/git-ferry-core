@@ -128,11 +128,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	}
 	svc.guard = guard
 
-	// 同步策略模板库：表存储（templates）；旧 data/templates.json 空表时一次性导入。
-	tplPath := cfg.Templates.Path
-	if tplPath == "" {
-		tplPath = "data/templates.json"
-	}
+	// 同步策略模板库：表存储（templates）；旧 data/templates.json 仅作历史迁移源。
 	svc.templates = &dbTemplateStore{dao: daos.template}
 
 	// force-push 审批：表存储（force_push_approvals）。

@@ -496,7 +496,7 @@ func TestWebhookService_ApplyRules(t *testing.T) {
 
 	// Apply rules
 	lastTriggerTime := &sync.Map{}
-	svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
+	_ = svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
 
 	// Verify task was executed
 	if len(executedTasks) != 1 {
@@ -558,7 +558,7 @@ func TestWebhookService_ApplyRules_DisabledRule(t *testing.T) {
 
 	// Apply rules
 	lastTriggerTime := &sync.Map{}
-	svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
+	_ = svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
 
 	// Verify no tasks were executed
 	if len(executedTasks) != 0 {
@@ -612,7 +612,7 @@ func TestWebhookService_ApplyRules_WrongEventType(t *testing.T) {
 
 	// Apply rules
 	lastTriggerTime := &sync.Map{}
-	svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
+	_ = svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
 
 	// Verify no tasks were executed
 	if len(executedTasks) != 0 {
@@ -666,7 +666,7 @@ func TestWebhookService_ApplyRules_WrongBranch(t *testing.T) {
 
 	// Apply rules
 	lastTriggerTime := &sync.Map{}
-	svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
+	_ = svc.ApplyRules(ctx, "test-repo", event, lastTriggerTime, runTaskFn, nil)
 
 	// Verify no tasks were executed
 	if len(executedTasks) != 0 {
