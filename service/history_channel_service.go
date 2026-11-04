@@ -15,6 +15,7 @@ import (
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/syncx"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -169,7 +170,7 @@ func (h *HistoryService) lockChannel(ctx context.Context, chID uint) (func(), er
 			ownerID = id
 		case errors.Is(lerr, distlock.ErrLockNotAcquired):
 			releaseLocal()
-			return func() {}, fmt.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
+			return func() {}, oekiterrors.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
 		default:
 			// redis 抖动:降级为进程内互斥,不阻断操作。
 			slog.Warn("history: 抢跨实例锁失败,降级为进程内互斥", "channel", chID, "error", lerr)
@@ -188,17 +189,17 @@ func (s *Service) History() *HistoryService {
 // CreateHistoryChannel 新建历史同步通道。
 func (h *HistoryService) CreateHistoryChannel(_ context.Context, in HistoryChannelInput) (*HistoryChannelDTO, error) {
 	if strings.TrimSpace(in.Name) == "" {
-		return nil, fmt.Errorf("通道名不能为空")
+		return nil, oekiterrors.Errorf("通道名不能为空")
 	}
 	if strings.TrimSpace(derefStr(in.ModuleSource)) == "" ||
 		strings.TrimSpace(derefStr(in.ModuleTarget)) == "" {
-		return nil, fmt.Errorf("module_source 与 module_target 都不能为空(身份改写是历史同步的前提)")
+		return nil, oekiterrors.Errorf("module_source 与 module_target 都不能为空(身份改写是历史同步的前提)")
 	}
 	if derefStr(in.SourceRepoKey) == "" && derefStr(in.SourceDir) == "" {
-		return nil, fmt.Errorf("source_repo_key 与 source_dir 至少给一个")
+		return nil, oekiterrors.Errorf("source_repo_key 与 source_dir 至少给一个")
 	}
 	if derefStr(in.TargetRepoKey) == "" && derefStr(in.TargetDir) == "" {
-		return nil, fmt.Errorf("target_repo_key 与 target_dir 至少给一个")
+		return nil, oekiterrors.Errorf("target_repo_key 与 target_dir 至少给一个")
 	}
 	// 本地路径直连必须先过路径闸门(见 validateHistoryRepoDir)。
 	if err := validateHistoryRepoDir(derefStr(in.SourceDir), "source_dir"); err != nil {
@@ -210,7 +211,7 @@ func (h *HistoryService) CreateHistoryChannel(_ context.Context, in HistoryChann
 	if existing, err := h.channels.FindByName(in.Name); err != nil {
 		return nil, err
 	} else if existing != nil {
-		return nil, fmt.Errorf("通道名已存在: %s", in.Name)
+		return nil, oekiterrors.Errorf("通道名已存在: %s", in.Name)
 	}
 
 	if err := validatePathRules(in.PathRules); err != nil {
@@ -299,7 +300,7 @@ func (h *HistoryService) updateHistoryChannel(id uint, in HistoryChannelInput) (
 	}
 	// 身份映射不能被更新请求抹掉(抹掉就没有任何改写规则了)。
 	if strings.TrimSpace(ch.ModuleSource) == "" || strings.TrimSpace(ch.ModuleTarget) == "" {
-		return nil, fmt.Errorf("module_source 与 module_target 不能为空(身份改写是历史同步的前提)")
+		return nil, oekiterrors.Errorf("module_source 与 module_target 不能为空(身份改写是历史同步的前提)")
 	}
 	// 本地路径直连必须先过路径闸门。
 	if err := validateHistoryRepoDir(ch.SourceDir, "source_dir"); err != nil {
@@ -409,10 +410,10 @@ func (h *HistoryService) CreateHistoryTarget(_ context.Context, channelID uint, 
 		return nil, err
 	}
 	if strings.TrimSpace(in.Name) == "" {
-		return nil, fmt.Errorf("目标名不能为空")
+		return nil, oekiterrors.Errorf("目标名不能为空")
 	}
 	if strings.TrimSpace(in.RepoURL) == "" {
-		return nil, fmt.Errorf("目标地址不能为空")
+		return nil, oekiterrors.Errorf("目标地址不能为空")
 	}
 	// 目标名在通道内必须唯一:推送时按名字定位目标/凭据,同名会让"推给谁"
 	// 变得不确定(历史上确实出现过凭据串号)。
@@ -423,7 +424,7 @@ func (h *HistoryService) CreateHistoryTarget(_ context.Context, channelID uint, 
 	}
 	for _, t := range existing {
 		if t.Name == name {
-			return nil, fmt.Errorf("通道 %d 已存在同名目标 %q:目标名必须唯一", channelID, name)
+			return nil, oekiterrors.Errorf("通道 %d 已存在同名目标 %q:目标名必须唯一", channelID, name)
 		}
 	}
 	credType, credential, username, err := h.encryptCredential(in)
@@ -506,7 +507,7 @@ func (h *HistoryService) encryptCredential(in HistoryTargetInput) (credType, enc
 		return credType, "", "", nil
 	case model.HistoryCredToken:
 		if in.Credential == "" {
-			return "", "", "", fmt.Errorf("token 类凭据必须提供 credential")
+			return "", "", "", oekiterrors.Errorf("token 类凭据必须提供 credential")
 		}
 		enc, err := h.cm.Encrypt(in.Credential)
 		if err != nil {
@@ -523,7 +524,7 @@ func (h *HistoryService) encryptCredential(in HistoryTargetInput) (credType, enc
 		}
 		return credType, enc, username, nil
 	default:
-		return "", "", "", fmt.Errorf("不支持的凭据类型: %s", credType)
+		return "", "", "", oekiterrors.Errorf("不支持的凭据类型: %s", credType)
 	}
 }
 
@@ -552,7 +553,7 @@ func (h *HistoryService) targetAuth(t *model.HistoryTarget) (gitbackend.AuthConf
 		}
 		return gitbackend.NewSSHKeyContentAuth(plain, ""), nil
 	default:
-		return gitbackend.AuthConfig{}, fmt.Errorf("不支持的凭据类型: %s", t.CredType)
+		return gitbackend.AuthConfig{}, oekiterrors.Errorf("不支持的凭据类型: %s", t.CredType)
 	}
 }
 
@@ -801,34 +802,34 @@ func gateFailureDetail(g GateReport) string {
 //   - 结论里的 head 与产物 HEAD 不符 → 验的不是要推的那棵树。
 func (h *HistoryService) verifyPushableProduct(run *model.HistoryRun, branch string) error {
 	if run.WorkRepoPath == "" {
-		return fmt.Errorf("执行记录 %d 没有产物路径(未 apply?)", run.ID)
+		return oekiterrors.Errorf("执行记录 %d 没有产物路径(未 apply?)", run.ID)
 	}
 	if _, err := os.Stat(run.WorkRepoPath); err != nil {
 		// 只报目录名:绝对路径会一路流进模型上下文与日志。
-		return fmt.Errorf("产物目录不存在或不可读(%s):%w", filepath.Base(run.WorkRepoPath), err)
+		return oekiterrors.Errorf("产物目录不存在或不可读(%s):%w", filepath.Base(run.WorkRepoPath), err)
 	}
 	var gate historyGateResult
 	if err := json.Unmarshal([]byte(run.GateReport), &gate); err != nil {
-		return fmt.Errorf("执行记录 %d 没有可用的门禁结论(记录格式无法解析),推送已中止:请重新 apply 后再推送", run.ID)
+		return oekiterrors.Errorf("执行记录 %d 没有可用的门禁结论(记录格式无法解析),推送已中止:请重新 apply 后再推送", run.ID)
 	}
 	if !gate.OK {
-		return fmt.Errorf("执行记录 %d 的门禁未通过,推送已中止:%s", run.ID, gate.Note)
+		return oekiterrors.Errorf("执行记录 %d 的门禁未通过,推送已中止:%s", run.ID, gate.Note)
 	}
 	repo, err := git.PlainOpen(run.WorkRepoPath)
 	if err != nil {
-		return fmt.Errorf("打开产物仓库失败: %w", err)
+		return oekiterrors.Errorf("打开产物仓库失败: %w", err)
 	}
 	ref, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
 	if err != nil {
-		return fmt.Errorf("解析产物分支 %s 失败: %w", branch, err)
+		return oekiterrors.Errorf("解析产物分支 %s 失败: %w", branch, err)
 	}
 	head := ref.Hash().String()
 	if head != run.Head {
-		return fmt.Errorf("产物 HEAD(%s)与执行记录(%s)不一致,推送已中止:产物在 apply 之后被改动过,请重新 apply",
+		return oekiterrors.Errorf("产物 HEAD(%s)与执行记录(%s)不一致,推送已中止:产物在 apply 之后被改动过,请重新 apply",
 			shortHash(head), shortHash(run.Head))
 	}
 	if gate.Head != "" && gate.Head != head {
-		return fmt.Errorf("门禁结论对应的树(%s)与即将推送的树(%s)不一致,推送已中止:请重新 apply",
+		return oekiterrors.Errorf("门禁结论对应的树(%s)与即将推送的树(%s)不一致,推送已中止:请重新 apply",
 			shortHash(gate.Head), shortHash(head))
 	}
 	return nil
@@ -960,7 +961,7 @@ func (h *HistoryService) HistoryPushWithOptions(ctx context.Context, channelID u
 	defer release()
 	// **强制推送的闸门放在 core**:没有批准者就不许强推。
 	if opts.Force && opts.ForceApprovedBy == "" {
-		return nil, fmt.Errorf("强制推送需要批准者(admin 角色):没有批准者就不能覆盖远端已有的提交")
+		return nil, oekiterrors.Errorf("强制推送需要批准者(admin 角色):没有批准者就不能覆盖远端已有的提交")
 	}
 	return h.pushChannelLatest(ctx, channelID, opts.Force)
 }
@@ -974,7 +975,7 @@ func (h *HistoryService) pushChannelLatest(ctx context.Context, channelID uint, 
 		return nil, err
 	}
 	if run == nil {
-		return nil, fmt.Errorf("通道 %d 还没有 apply 记录,先 apply", channelID)
+		return nil, oekiterrors.Errorf("通道 %d 还没有 apply 记录,先 apply", channelID)
 	}
 	return h.pushRun(ctx, run, force)
 }
@@ -1005,14 +1006,14 @@ func (h *HistoryService) HistoryPushRun(ctx context.Context, runID uint) (*Histo
 // (实测:远端别人的提交被丢弃后只剩 0 条)。
 func (h *HistoryService) pushRun(ctx context.Context, run *model.HistoryRun, force bool) (*HistoryPushDTO, error) {
 	if run.WorkRepoPath == "" {
-		return nil, fmt.Errorf("执行记录 %d 没有产物路径(未 apply?)", run.ID)
+		return nil, oekiterrors.Errorf("执行记录 %d 没有产物路径(未 apply?)", run.ID)
 	}
 	targets, err := h.targets.FindByChannel(run.ChannelID)
 	if err != nil {
 		return nil, err
 	}
 	if len(targets) == 0 {
-		return nil, fmt.Errorf("通道 %d 没有配置推送目标", run.ChannelID)
+		return nil, oekiterrors.Errorf("通道 %d 没有配置推送目标", run.ChannelID)
 	}
 
 	// 凭据**按目标 ID 索引**,不按名字:同名目标(名字没有唯一约束)会让
@@ -1053,10 +1054,10 @@ func (h *HistoryService) pushRun(ctx context.Context, run *model.HistoryRun, for
 		for _, t := range targets {
 			diverged, note, err := h.checkPushDivergence(ctx, run, t, branch)
 			if err != nil {
-				return nil, fmt.Errorf("推送前检查远端 %s 失败: %w", t.Name, err)
+				return nil, oekiterrors.Errorf("推送前检查远端 %s 失败: %w", t.Name, err)
 			}
 			if diverged {
-				return nil, fmt.Errorf("推送已中止:远端 %s 与本次移植的基线已分叉(%s);"+
+				return nil, oekiterrors.Errorf("推送已中止:远端 %s 与本次移植的基线已分叉(%s);"+
 					"强推会丢掉远端的提交 —— 请先更新目标仓再重新 apply,或显式指定强制推送", t.Name, note)
 			}
 		}
@@ -1123,7 +1124,7 @@ func (h *HistoryService) checkPushDivergence(ctx context.Context, run *model.His
 	}
 	repo, err := git.PlainOpen(run.WorkRepoPath)
 	if err != nil {
-		return false, "", fmt.Errorf("打开工作仓库失败: %w", err)
+		return false, "", oekiterrors.Errorf("打开工作仓库失败: %w", err)
 	}
 	if err := history.EnsureRemote(repo, t.Name, t.RepoURL); err != nil {
 		return false, "", err
@@ -1138,7 +1139,7 @@ func (h *HistoryService) checkPushDivergence(ctx context.Context, run *model.His
 			// 空仓库:推送会创建该分支,没有东西会被覆盖。
 			return false, "远端是空仓库(首次发布)", nil
 		}
-		return false, "", fmt.Errorf("拉取远端状态失败: %w", err)
+		return false, "", oekiterrors.Errorf("拉取远端状态失败: %w", err)
 	}
 	ref, err := repo.Reference(plumbing.NewRemoteReferenceName(t.Name, branch), true)
 	if err != nil {
@@ -1182,7 +1183,7 @@ func (h *HistoryService) GetHistoryRun(_ context.Context, id uint) (*HistoryRunD
 // 再强推到发布目标。危险操作:调用方须显式确认。
 func (h *HistoryService) HistoryRollback(ctx context.Context, runID uint, ref string) (*HistoryRollbackDTO, error) {
 	if strings.TrimSpace(ref) == "" {
-		return nil, fmt.Errorf("回滚目标 ref 不能为空")
+		return nil, oekiterrors.Errorf("回滚目标 ref 不能为空")
 	}
 	run, err := h.runs.FindByID(runID)
 	if err != nil {
@@ -1207,13 +1208,13 @@ func (h *HistoryService) rollbackRun(ctx context.Context, runID uint, ref string
 		return nil, err
 	}
 	if len(targets) < 2 {
-		return nil, fmt.Errorf("回滚需要至少两个目标(留底 + 发布),当前只有 %d 个", len(targets))
+		return nil, oekiterrors.Errorf("回滚需要至少两个目标(留底 + 发布),当前只有 %d 个", len(targets))
 	}
 	backup, publish := targets[0], targets[1]
 
 	workRepo, err := openRepo(run.WorkRepoPath)
 	if err != nil {
-		return nil, fmt.Errorf("打开产物工作仓库失败(%s): %w —— 产物目录有保留期,"+
+		return nil, oekiterrors.Errorf("打开产物工作仓库失败(%s): %w —— 产物目录有保留期,"+
 			"过期会被回收;需要回滚请重新 apply 再回滚", run.WorkRepoPath, err)
 	}
 	backupAuth, err := h.targetAuth(backup)
@@ -1232,7 +1233,7 @@ func (h *HistoryService) rollbackRun(ctx context.Context, runID uint, ref string
 		Tags:     true,
 		Auth:     backupAuth,
 	}); err != nil {
-		return nil, fmt.Errorf("从留底 %s 取回对象失败: %w", backup.Name, err)
+		return nil, oekiterrors.Errorf("从留底 %s 取回对象失败: %w", backup.Name, err)
 	}
 
 	// 找到回滚目标:优先按 commit hash 解析(常见用法是回滚到 run 的 base_head),
@@ -1246,17 +1247,17 @@ func (h *HistoryService) rollbackRun(ctx context.Context, runID uint, ref string
 		branch = ch.TargetBranch
 	}
 	if !isCommitHash(ref) && ref != branch {
-		return nil, fmt.Errorf("回滚目标 %s 与目标分支 %s 不一致:回滚只接受目标分支的同名 ref,或一个 commit hash",
+		return nil, oekiterrors.Errorf("回滚目标 %s 与目标分支 %s 不一致:回滚只接受目标分支的同名 ref,或一个 commit hash",
 			ref, branch)
 	}
 	rollbackHash, err := resolveRollbackRef(run.WorkRepoPath,
 		"refs/remotes/"+backup.Name+"/"+ref, ref)
 	if err != nil {
-		return nil, fmt.Errorf("留底 %s 里没有 ref %s: %w", backup.Name, ref, err)
+		return nil, oekiterrors.Errorf("留底 %s 里没有 ref %s: %w", backup.Name, ref, err)
 	}
 	// 回滚到当前 HEAD 等于什么都不做 —— 要说清楚,不能「看起来成功」。
 	if run.Head != "" && rollbackHash.String() == run.Head {
-		return nil, fmt.Errorf("回滚目标 %s 就是当前的 HEAD(%s),回滚不会改变任何内容",
+		return nil, oekiterrors.Errorf("回滚目标 %s 就是当前的 HEAD(%s),回滚不会改变任何内容",
 			ref, shortHash(run.Head))
 	}
 
@@ -1290,7 +1291,7 @@ func (h *HistoryService) rollbackRun(ctx context.Context, runID uint, ref string
 		Auth:  publishAuth,
 	}); err != nil {
 		_, _ = h.finishRun(rbRun, model.HistoryRunFailed, err.Error())
-		return nil, fmt.Errorf("回滚强推到 %s 失败: %w", publish.Name, err)
+		return nil, oekiterrors.Errorf("回滚强推到 %s 失败: %w", publish.Name, err)
 	}
 	rbRun.RefsAfter = jsonString(map[string]string{publish.Name: rollbackHash.String()})
 	if _, err := h.finishRun(rbRun, model.HistoryRunSuccess, ""); err != nil {
@@ -1361,7 +1362,7 @@ func (h *HistoryService) channelAndOptions(ctx context.Context, id uint) (*model
 		return nil, nil, err
 	}
 	if !ch.Enabled {
-		return nil, nil, fmt.Errorf("通道已禁用: %s", ch.Name)
+		return nil, nil, oekiterrors.Errorf("通道已禁用: %s", ch.Name)
 	}
 	opts, err := h.channelOptions(ctx, id)
 	if err != nil {
@@ -1377,19 +1378,19 @@ func (h *HistoryService) channelOptions(ctx context.Context, id uint) (*history.
 		return nil, err
 	}
 	if !ch.Enabled {
-		return nil, fmt.Errorf("通道已禁用: %s", ch.Name)
+		return nil, oekiterrors.Errorf("通道已禁用: %s", ch.Name)
 	}
 
 	// **身份映射是执行的前提**:没有 module 映射就没有任何改写规则,
 	// 内网 module path 会原样进公开仓。宁可拒绝执行,也不发一个错的树。
 	if strings.TrimSpace(ch.ModuleSource) == "" || strings.TrimSpace(ch.ModuleTarget) == "" {
-		return nil, fmt.Errorf("通道 %s 缺少身份映射(module_source/module_target),拒绝执行:"+
+		return nil, oekiterrors.Errorf("通道 %s 缺少身份映射(module_source/module_target),拒绝执行:"+
 			"没有改写规则会把内网 module path 原样发布到公开仓", ch.Name)
 	}
 	// host 映射必须成对:只给 source 不给 target,等于没配 ——
 	// 内网主机名会原样进公开仓(与 module 映射同级的风险)。
 	if (strings.TrimSpace(ch.HostSource) == "") != (strings.TrimSpace(ch.HostTarget) == "") {
-		return nil, fmt.Errorf("通道 %s 的 host 映射不成对(host_source 与 host_target 必须同时给):"+
+		return nil, oekiterrors.Errorf("通道 %s 的 host 映射不成对(host_source 与 host_target 必须同时给):"+
 			"只配一半等于没配,内网主机名会原样发布到公开仓", ch.Name)
 	}
 
@@ -1436,7 +1437,7 @@ func (h *HistoryService) channelOptions(ctx context.Context, id uint) (*history.
 	if ch.PathRules != "" {
 		var pathRules []PathRuleDTO
 		if err := json.Unmarshal([]byte(ch.PathRules), &pathRules); err != nil {
-			return nil, fmt.Errorf("通道的路径规则配置损坏: %w", err)
+			return nil, oekiterrors.Errorf("通道的路径规则配置损坏: %w", err)
 		}
 		for _, r := range pathRules {
 			opts.PathRules = append(opts.PathRules, history.PathRule{From: r.From, To: r.To})
@@ -1445,12 +1446,12 @@ func (h *HistoryService) channelOptions(ctx context.Context, id uint) (*history.
 	if ch.ScrubRules != "" {
 		var scrubRules []ScrubRuleDTO
 		if err := json.Unmarshal([]byte(ch.ScrubRules), &scrubRules); err != nil {
-			return nil, fmt.Errorf("通道的痕迹规则配置损坏: %w", err)
+			return nil, oekiterrors.Errorf("通道的痕迹规则配置损坏: %w", err)
 		}
 		for i, r := range scrubRules {
 			pattern, err := regexp.Compile(r.Pattern)
 			if err != nil {
-				return nil, fmt.Errorf("通道第 %d 条痕迹规则的 pattern 非法: %w", i+1, err)
+				return nil, oekiterrors.Errorf("通道第 %d 条痕迹规则的 pattern 非法: %w", i+1, err)
 			}
 			severity := history.ScrubAuto
 			if r.Severity == "mandatory" {
@@ -1465,7 +1466,7 @@ func (h *HistoryService) channelOptions(ctx context.Context, id uint) (*history.
 	if ch.ConflictRules != "" {
 		var rules []history.ConflictRuleConfig
 		if err := json.Unmarshal([]byte(ch.ConflictRules), &rules); err != nil {
-			return nil, fmt.Errorf("通道的冲突判据配置损坏: %w", err)
+			return nil, oekiterrors.Errorf("通道的冲突判据配置损坏: %w", err)
 		}
 		opts.ConflictRules = rules
 	}
@@ -1477,11 +1478,11 @@ func (h *HistoryService) resolveRepoDir(ctx context.Context, ch *model.HistoryCh
 	role, repoKey string) (string, error) {
 
 	if repoKey == "" {
-		return "", fmt.Errorf("通道 %s 未配置 %s 仓库", ch.Name, role)
+		return "", oekiterrors.Errorf("通道 %s 未配置 %s 仓库", ch.Name, role)
 	}
 	repo, err := h.svc.GetRepoByKey(repoKey)
 	if err != nil || repo == nil {
-		return "", fmt.Errorf("%s 仓库不存在: %s", role, repoKey)
+		return "", oekiterrors.Errorf("%s 仓库不存在: %s", role, repoKey)
 	}
 	dir := filepath.Join(h.svc.GetConfig().Git.TempDir, "history",
 		fmt.Sprintf("channel-%d", ch.ID), role)
@@ -1493,7 +1494,7 @@ func (h *HistoryService) resolveRepoDir(ctx context.Context, ch *model.HistoryCh
 		if err := h.backend.Clone(ctx, gitbackend.CloneOptions{
 			URL: repo.CloneURL, Path: dir, Auth: auth,
 		}); err != nil {
-			return "", fmt.Errorf("clone %s 失败: %w", repo.CloneURL, err)
+			return "", oekiterrors.Errorf("clone %s 失败: %w", repo.CloneURL, err)
 		}
 		return dir, nil
 	}
@@ -1517,7 +1518,7 @@ func (h *HistoryService) resolveRepoDir(ctx context.Context, ch *model.HistoryCh
 		if err := h.backend.Clone(ctx, gitbackend.CloneOptions{
 			URL: repo.CloneURL, Path: dir, Auth: auth,
 		}); err != nil {
-			return "", fmt.Errorf("re-clone %s 失败: %w", repo.CloneURL, err)
+			return "", oekiterrors.Errorf("re-clone %s 失败: %w", repo.CloneURL, err)
 		}
 	}
 	return dir, nil
@@ -1569,7 +1570,7 @@ func resolveRollbackRef(repoPath, remoteRefName, ref string) (plumbing.Hash, err
 			return commit.Hash, nil
 		}
 	}
-	return plumbing.ZeroHash, fmt.Errorf(
+	return plumbing.ZeroHash, oekiterrors.Errorf(
 		"解析回滚目标 %s 失败:既不是留底 %s 上的分支,也不是仓库里的提交", ref, remoteRefName)
 }
 
@@ -1625,16 +1626,16 @@ func (h *HistoryService) setHistoryOverride(channelID uint, in HistoryOverrideIn
 		return nil, err
 	}
 	if strings.TrimSpace(in.Path) == "" {
-		return nil, fmt.Errorf("裁决必须指明路径")
+		return nil, oekiterrors.Errorf("裁决必须指明路径")
 	}
 	switch in.Verdict {
 	case model.HistoryVerdictKeepTarget, model.HistoryVerdictTakeSource:
 	case model.HistoryVerdictMerged:
 		if in.Content == "" {
-			return nil, fmt.Errorf("merged 裁决必须提供 content")
+			return nil, oekiterrors.Errorf("merged 裁决必须提供 content")
 		}
 	default:
-		return nil, fmt.Errorf("不支持的裁决类型: %s", in.Verdict)
+		return nil, oekiterrors.Errorf("不支持的裁决类型: %s", in.Verdict)
 	}
 	ov := &model.HistoryOverride{
 		ChannelID:  channelID,
@@ -1835,18 +1836,18 @@ func validateHistoryRepoDir(dir, field string) error {
 		return nil
 	}
 	if !filepath.IsAbs(dir) {
-		return fmt.Errorf("%s 必须是绝对路径: %s", field, dir)
+		return oekiterrors.Errorf("%s 必须是绝对路径: %s", field, dir)
 	}
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return fmt.Errorf("%s 不可用: %w", field, err)
+		return oekiterrors.Errorf("%s 不可用: %w", field, err)
 	}
 	info, err := os.Stat(real)
 	if err != nil || !info.IsDir() {
-		return fmt.Errorf("%s 必须是已存在的目录: %s", field, dir)
+		return oekiterrors.Errorf("%s 必须是已存在的目录: %s", field, dir)
 	}
 	if !isGitRepoDir(real) {
-		return fmt.Errorf("%s 必须指向一个 git 仓库(工作树或裸仓库): %s", field, dir)
+		return oekiterrors.Errorf("%s 必须指向一个 git 仓库(工作树或裸仓库): %s", field, dir)
 	}
 	return checkSensitivePath(real, field)
 }
@@ -1877,7 +1878,7 @@ func checkSensitivePath(real, field string) error {
 	clean := filepath.Clean(real)
 	for _, root := range sensitiveLocalRoots {
 		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
-			return fmt.Errorf("%s 不能指向系统敏感目录: %s", field, clean)
+			return oekiterrors.Errorf("%s 不能指向系统敏感目录: %s", field, clean)
 		}
 	}
 	home, err := os.UserHomeDir()
@@ -1886,7 +1887,7 @@ func checkSensitivePath(real, field string) error {
 	}
 	home = filepath.Clean(home)
 	if clean == home {
-		return fmt.Errorf("%s 不能指向家目录本身: %s", field, clean)
+		return oekiterrors.Errorf("%s 不能指向家目录本身: %s", field, clean)
 	}
 	rel, err := filepath.Rel(home, clean)
 	if err != nil || strings.HasPrefix(rel, "..") {
@@ -1895,7 +1896,7 @@ func checkSensitivePath(real, field string) error {
 	first := strings.Split(filepath.ToSlash(rel), "/")[0]
 	for _, name := range sensitiveHomeNames {
 		if first == name {
-			return fmt.Errorf("%s 不能指向家目录下的凭据目录: %s", field, clean)
+			return oekiterrors.Errorf("%s 不能指向家目录下的凭据目录: %s", field, clean)
 		}
 	}
 	return nil
@@ -1926,11 +1927,11 @@ func validatePathRules(rules []PathRuleDTO) error {
 			}
 			slashed := filepath.ToSlash(part)
 			if strings.HasPrefix(slashed, "/") {
-				return fmt.Errorf("路径规则的前缀必须是仓库内相对路径(不能以 / 开头): %q", part)
+				return oekiterrors.Errorf("路径规则的前缀必须是仓库内相对路径(不能以 / 开头): %q", part)
 			}
 			for _, seg := range strings.Split(slashed, "/") {
 				if seg == ".." {
-					return fmt.Errorf("路径规则的前缀不能含 ..(会写到仓库外): %q", part)
+					return oekiterrors.Errorf("路径规则的前缀不能含 ..(会写到仓库外): %q", part)
 				}
 			}
 		}

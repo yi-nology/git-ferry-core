@@ -1,7 +1,6 @@
 package mirror
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // MaterializeTree 把 storer 中以 treeHash 为根的树写成目录内容,
@@ -68,15 +68,15 @@ func materializeTree(st storer.EncodedObjectStorer, treeHash plumbing.Hash, dir 
 			// 安全检查:拒绝绝对路径与逃逸 buildDir 的相对路径,
 			// 防止恶意仓库通过 symlink 读取构建环境敏感文件
 			if filepath.IsAbs(target) {
-				return fmt.Errorf("拒绝不安全的 symlink %s: 绝对路径 %q", entry.Name, target)
+				return oekiterrors.Errorf("拒绝不安全的 symlink %s: 绝对路径 %q", entry.Name, target)
 			}
 			resolved := filepath.Join(filepath.Dir(path), target)
 			if !strings.HasPrefix(resolved, filepath.Clean(dir)+string(filepath.Separator)) {
-				return fmt.Errorf("拒绝不安全的 symlink %s: 目标 %q 逃逸构建目录", entry.Name, target)
+				return oekiterrors.Errorf("拒绝不安全的 symlink %s: 目标 %q 逃逸构建目录", entry.Name, target)
 			}
 			_ = os.Remove(path)
 			if err := os.Symlink(target, path); err != nil {
-				return fmt.Errorf("重建 symlink %s 失败: %w", entry.Name, err)
+				return oekiterrors.Errorf("重建 symlink %s 失败: %w", entry.Name, err)
 			}
 		default:
 			// gitlink(子模块):go get 不涉及子模块,跳过

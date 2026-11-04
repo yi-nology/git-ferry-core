@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"time"
 
 	"github.com/google/uuid"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
@@ -22,10 +22,10 @@ func validateBranchName(branch string) error {
 		return nil // 空分支名由调用方处理(通常表示使用默认分支)
 	}
 	if !validBranchName.MatchString(branch) {
-		return fmt.Errorf("invalid branch name %q: only alphanumeric, '.', '_', '/', '-' are allowed", branch)
+		return oekiterrors.Errorf("invalid branch name %q: only alphanumeric, '.', '_', '/', '-' are allowed", branch)
 	}
 	if branch == "." || branch == ".." {
-		return fmt.Errorf("invalid branch name %q", branch)
+		return oekiterrors.Errorf("invalid branch name %q", branch)
 	}
 	return nil
 }

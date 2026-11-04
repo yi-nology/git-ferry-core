@@ -11,6 +11,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/oekit/pkg/ptrx"
 	"github.com/oekit/pkg/stringx"
@@ -755,14 +756,14 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 			}
 		}
 		if len(branches) == 0 {
-			return false, "", "", fmt.Errorf("no local branches match %q", task.SourceBranch)
+			return false, "", "", oekiterrors.Errorf("no local branches match %q", task.SourceBranch)
 		}
 		for _, b := range branches {
 			refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 		}
 	} else {
 		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
-			return false, "", "", fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+			return false, "", "", oekiterrors.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
 		}
 		// **源端还有这个分支吗?**
 		//

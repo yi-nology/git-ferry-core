@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // Template 同步策略模板。
@@ -181,7 +183,7 @@ func Open(path string) (*Store, error) {
 		return s, nil
 	}
 	if err := json.Unmarshal(data, &s.list); err != nil {
-		return nil, fmt.Errorf("parse templates: %w", err)
+		return nil, oekiterrors.Errorf("parse templates: %w", err)
 	}
 	return s, nil
 }

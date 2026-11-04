@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/encoding"
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // S3Config S3 兼容对象存储(阿里云 OSS/MinIO/AWS)。
@@ -31,11 +32,11 @@ type S3Config struct {
 // 只支持 path-style + SigV4,覆盖 MinIO/阿里 OSS/AWS。
 func UploadBundle(ctx context.Context, cfg *S3Config, localPath, objectKey string) error {
 	if cfg == nil || cfg.Bucket == "" {
-		return fmt.Errorf("s3 config incomplete")
+		return oekiterrors.Errorf("s3 config incomplete")
 	}
 	data, err := os.ReadFile(localPath) //nolint:gosec // 本地冷备路径由部署方配置
 	if err != nil {
-		return fmt.Errorf("read bundle: %w", err)
+		return oekiterrors.Errorf("read bundle: %w", err)
 	}
 	if cfg.Prefix != "" {
 		objectKey = strings.Trim(cfg.Prefix, "/") + "/" + objectKey
@@ -81,7 +82,7 @@ func s3PutObject(ctx context.Context, cfg *S3Config, key string, body []byte) er
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("s3 put %s: status %d", key, resp.StatusCode)
+		return oekiterrors.Errorf("s3 put %s: status %d", key, resp.StatusCode)
 	}
 	return nil
 }

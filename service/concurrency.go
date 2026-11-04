@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/lock"
@@ -115,7 +115,7 @@ func newRedisGuard(addr, password string, db, maxConcurrent int, poolOpts lock.R
 	client := lock.NewRedisClient(addr, password, db, lock.WithPoolOptions(poolOpts))
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("redis ping failed: %w", err)
+		return nil, oekiterrors.Errorf("redis ping failed: %w", err)
 	}
 	// WithMaxAutoRenew(-1) 取消 distlock 默认的 10×TTL 续期上限:同步任务可能跑数小时
 	// (大仓库克隆),上限一到锁会在任务中途静默过期,被别的实例重复执行。
@@ -225,7 +225,7 @@ func newGuard(redisAddr, redisPassword string, redisDB, maxConcurrent int, poolO
 		rg, err := newRedisGuard(redisAddr, redisPassword, redisDB, maxConcurrent, poolOpts)
 		if err != nil {
 			// redis 连不上不应让整个服务起不来:回退到本地模式并告警
-			return nil, fmt.Errorf("init redis guard failed (check redis config or remove redis.addr to use single-instance mode): %w", err)
+			return nil, oekiterrors.Errorf("init redis guard failed (check redis config or remove redis.addr to use single-instance mode): %w", err)
 		}
 		return rg, nil
 	}

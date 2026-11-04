@@ -17,6 +17,7 @@ import (
 	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/syncx"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/dao"
@@ -133,7 +134,7 @@ func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release f
 			}
 		}, true, nil
 	case errors.Is(lerr, distlock.ErrLockNotAcquired):
-		return func() {}, false, fmt.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
+		return func() {}, false, oekiterrors.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
 	default:
 		// redis 抖动：降级为进程内互斥，不阻断镜像任务
 		slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
@@ -276,7 +277,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		in.Mode = model.MirrorModePublish
 	}
 	if in.Mode != model.MirrorModePublish && in.Mode != model.MirrorModeBackup {
-		return nil, fmt.Errorf("不支持的模式: %s", in.Mode)
+		return nil, oekiterrors.Errorf("不支持的模式: %s", in.Mode)
 	}
 	if len(in.Targets) == 0 {
 		return nil, errors.New("至少需要一个目标")
@@ -284,7 +285,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 
 	repo, err := m.svc.GetRepoByKey(in.RepoKey)
 	if err != nil || repo == nil {
-		return nil, fmt.Errorf("源仓库不存在: %s", in.RepoKey)
+		return nil, oekiterrors.Errorf("源仓库不存在: %s", in.RepoKey)
 	}
 
 	ch := &model.MirrorChannel{
@@ -327,12 +328,12 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 	if in.Mode == model.MirrorModePublish {
 		dir, cleanup, err := m.ensureRepo(ctx, ch)
 		if err != nil {
-			return nil, fmt.Errorf("拉取源仓库失败: %w", err)
+			return nil, oekiterrors.Errorf("拉取源仓库失败: %w", err)
 		}
 		defer cleanup()
 		ch.Module, err = mirror.ReadModulePath(dir)
 		if err != nil {
-			return nil, fmt.Errorf("读取源仓库 go.mod 失败: %w", err)
+			return nil, oekiterrors.Errorf("读取源仓库 go.mod 失败: %w", err)
 		}
 		// module 是建通道时从克隆里读出来的 ⇒ 回写
 		if err := m.channels.Update(ch); err != nil {
@@ -358,7 +359,7 @@ func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetIn
 			return nil, errors.New("目标 module 不能为空")
 		}
 		if in.TargetModule == ch.Module {
-			return nil, fmt.Errorf("目标 module 与源相同(%s),无改写意义", ch.Module)
+			return nil, oekiterrors.Errorf("目标 module 与源相同(%s),无改写意义", ch.Module)
 		}
 	}
 	t := &model.MirrorTarget{
@@ -392,7 +393,7 @@ func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetIn
 // requireCredential=false 用于更新路径：凭据留空表示保持原凭据（见 UpdateMirrorTarget）。
 func validateTargetInput(in *MirrorTargetInput, requireCredential bool) error {
 	if strings.TrimSpace(in.Remote) == "" || strings.HasPrefix(in.Remote, "-") {
-		return fmt.Errorf("远端名非法: %q", in.Remote)
+		return oekiterrors.Errorf("远端名非法: %q", in.Remote)
 	}
 	if strings.TrimSpace(in.RepoURL) == "" {
 		return errors.New("目标仓库 URL 不能为空")
@@ -402,10 +403,10 @@ func validateTargetInput(in *MirrorTargetInput, requireCredential bool) error {
 		in.CredType = model.MirrorCredNone
 	case model.MirrorCredToken, model.MirrorCredSSHKey:
 		if requireCredential && in.Credential == "" {
-			return fmt.Errorf("凭据类型 %s 需要提供凭据内容", in.CredType)
+			return oekiterrors.Errorf("凭据类型 %s 需要提供凭据内容", in.CredType)
 		}
 	default:
-		return fmt.Errorf("不支持的凭据类型: %s", in.CredType)
+		return oekiterrors.Errorf("不支持的凭据类型: %s", in.CredType)
 	}
 	return nil
 }
@@ -414,7 +415,7 @@ func validateTargetInput(in *MirrorTargetInput, requireCredential bool) error {
 func (m *MirrorService) UpdateMirrorTarget(ctx context.Context, targetID uint, in MirrorTargetInput) (*model.MirrorTarget, error) {
 	t, err := m.channels.FindTargetByID(targetID)
 	if err != nil {
-		return nil, fmt.Errorf("目标不存在: %d", targetID)
+		return nil, oekiterrors.Errorf("目标不存在: %d", targetID)
 	}
 	// 凭据空串 = 保持原凭据（不要求重传）
 	if err := validateTargetInput(&in, false); err != nil {
@@ -453,7 +454,7 @@ func (m *MirrorService) ListMirrorChannels(page dao.Pagination) ([]*model.Mirror
 func (m *MirrorService) GetMirrorChannel(id uint) (*model.MirrorChannel, error) {
 	ch, err := m.channels.FindByID(id)
 	if err != nil {
-		return nil, fmt.Errorf("通道不存在: %d", id)
+		return nil, oekiterrors.Errorf("通道不存在: %d", id)
 	}
 	targets, err := m.channels.FindTargets(id)
 	if err != nil {
@@ -469,10 +470,10 @@ func (m *MirrorService) GetMirrorChannel(id uint) (*model.MirrorChannel, error) 
 func (m *MirrorService) DeleteMirrorChannel(confirm string, id uint) error {
 	ch, err := m.channels.FindByID(id)
 	if err != nil {
-		return fmt.Errorf("通道不存在: %d", id)
+		return oekiterrors.Errorf("通道不存在: %d", id)
 	}
 	if confirm != ch.Name {
-		return fmt.Errorf("确认名不匹配,请输入通道名 %q 以确认删除", ch.Name)
+		return oekiterrors.Errorf("确认名不匹配,请输入通道名 %q 以确认删除", ch.Name)
 	}
 	return m.channels.Delete(id)
 }
@@ -482,7 +483,7 @@ func (m *MirrorService) DeleteMirrorChannel(confirm string, id uint) error {
 func (m *MirrorService) TestMirrorTarget(ctx context.Context, targetID uint) error {
 	t, err := m.channels.FindTargetByID(targetID)
 	if err != nil {
-		return fmt.Errorf("目标不存在: %d", targetID)
+		return oekiterrors.Errorf("目标不存在: %d", targetID)
 	}
 	auth, err := m.targetAuth(t)
 	if err != nil {
@@ -513,7 +514,7 @@ func (m *MirrorService) ensureRepoLocked(ctx context.Context, ch *model.MirrorCh
 	cleanup = func() {}
 	repo, err := m.svc.GetRepoByKey(ch.RepoKey)
 	if err != nil || repo == nil {
-		return "", cleanup, fmt.Errorf("源仓库不存在: %s", ch.RepoKey)
+		return "", cleanup, oekiterrors.Errorf("源仓库不存在: %s", ch.RepoKey)
 	}
 	auth := m.repoAuth(repo)
 
@@ -523,7 +524,7 @@ func (m *MirrorService) ensureRepoLocked(ctx context.Context, ch *model.MirrorCh
 			return "", cleanup, err
 		}
 		if err = m.backend.Clone(ctx, gitbackend.CloneOptions{URL: repo.CloneURL, Path: dir, Auth: auth}); err != nil {
-			return "", cleanup, fmt.Errorf("clone %s 失败: %w", repo.CloneURL, err)
+			return "", cleanup, oekiterrors.Errorf("clone %s 失败: %w", repo.CloneURL, err)
 		}
 		slog.Info("mirror: 已克隆源仓库", "channel", ch.ID, "dir", dir)
 		return dir, cleanup, nil
@@ -536,7 +537,7 @@ func (m *MirrorService) ensureRepoLocked(ctx context.Context, ch *model.MirrorCh
 			return "", cleanup, rmErr
 		}
 		if err = m.backend.Clone(ctx, gitbackend.CloneOptions{URL: repo.CloneURL, Path: dir, Auth: auth}); err != nil {
-			return "", cleanup, fmt.Errorf("re-clone 失败: %w", err)
+			return "", cleanup, oekiterrors.Errorf("re-clone 失败: %w", err)
 		}
 		return dir, cleanup, nil
 	}
@@ -560,7 +561,7 @@ func alignWorktreeToSource(ctx context.Context, dir string) error {
 			continue
 		}
 		if _, err := runGitQuiet(ctx, dir, "reset", "--hard", ref); err != nil {
-			return fmt.Errorf("对齐工作区到 %s 失败: %w", ref, err)
+			return oekiterrors.Errorf("对齐工作区到 %s 失败: %w", ref, err)
 		}
 		return nil
 	}
@@ -684,7 +685,7 @@ func (m *MirrorService) targetAuth(t *model.MirrorTarget) (gitbackend.AuthConfig
 		auth.InsecureSkipTLS = t.InsecureSkipTLS
 		return auth, nil
 	default:
-		return gitbackend.AuthConfig{}, fmt.Errorf("不支持的凭据类型: %s", t.CredType)
+		return gitbackend.AuthConfig{}, oekiterrors.Errorf("不支持的凭据类型: %s", t.CredType)
 	}
 }
 
@@ -741,7 +742,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 		kind = model.MirrorKindPublish
 	}
 	if kind != model.MirrorKindPublish && kind != model.MirrorKindVerify {
-		return nil, fmt.Errorf("不支持的执行类别: %s", kind)
+		return nil, oekiterrors.Errorf("不支持的执行类别: %s", kind)
 	}
 	if len(in.Tags) == 0 {
 		return nil, errors.New("Tags 至少需要一个")
@@ -882,7 +883,7 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 	statuses := map[string]*model.TagStatus{}
 
 	if err := m.ensureTargetRemote(ctx, dir, t, gitbackend.AuthConfig{Type: gitbackend.AuthNone}); err != nil {
-		return fmt.Errorf("配置目标远端失败: %w", err)
+		return oekiterrors.Errorf("配置目标远端失败: %w", err)
 	}
 
 	var divergent, failed int
@@ -927,7 +928,7 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 		_ = m.runs.Update(run)
 	}
 	if failed > 0 || divergent > 0 {
-		return fmt.Errorf("部分 tag 执行失败(失败 %d,分歧 %d)", failed, divergent)
+		return oekiterrors.Errorf("部分 tag 执行失败(失败 %d,分歧 %d)", failed, divergent)
 	}
 	return nil
 }
@@ -940,7 +941,7 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel, t *model.MirrorTarget, dir, tag string, allowOverwrite, dryRun bool) (*mirror.TagReport, error) {
 	// 预检/发布都要先把目标仓库接为本地克隆的远端
 	if err := m.ensureTargetRemote(ctx, dir, t, gitbackend.AuthConfig{Type: gitbackend.AuthNone}); err != nil {
-		return nil, fmt.Errorf("配置目标远端失败: %w", err)
+		return nil, oekiterrors.Errorf("配置目标远端失败: %w", err)
 	}
 	auth, err := m.targetAuth(t)
 	if err != nil {
@@ -1023,7 +1024,7 @@ func (m *MirrorService) ListMirrorRuns(channelID uint, page dao.Pagination) ([]*
 func (m *MirrorService) GetMirrorRun(id uint) (*model.MirrorRun, error) {
 	run, err := m.runs.FindByID(id)
 	if err != nil {
-		return nil, fmt.Errorf("执行记录不存在: %d", id)
+		return nil, oekiterrors.Errorf("执行记录不存在: %d", id)
 	}
 	return run, nil
 }
@@ -1056,11 +1057,11 @@ type MirrorVersionsResult struct {
 func (m *MirrorService) loadChannelAndTarget(channelID, targetID uint) (*model.MirrorChannel, *model.MirrorTarget, error) {
 	ch, err := m.channels.FindByID(channelID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("通道不存在: %d", channelID)
+		return nil, nil, oekiterrors.Errorf("通道不存在: %d", channelID)
 	}
 	t, err := m.channels.FindTargetByID(targetID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("目标不存在: %d", targetID)
+		return nil, nil, oekiterrors.Errorf("目标不存在: %d", targetID)
 	}
 	if t.ChannelID != channelID {
 		return nil, nil, errors.New("目标不属于该通道")

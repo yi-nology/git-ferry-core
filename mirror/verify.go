@@ -10,6 +10,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/oekit/concurrency/retry"
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // 验证重试策略:proxy 首次回源常有数秒延迟,失败先重试再排查。
@@ -47,7 +48,7 @@ func VerifyModule(ctx context.Context, module, version string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("验证 %s@%s 失败(proxy 回源可能有数秒延迟,已重试 %d 次): %w",
+		return oekiterrors.Errorf("验证 %s@%s 失败(proxy 回源可能有数秒延迟,已重试 %d 次): %w",
 			module, version, verifyAttempts, err)
 	}
 	return nil
@@ -74,10 +75,10 @@ func verifyOnce(ctx context.Context, module, version string) error {
 	}
 	pkgs, err := packages.Load(cfg, module+"/...")
 	if err != nil {
-		return fmt.Errorf("解析模块失败: %w", err)
+		return oekiterrors.Errorf("解析模块失败: %w", err)
 	}
 	if len(pkgs) == 0 {
-		return fmt.Errorf("未解析到任何包")
+		return oekiterrors.Errorf("未解析到任何包")
 	}
 
 	var (
@@ -88,20 +89,20 @@ func verifyOnce(ctx context.Context, module, version string) error {
 		if p.Module != nil {
 			seenModule = true
 			if p.Module.Path != module {
-				return fmt.Errorf("身份不符: %s@%s 的 go.mod 声明为 %s", module, version, p.Module.Path)
+				return oekiterrors.Errorf("身份不符: %s@%s 的 go.mod 声明为 %s", module, version, p.Module.Path)
 			}
 			if p.Module.Version != version && p.Module.Version != "" {
-				return fmt.Errorf("版本不符: 解析为 %s 而非 %s", p.Module.Version, version)
+				return oekiterrors.Errorf("版本不符: 解析为 %s 而非 %s", p.Module.Version, version)
 			}
 		}
 		for _, e := range p.Errors {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("%s: %s", e.Pos, e.Msg)
+				firstErr = oekiterrors.Errorf("%s: %s", e.Pos, e.Msg)
 			}
 		}
 	}
 	if !seenModule {
-		return fmt.Errorf("未获取到模块信息: %w", firstErr)
+		return oekiterrors.Errorf("未获取到模块信息: %w", firstErr)
 	}
 	if firstErr != nil {
 		return firstErr

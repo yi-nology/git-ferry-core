@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 
@@ -209,7 +209,7 @@ func needsCheckout(destDir string) bool {
 // 白名单之外的回落裸 git(dir="" 即无仓库上下文,RunRaw 原样支持)。
 func runGitRead(ctx context.Context, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
-		return "", fmt.Errorf("empty git args")
+		return "", oekiterrors.Errorf("empty git args")
 	}
 	return runGitThroughBackend(ctx, readGitBackend(), dir, args...)
 }

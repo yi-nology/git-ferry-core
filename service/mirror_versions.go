@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sort"
 
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -141,5 +141,5 @@ func (m *MirrorService) GetMirrorVersions(ctx context.Context, channelID uint) (
 }
 
 func errChannelNotFound(id uint) error {
-	return fmt.Errorf("通道不存在: %d", id)
+	return oekiterrors.Errorf("通道不存在: %d", id)
 }

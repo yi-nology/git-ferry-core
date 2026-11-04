@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // DestinationType 冷备目的地类型。
@@ -64,7 +66,7 @@ type UploadResult struct {
 // 覆盖最常见的 Account Key 场景;SAS token 可直接用 WebDAV/HTTP 网关或后续扩展。
 func azureBlobPut(ctx context.Context, account, accountKey, container, blob string, body []byte) error {
 	if accountKey == "" {
-		return fmt.Errorf("azure: account_key required")
+		return oekiterrors.Errorf("azure: account_key required")
 	}
 	url := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s", account, container, strings.TrimPrefix(blob, "/"))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
@@ -86,7 +88,7 @@ func azureBlobPut(ctx context.Context, account, accountKey, container, blob stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("azure put %s: status %d", blob, resp.StatusCode)
+		return oekiterrors.Errorf("azure put %s: status %d", blob, resp.StatusCode)
 	}
 	return nil
 }

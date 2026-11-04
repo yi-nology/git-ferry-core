@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // rewriteModulePath 在 blob 数据中做模块路径边界改写。
@@ -124,7 +125,7 @@ func (b *builder) checkMandatoryOnly(path string, data []byte) {
 func (b *builder) rewriteTree(srcHash plumbing.Hash, prefix string) (plumbing.Hash, error) {
 	srcTree, err := b.repo.TreeObject(srcHash)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("读取源树 %s 失败: %w", srcHash, err)
+		return plumbing.ZeroHash, oekiterrors.Errorf("读取源树 %s 失败: %w", srcHash, err)
 	}
 
 	entries := make([]object.TreeEntry, len(srcTree.Entries))
@@ -229,7 +230,7 @@ func (b *builder) rewriteTree(srcHash plumbing.Hash, prefix string) (plumbing.Ha
 func (b *builder) blobBytes(h plumbing.Hash) ([]byte, error) {
 	blob, err := b.repo.BlobObject(h)
 	if err != nil {
-		return nil, fmt.Errorf("读取 blob %s 失败: %w", h, err)
+		return nil, oekiterrors.Errorf("读取 blob %s 失败: %w", h, err)
 	}
 	r, err := blob.Reader()
 	if err != nil {
@@ -261,7 +262,7 @@ func (b *builder) writeBlob(data []byte) (plumbing.Hash, error) {
 func (b *builder) copyBlobObject(h plumbing.Hash) error {
 	src, err := b.repo.Storer.EncodedObject(plumbing.BlobObject, h)
 	if err != nil {
-		return fmt.Errorf("读取 blob %s 失败: %w", h, err)
+		return oekiterrors.Errorf("读取 blob %s 失败: %w", h, err)
 	}
 	dst := b.storer.NewEncodedObject()
 	dst.SetType(plumbing.BlobObject)

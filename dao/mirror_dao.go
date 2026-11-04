@@ -160,4 +160,3 @@ func (d *MirrorRunDAO) FindStuckRuns(olderThan time.Duration) ([]*model.MirrorRu
 	}
 	return runs, nil
 }
-

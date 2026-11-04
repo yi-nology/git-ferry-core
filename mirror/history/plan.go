@@ -27,6 +27,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	oekiterrors "github.com/oekit/pkg/errors"
+
 	"github.com/yi-nology/git-ferry-core/mirror"
 
 	"net/url"
@@ -187,47 +189,47 @@ func (p *Plan) Protected() []FilePlan {
 // 同一输入两次生成的计划完全一致(确定性)。
 func BuildPlan(ctx context.Context, opts Options) (*Plan, error) {
 	if opts.SourceDir == "" || opts.TargetDir == "" {
-		return nil, fmt.Errorf("SourceDir 与 TargetDir 都不能为空")
+		return nil, oekiterrors.Errorf("SourceDir 与 TargetDir 都不能为空")
 	}
 	replayer, err := mirror.NewRewriter(opts.Rules)
 	if err != nil {
-		return nil, fmt.Errorf("编译身份规则失败: %w", err)
+		return nil, oekiterrors.Errorf("编译身份规则失败: %w", err)
 	}
 
 	srcRepo, err := git.PlainOpen(opts.SourceDir)
 	if err != nil {
-		return nil, fmt.Errorf("打开源仓失败: %w", err)
+		return nil, oekiterrors.Errorf("打开源仓失败: %w", err)
 	}
 	tgtRepo, err := git.PlainOpen(opts.TargetDir)
 	if err != nil {
-		return nil, fmt.Errorf("打开目标仓失败: %w", err)
+		return nil, oekiterrors.Errorf("打开目标仓失败: %w", err)
 	}
 
 	srcCommit, err := resolveCommit(srcRepo, opts.SourceRef)
 	if err != nil {
-		return nil, fmt.Errorf("解析源仓 ref %q 失败: %w", opts.SourceRef, err)
+		return nil, oekiterrors.Errorf("解析源仓 ref %q 失败: %w", opts.SourceRef, err)
 	}
 	tgtCommit, err := resolveCommit(tgtRepo, opts.TargetRef)
 	if err != nil {
-		return nil, fmt.Errorf("解析目标仓 ref %q 失败: %w", opts.TargetRef, err)
+		return nil, oekiterrors.Errorf("解析目标仓 ref %q 失败: %w", opts.TargetRef, err)
 	}
 
 	srcTree, err := srcCommit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("读取源仓 tree 失败: %w", err)
+		return nil, oekiterrors.Errorf("读取源仓 tree 失败: %w", err)
 	}
 	tgtTree, err := tgtCommit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("读取目标仓 tree 失败: %w", err)
+		return nil, oekiterrors.Errorf("读取目标仓 tree 失败: %w", err)
 	}
 
 	srcFiles, err := flattenTree(srcTree)
 	if err != nil {
-		return nil, fmt.Errorf("展开源仓文件表失败: %w", err)
+		return nil, oekiterrors.Errorf("展开源仓文件表失败: %w", err)
 	}
 	tgtFiles, err := flattenTree(tgtTree)
 	if err != nil {
-		return nil, fmt.Errorf("展开目标仓文件表失败: %w", err)
+		return nil, oekiterrors.Errorf("展开目标仓文件表失败: %w", err)
 	}
 
 	// 源侧路径先过路径规则:重命名落到目标路径,排除项单列。
@@ -266,7 +268,7 @@ func BuildPlan(ctx context.Context, opts Options) (*Plan, error) {
 	// 来源提交标注:单遍历史扫描,避免逐文件路径过滤的平方级代价。
 	origins, err := originCommitMap(ctx, srcRepo, srcCommit.Hash)
 	if err != nil {
-		return nil, fmt.Errorf("扫描源仓历史失败: %w", err)
+		return nil, oekiterrors.Errorf("扫描源仓历史失败: %w", err)
 	}
 
 	for _, path := range ordered {
@@ -624,7 +626,7 @@ func walkTree(t *object.Tree, prefix string, out map[string]treeFile) error {
 		case filemode.Dir:
 			sub, err := t.Tree(entry.Name)
 			if err != nil {
-				return fmt.Errorf("读取子目录 %s 失败: %w", path, err)
+				return oekiterrors.Errorf("读取子目录 %s 失败: %w", path, err)
 			}
 			if err := walkTree(sub, path+"/", out); err != nil {
 				return err
@@ -654,7 +656,7 @@ func resolveCommit(repo *git.Repository, ref string) (*object.Commit, error) {
 func readBlob(repo *git.Repository, h plumbing.Hash) ([]byte, error) {
 	blob, err := repo.BlobObject(h)
 	if err != nil {
-		return nil, fmt.Errorf("读取 blob %s 失败: %w", h, err)
+		return nil, oekiterrors.Errorf("读取 blob %s 失败: %w", h, err)
 	}
 	r, err := blob.Reader()
 	if err != nil {

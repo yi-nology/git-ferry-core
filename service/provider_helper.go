@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/pkg/convert"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -37,13 +37,13 @@ func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride 
 	if token == "" {
 		resolved, err := ResolvePlatformToken(p)
 		if err != nil {
-			return nil, fmt.Errorf("resolve platform token: %w", err)
+			return nil, oekiterrors.Errorf("resolve platform token: %w", err)
 		}
 		token = resolved
 	}
 	prov, err := mgr.Get(providerConfig(p, token, hooks))
 	if err != nil {
-		return nil, fmt.Errorf("create provider failed: %w", err)
+		return nil, oekiterrors.Errorf("create provider failed: %w", err)
 	}
 	return prov, nil
 }

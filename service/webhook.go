@@ -3,13 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/oekit/concurrency/async"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
 )
@@ -86,7 +86,7 @@ func (p *WebhookPayload) toHTTPRequest() *http.Request {
 
 func (s *Service) ReceiveWebhook(ctx context.Context, repoKey string, payload *WebhookPayload) error {
 	if payload == nil {
-		return fmt.Errorf("webhook payload is nil")
+		return oekiterrors.Errorf("webhook payload is nil")
 	}
 
 	repo, prov, err := s.repos.GetRepoWithProvider(repoKey)
@@ -96,12 +96,12 @@ func (s *Service) ReceiveWebhook(ctx context.Context, repoKey string, payload *W
 
 	req := payload.toHTTPRequest()
 	if err := prov.ValidateWebhookSignature(req, repo.WebhookSecret); err != nil {
-		return fmt.Errorf("invalid webhook signature: %w", err)
+		return oekiterrors.Errorf("invalid webhook signature: %w", err)
 	}
 
 	event, err := prov.ParseWebhookEvent(req, repo.WebhookSecret)
 	if err != nil {
-		return fmt.Errorf("parse webhook event failed: %w", err)
+		return oekiterrors.Errorf("parse webhook event failed: %w", err)
 	}
 
 	// 事件 ID 的处理:**绝不能用空 ID**。

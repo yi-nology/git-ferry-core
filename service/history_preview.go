@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	oekiterrors "github.com/oekit/pkg/errors"
 
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/mirror/history"
@@ -115,7 +116,7 @@ func (h *HistoryService) HistoryPreview(ctx context.Context, channelID uint) (*P
 
 	res, err := h.materialize(ctx, *opts, plan, workDir, nil)
 	if err != nil {
-		return nil, fmt.Errorf("预演移植失败: %w", err)
+		return nil, oekiterrors.Errorf("预演移植失败: %w", err)
 	}
 	gate := h.gateCheck(ctx, res.RepoPath, internalIdentifiers(ch)...)
 	return h.previewFrom(ctx, ch, plan, res, gate)
@@ -335,7 +336,7 @@ func (h *HistoryService) checkTargetImpact(ctx context.Context, workRepoPath, ba
 	}
 	repo, err := git.PlainOpen(workRepoPath)
 	if err != nil {
-		return imp, fmt.Errorf("打开工作仓库失败: %w", err)
+		return imp, oekiterrors.Errorf("打开工作仓库失败: %w", err)
 	}
 	if err := history.EnsureRemote(repo, t.Name, t.RepoURL); err != nil {
 		return imp, err
@@ -602,7 +603,7 @@ func (h *HistoryService) HistorySync(ctx context.Context, opts HistorySyncOption
 	// **强制推送的闸门放在 core**:没有批准者就不许强推。
 	// 入口层(HTTP/MCP/AI)负责校验「谁是批准者」(admin),core 只认这个事实。
 	if opts.ForcePush && opts.ForcePushApprovedBy == "" {
-		return report, fmt.Errorf("强制推送需要批准者(admin 角色):没有批准者就不能覆盖远端已有的提交")
+		return report, oekiterrors.Errorf("强制推送需要批准者(admin 角色):没有批准者就不能覆盖远端已有的提交")
 	}
 	pushRes, err := h.pushChannelLatest(ctx, opts.ChannelID, opts.ForcePush)
 	if err != nil {
@@ -610,7 +611,7 @@ func (h *HistoryService) HistorySync(ctx context.Context, opts HistorySyncOption
 		// 直接返回 nil 会让调用方以为什么都没发生,产物路径也丢了 ——
 		// 而产物正是重试推送时唯一能用的东西。
 		report.Push = &HistoryPushDTO{Error: err.Error()}
-		return report, fmt.Errorf("移植成功但推送失败: %w", err)
+		return report, oekiterrors.Errorf("移植成功但推送失败: %w", err)
 	}
 	report.Push = pushRes
 	return report, nil

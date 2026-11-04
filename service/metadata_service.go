@@ -11,6 +11,7 @@ import (
 	"time"
 
 	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -115,7 +116,7 @@ func (s *Service) BackupMetadata(ctx context.Context, o MetadataBackupOptions) (
 	}
 	prov, err := s.ProviderForPlatform(plat, "")
 	if err != nil {
-		return nil, fmt.Errorf("create provider: %w", err)
+		return nil, oekiterrors.Errorf("create provider: %w", err)
 	}
 	if s.BackupDir() == "" {
 		return nil, newMetadataError("sync.backup_dir not configured", nil)
@@ -631,7 +632,7 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 	// 平台不一定实现 IssueManager
 	im, ok := p.(sdkprov.IssueManager)
 	if !ok {
-		return nil, 0, 0, fmt.Errorf("platform %s does not support issue export", repo.Platform)
+		return nil, 0, 0, oekiterrors.Errorf("platform %s does not support issue export", repo.Platform)
 	}
 	// 空 state 交平台默认(通常 open+closed 或 open)
 	st := sdkprov.IssueState(state)
