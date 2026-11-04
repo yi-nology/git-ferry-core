@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 )
@@ -23,10 +23,10 @@ import (
 // BackupFormat=zip 时改为打包 workdir 为 .zip(gickup 风格,便于人工取件)。
 func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, task *model.SyncTask, details *strings.Builder) (string, error) {
 	if backupDir == "" {
-		return "", errors.New("backup dir not configured")
+		return "", oekiterrors.New("backup dir not configured")
 	}
 	if err := os.MkdirAll(backupDir, 0o750); err != nil {
-		return "", errors.Wrap(err, "create backup dir")
+		return "", oekiterrors.Wrap(err, "create backup dir")
 	}
 	name := fmt.Sprintf("%s-%s-%s.bundle",
 		strutil.SanitizeFileToken(task.Key),
@@ -43,7 +43,7 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 		zipName := strings.TrimSuffix(name, ".bundle") + ".zip"
 		zipPath := filepath.Join(backupDir, zipName)
 		if err := zipDir(repoDir, zipPath); err != nil {
-			return "", errors.Wrap(err, "zip archive")
+			return "", oekiterrors.Wrap(err, "zip archive")
 		}
 		fmt.Fprintf(details, "  archive: %s\n", zipPath)
 		return zipPath, nil
@@ -71,7 +71,7 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 		args = append(args, "--tags")
 	}
 	if _, err := e.gitOutput(ctx, repoDir, args...); err != nil {
-		return "", errors.Wrap(err, "git bundle create")
+		return "", oekiterrors.Wrap(err, "git bundle create")
 	}
 	fmt.Fprintf(details, "  bundle: %s\n", outPath)
 	return outPath, nil
@@ -114,7 +114,7 @@ func zipDir(srcDir, dest string) error {
 func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *model.SyncTask) ([]string, error) {
 	branches, err := e.listLocalBranches(repoDir)
 	if err != nil {
-		return nil, errors.Wrap(err, "list local branches for bundle")
+		return nil, oekiterrors.Wrap(err, "list local branches for bundle")
 	}
 	var refs []string
 	for _, b := range branches {
@@ -124,7 +124,7 @@ func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *m
 		refs = append(refs, "refs/heads/"+b)
 	}
 	if len(refs) == 0 {
-		return nil, errors.Errorf("no local branches match %q", task.SourceBranch)
+		return nil, oekiterrors.Errorf("no local branches match %q", task.SourceBranch)
 	}
 	return refs, nil
 }
@@ -168,7 +168,7 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error)
 		removed++
 	}
 	if len(failures) > 0 {
-		return removed, errors.Errorf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+		return removed, oekiterrors.Errorf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
 	}
 	return removed, nil
 }

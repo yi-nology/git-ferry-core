@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 )
 
@@ -64,7 +64,7 @@ func RunDRDrill(ctx context.Context, bundlePath string) (*DrillReport, error) {
 	fi, err := os.Stat(bundlePath)
 	if err != nil {
 		rep.Errors = append(rep.Errors, "bundle not found: "+err.Error())
-		return rep, errors.Wrap(err, "bundle not found")
+		return rep, oekiterrors.Wrap(err, "bundle not found")
 	}
 	rep.BundleSize = fi.Size()
 
@@ -72,27 +72,27 @@ func RunDRDrill(ctx context.Context, bundlePath string) (*DrillReport, error) {
 	heads, err := runGitRead(ctx, "", "bundle", "list-heads", bundlePath)
 	if err != nil {
 		rep.Errors = append(rep.Errors, "list-heads: "+err.Error())
-		return rep, errors.Wrap(err, "bundle list-heads")
+		return rep, oekiterrors.Wrap(err, "bundle list-heads")
 	}
 	expected := parseHeadRefs(heads)
 	rep.RefSpecs = expected
 	if len(expected) == 0 {
 		rep.Errors = append(rep.Errors, "bundle has no refs")
-		return rep, errors.New("bundle has no refs")
+		return rep, oekiterrors.New("bundle has no refs")
 	}
 
 	// 2) 恢复到临时目录
 	tmpDir, err := os.MkdirTemp("", "git-ferry-drill-*")
 	if err != nil {
 		rep.Errors = append(rep.Errors, "temp dir: "+err.Error())
-		return rep, errors.Wrap(err, "create temp dir")
+		return rep, oekiterrors.Wrap(err, "create temp dir")
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 	dest := filepath.Join(tmpDir, "restored")
 
 	if err := RestoreBundle(ctx, bundlePath, dest); err != nil {
 		rep.Errors = append(rep.Errors, "restore: "+err.Error())
-		return rep, errors.Wrap(err, "restore")
+		return rep, oekiterrors.Wrap(err, "restore")
 	}
 
 	// 3) fsck
@@ -107,7 +107,7 @@ func RunDRDrill(ctx context.Context, bundlePath string) (*DrillReport, error) {
 	restoredOut, err := runGitRead(ctx, dest, "for-each-ref", "--format=%(refname) %(objectname)")
 	if err != nil {
 		rep.Errors = append(rep.Errors, "for-each-ref: "+err.Error())
-		return rep, errors.Wrap(err, "for-each-ref")
+		return rep, oekiterrors.Wrap(err, "for-each-ref")
 	}
 	restored := parseForEachRef(restoredOut)
 	rep.RestoredRefs = sortedKeys(restored)

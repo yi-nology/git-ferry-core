@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
@@ -583,14 +582,14 @@ func writeSnapshotPart(snap *MetadataSnapshot, name string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		snap.Warnings = append(snap.Warnings, name+": marshal: "+err.Error())
-		return errors.Wrap(err, "marshal "+name)
+		return oekiterrors.Wrap(err, "marshal "+name)
 	}
 	if err := os.WriteFile(filepath.Join(snap.Dir, name), data, 0o600); err != nil {
 		snap.Warnings = append(snap.Warnings, name+": write: "+err.Error())
 		if snap.writeErr == nil {
-			snap.writeErr = errors.Wrap(err, "write "+name)
+			snap.writeErr = oekiterrors.Wrap(err, "write "+name)
 		}
-		return errors.Wrap(err, "write "+name)
+		return oekiterrors.Wrap(err, "write "+name)
 	}
 	snap.Files = append(snap.Files, name)
 	return nil

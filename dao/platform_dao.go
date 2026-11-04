@@ -3,7 +3,7 @@ package dao
 import (
 	"github.com/yi-nology/go-git-platform/pkg/credential"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -20,7 +20,7 @@ type PlatformDAO struct {
 func NewPlatformDAO(db *gorm.DB) (*PlatformDAO, error) {
 	cm, err := credential.NewCryptoManager()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create CryptoManager")
+		return nil, oekiterrors.Wrap(err, "failed to create CryptoManager")
 	}
 	return &PlatformDAO{db: db, cm: cm}, nil
 }
@@ -57,14 +57,14 @@ func (d *PlatformDAO) encrypt(p *model.Platform) error {
 	if p.AccessToken != "" {
 		encrypted, err := d.cm.Encrypt(p.AccessToken)
 		if err != nil {
-			return errors.Wrap(err, "failed to encrypt access token")
+			return oekiterrors.Wrap(err, "failed to encrypt access token")
 		}
 		p.AccessToken = encrypted
 	}
 	if p.GitHubPrivateKey != "" {
 		encrypted, err := d.cm.Encrypt(p.GitHubPrivateKey)
 		if err != nil {
-			return errors.Wrap(err, "failed to encrypt github app private key")
+			return oekiterrors.Wrap(err, "failed to encrypt github app private key")
 		}
 		p.GitHubPrivateKey = encrypted
 	}
@@ -83,7 +83,7 @@ func (d *PlatformDAO) Create(platform *model.Platform) error {
 func (d *PlatformDAO) FindByKey(key string) (*model.Platform, error) {
 	var platform model.Platform
 	err := d.db.Where("key = ?", key).First(&platform).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -97,7 +97,7 @@ func (d *PlatformDAO) FindByKey(key string) (*model.Platform, error) {
 func (d *PlatformDAO) FindByID(id uint) (*model.Platform, error) {
 	var platform model.Platform
 	err := d.db.Where("id = ?", id).First(&platform).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -133,7 +133,7 @@ func (d *PlatformDAO) FindByType(platformType string) ([]*model.Platform, error)
 func (d *PlatformDAO) FindDefault() (*model.Platform, error) {
 	var platform model.Platform
 	err := d.db.Where("is_default = ?", true).First(&platform).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {

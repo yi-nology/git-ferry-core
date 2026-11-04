@@ -13,8 +13,6 @@ import (
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"github.com/yi-nology/go-git-platform/gitbackend"
-
-	errors "github.com/cockroachdb/errors"
 )
 
 // BundleInfo bundle 文件信息。
@@ -92,12 +90,12 @@ func ListBundles(backupDir, taskKey string) ([]BundleInfo, error) {
 // 返回列出的引用与是否有效。
 func VerifyBundle(ctx context.Context, bundlePath string) (*BundleInfo, error) {
 	if _, err := os.Stat(bundlePath); err != nil {
-		return nil, errors.Wrap(err, "bundle not found")
+		return nil, oekiterrors.Wrap(err, "bundle not found")
 	}
 	// git bundle verify 需要在 git 仓库语境;用 git bundle list-heads 直接读
 	out, err := runGitRead(ctx, "", "bundle", "list-heads", bundlePath)
 	if err != nil {
-		return nil, errors.Wrap(err, "bundle verify failed")
+		return nil, oekiterrors.Wrap(err, "bundle verify failed")
 	}
 	var refs []string
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -129,35 +127,35 @@ func VerifyBundle(ctx context.Context, bundlePath string) (*BundleInfo, error) {
 // destDir 不存在时创建;已存在且非空则拒绝(防误覆盖)。
 func RestoreBundle(ctx context.Context, bundlePath, destDir string) error {
 	if _, err := os.Stat(bundlePath); err != nil {
-		return errors.Wrap(err, "bundle not found")
+		return oekiterrors.Wrap(err, "bundle not found")
 	}
 	if fi, err := os.Stat(destDir); err == nil {
 		if !fi.IsDir() {
-			return errors.Newf("dest %s is not a directory", destDir)
+			return oekiterrors.Errorf("dest %s is not a directory", destDir)
 		}
 		entries, err := os.ReadDir(destDir)
 		if err != nil {
 			return err
 		}
 		if len(entries) > 0 {
-			return errors.Newf("dest %s is not empty; refusing to overwrite", destDir)
+			return oekiterrors.Errorf("dest %s is not empty; refusing to overwrite", destDir)
 		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 	if err := os.MkdirAll(destDir, 0o750); err != nil {
-		return errors.Wrap(err, "create dest dir")
+		return oekiterrors.Wrap(err, "create dest dir")
 	}
 	// git clone <bundle> <dest>
 	if _, err := runGitRead(ctx, "", "clone", bundlePath, destDir); err != nil {
-		return errors.Wrap(err, "clone from bundle failed")
+		return oekiterrors.Wrap(err, "clone from bundle failed")
 	}
 	// bundle 可能缺 HEAD,clone 后工作树为空;主动 checkout 第一个分支
 	if needsCheckout(destDir) {
 		// clone bundle 后常常只有 remotes/origin/<branch>,本地分支缺失
 		refs, rerr := runGitRead(ctx, destDir, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/")
 		if rerr != nil {
-			return errors.Wrap(rerr, "list remote branches after restore")
+			return oekiterrors.Wrap(rerr, "list remote branches after restore")
 		}
 		first := ""
 		for _, line := range strings.Split(strings.TrimSpace(refs), "\n") {
@@ -180,10 +178,10 @@ func RestoreBundle(ctx context.Context, bundlePath, destDir string) error {
 			}
 		}
 		if first == "" {
-			return errors.New("bundle contains no branches")
+			return oekiterrors.New("bundle contains no branches")
 		}
 		if _, cerr := runGitRead(ctx, destDir, "checkout", "-B", first, "origin/"+first); cerr != nil {
-			return errors.Wrap(cerr, "checkout after restore")
+			return oekiterrors.Wrap(cerr, "checkout after restore")
 		}
 	}
 	return nil

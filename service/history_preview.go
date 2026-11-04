@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -398,7 +397,7 @@ func isEmptyRemoteErr(err error) bool {
 		return false
 	}
 	// 远端完全空:go-git 的哨兵错误(经 gitbackend 的包装后仍可 errors.Is 命中)。
-	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+	if oekiterrors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return true
 	}
 	// 远端有内容但没有这条分支:git 的标准措辞。

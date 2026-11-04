@@ -4,7 +4,7 @@ import (
 	"os"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -30,7 +30,7 @@ type appDAOs struct {
 func initDB(cfg *Config) (*gorm.DB, error) {
 	db, err := model.InitDB(cfg.Database.Driver, cfg.Database.DSN)
 	if err != nil {
-		return nil, errors.Wrap(err, "init db failed")
+		return nil, oekiterrors.Wrap(err, "init db failed")
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -47,11 +47,11 @@ func initDB(cfg *Config) (*gorm.DB, error) {
 func initDAOs(db *gorm.DB) (*appDAOs, error) {
 	repoDAO, err := dao.NewRepoDAO(db)
 	if err != nil {
-		return nil, errors.Wrap(err, "init repo DAO failed")
+		return nil, oekiterrors.Wrap(err, "init repo DAO failed")
 	}
 	platformDAO, err := dao.NewPlatformDAO(db)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create PlatformDAO")
+		return nil, oekiterrors.Wrap(err, "failed to create PlatformDAO")
 	}
 	return &appDAOs{
 		repo:     repoDAO,
@@ -71,7 +71,7 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 // ensureTempDir 创建 git 工作目录。
 func ensureTempDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return errors.Wrap(err, "create temp dir failed")
+		return oekiterrors.Wrap(err, "create temp dir failed")
 	}
 	return nil
 }

@@ -3,7 +3,7 @@ package dao
 import (
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -138,7 +138,7 @@ func (d *MirrorRunDAO) HasRunningByChannel(channelID uint) (bool, error) {
 			[]string{model.MirrorRunPending, model.MirrorRunRunning}).
 		Count(&count).Error
 	if err != nil {
-		return false, errors.Wrap(err, "query running mirror run failed")
+		return false, oekiterrors.Wrap(err, "query running mirror run failed")
 	}
 	return count > 0, nil
 }
@@ -156,7 +156,7 @@ func (d *MirrorRunDAO) FindStuckRuns(olderThan time.Duration) ([]*model.MirrorRu
 		cutoff, cutoff,
 	).Find(&runs).Error
 	if err != nil {
-		return nil, errors.Wrap(err, "query stuck mirror runs failed")
+		return nil, oekiterrors.Wrap(err, "query stuck mirror runs failed")
 	}
 	return runs, nil
 }

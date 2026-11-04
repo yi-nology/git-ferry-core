@@ -4,14 +4,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+
+	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // ManifestEntry 单个冷备文件的完整性条目。
@@ -68,7 +70,7 @@ func BuildManifest(backupDir string) (*BackupManifest, error) {
 		}
 		sum, err := fileSHA256(path)
 		if err != nil {
-			return nil, errors.Wrapf(err, "hash %s", e.Name())
+			return nil, oekiterrors.Wrap(err, fmt.Sprintf("hash %s", e.Name()))
 		}
 		leaf := leafHash(e.Name(), fi.Size(), sum)
 		m.Entries = append(m.Entries, ManifestEntry{
@@ -136,11 +138,11 @@ type ManifestVerifyResult struct {
 func VerifyManifest(backupDir string) (*ManifestVerifyResult, error) {
 	stored, err := LoadManifest(backupDir)
 	if err != nil {
-		return nil, errors.Wrap(err, "load manifest")
+		return nil, oekiterrors.Wrap(err, "load manifest")
 	}
 	fresh, err := BuildManifest(backupDir)
 	if err != nil {
-		return nil, errors.Wrap(err, "rebuild manifest")
+		return nil, oekiterrors.Wrap(err, "rebuild manifest")
 	}
 	res := &ManifestVerifyResult{
 		MerkleRoot: fresh.MerkleRoot,

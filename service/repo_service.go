@@ -2,12 +2,13 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/google/uuid"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -58,10 +59,10 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 	result, err := sdkprov.DetectPlatform(req.RemoteURL)
 	if err != nil && req.PlatformID == 0 {
 		// If detection fails and no platform_id provided, return error
-		if errors.Is(err, sdkprov.ErrPlatformNotSupported) {
-			return nil, errors.Wrapf(err, "unsupported platform for URL %s", req.RemoteURL)
+		if oekiterrors.Is(err, sdkprov.ErrPlatformNotSupported) {
+			return nil, oekiterrors.Wrap(err, fmt.Sprintf("unsupported platform for URL %s", req.RemoteURL))
 		}
-		return nil, errors.Wrap(err, "invalid remote URL")
+		return nil, oekiterrors.Wrap(err, "invalid remote URL")
 	}
 
 	// If platform_id is provided, use the platform's type
@@ -197,7 +198,7 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 		var findErr error
 		platform, findErr = rs.platformDAO.FindByID(repo.PlatformID)
 		if findErr != nil {
-			return nil, errors.Wrapf(findErr, "find platform %d for repo %s", repo.PlatformID, repo.Key)
+			return nil, oekiterrors.Wrap(findErr, fmt.Sprintf("find platform %d for repo %s", repo.PlatformID, repo.Key))
 		}
 	}
 	if platform != nil {

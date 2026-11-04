@@ -1,7 +1,7 @@
 package dao
 
 import (
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -57,7 +57,7 @@ func (d *HistoryChannelDAO) Delete(id uint) error {
 func (d *HistoryChannelDAO) FindByName(name string) (*model.HistoryChannel, error) {
 	var ch model.HistoryChannel
 	if err := d.db.Where("name = ?", name).First(&ch).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -188,7 +188,7 @@ func (d *HistoryRunDAO) FindLatestByChannelKind(channelID uint, kind string) (*m
 	var run model.HistoryRun
 	if err := d.db.Where("channel_id = ? AND kind = ?", channelID, kind).
 		Order("id DESC").First(&run).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -201,7 +201,7 @@ func (d *HistoryRunDAO) FindLatestByChannel(channelID uint) (*model.HistoryRun, 
 	var run model.HistoryRun
 	if err := d.db.Where("channel_id = ?", channelID).
 		Order("id DESC").First(&run).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -217,7 +217,7 @@ func (d *HistoryRunDAO) FindLastHashedByChannel(channelID uint) (*model.HistoryR
 	var run model.HistoryRun
 	if err := d.db.Where("channel_id = ? AND entry_hash <> ''", channelID).
 		Order("id DESC").First(&run).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -254,7 +254,7 @@ func (d *HistoryOverrideDAO) Upsert(o *model.HistoryOverride) error {
 		o.CreatedAt = existing.CreatedAt
 		return d.db.Save(o).Error
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if !oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	return d.db.Create(o).Error
@@ -273,7 +273,7 @@ func (d *HistoryOverrideDAO) FindByChannel(channelID uint) ([]*model.HistoryOver
 func (d *HistoryOverrideDAO) FindByPath(channelID uint, path string) (*model.HistoryOverride, error) {
 	var o model.HistoryOverride
 	if err := d.db.Where("channel_id = ? AND path = ?", channelID, path).First(&o).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

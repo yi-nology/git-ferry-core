@@ -1,14 +1,13 @@
 package service
 
 import (
-	errors "github.com/cockroachdb/errors"
-
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/executor"
 )
@@ -143,7 +142,7 @@ func (s *Service) CleanupExpiredBackups() (removed int, err error) {
 		return nil
 	})
 	if len(failures) > 0 {
-		return removed, errors.Errorf("清理未完成:%d 项删除失败(%s)",
+		return removed, oekiterrors.Errorf("清理未完成:%d 项删除失败(%s)",
 			len(failures), strings.Join(failures, "; "))
 	}
 	return removed, nil

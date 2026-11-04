@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/async"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
@@ -124,7 +124,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		WriteTimeoutSec: cfg.Redis.WriteTimeoutSec,
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "init concurrency guard failed")
+		return nil, oekiterrors.Wrap(err, "init concurrency guard failed")
 	}
 	svc.guard = guard
 
@@ -141,7 +141,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 
 	exec, err := executor.NewExecutor(svc)
 	if err != nil {
-		return nil, errors.Wrap(err, "init executor failed")
+		return nil, oekiterrors.Wrap(err, "init executor failed")
 	}
 	svc.executor = exec
 	// 默认用 core 自带的审批存储；WithForcePushApprover 可覆盖（外部审批系统）。
@@ -153,12 +153,12 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 
 	mirrorSvc, err := NewMirrorService(svc, db)
 	if err != nil {
-		return nil, errors.Wrap(err, "init mirror service failed")
+		return nil, oekiterrors.Wrap(err, "init mirror service failed")
 	}
 	svc.mirror = mirrorSvc
 	historySvc, err := NewHistoryService(svc, db)
 	if err != nil {
-		return nil, errors.Wrap(err, "init history service failed")
+		return nil, oekiterrors.Wrap(err, "init history service failed")
 	}
 	svc.history = historySvc
 

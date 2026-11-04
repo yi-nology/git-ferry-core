@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
@@ -60,7 +60,7 @@ func (s *Service) RunDRDrill(ctx context.Context, name string) (*DrillReport, er
 		// 演练报告写不进哈希链要**报错**:否则"演练做过了"却查无此记录,
 		// 而链校验仍报"完整"。
 		if _, serr := executor.SaveDrillReport(s.drillHistoryPath(), rep); serr != nil {
-			return rep, errors.Wrap(serr, "save drill report")
+			return rep, oekiterrors.Wrap(serr, "save drill report")
 		}
 	}
 	return rep, err

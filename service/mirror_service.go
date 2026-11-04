@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/syncx"
 	oekiterrors "github.com/oekit/pkg/errors"
@@ -63,11 +62,11 @@ const mirrorLockTTL = 30 * time.Minute
 func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{})
 	if err != nil {
-		return nil, errors.Wrap(err, "init git backend failed")
+		return nil, oekiterrors.Wrap(err, "init git backend failed")
 	}
 	cm, err := credential.NewCryptoManager()
 	if err != nil {
-		return nil, errors.Wrap(err, "init crypto manager failed")
+		return nil, oekiterrors.Wrap(err, "init crypto manager failed")
 	}
 	// 配 redis 时追加跨实例互斥；未配或 redis 抖动只降级为进程内互斥（有告警）。
 	var locker *distlock.RedisLocker
@@ -133,7 +132,7 @@ func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release f
 				slog.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
 			}
 		}, true, nil
-	case errors.Is(lerr, distlock.ErrLockNotAcquired):
+	case oekiterrors.Is(lerr, distlock.ErrLockNotAcquired):
 		return func() {}, false, oekiterrors.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
 	default:
 		// redis 抖动：降级为进程内互斥，不阻断镜像任务
@@ -239,7 +238,7 @@ func compileScrubRules(in []MirrorScrubRuleInput) ([]mirror.ScrubRule, error) {
 	for i, r := range in {
 		pattern, err := regexp.Compile(r.Pattern)
 		if err != nil {
-			return nil, errors.Wrapf(err, "第 %d 条痕迹规则的 pattern 非法", i+1)
+			return nil, oekiterrors.Wrap(err, fmt.Sprintf("第 %d 条痕迹规则的 pattern 非法", i+1))
 		}
 		severity := mirror.ScrubAuto
 		if r.Severity == "mandatory" {
@@ -260,7 +259,7 @@ func channelScrubRules(ch *model.MirrorChannel) ([]mirror.ScrubRule, error) {
 	}
 	var in []MirrorScrubRuleInput
 	if err := json.Unmarshal([]byte(ch.ScrubRules), &in); err != nil {
-		return nil, errors.Wrap(err, "通道的痕迹规则配置损坏")
+		return nil, oekiterrors.Wrap(err, "通道的痕迹规则配置损坏")
 	}
 	return compileScrubRules(in)
 }
@@ -271,7 +270,7 @@ func channelScrubRules(ch *model.MirrorChannel) ([]mirror.ScrubRule, error) {
 // 提前暴露仓库不可达 / module 缺失 / 目标身份相同等问题。
 func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirrorChannelInput) (*model.MirrorChannel, error) {
 	if strings.TrimSpace(in.Name) == "" {
-		return nil, errors.New("通道名称不能为空")
+		return nil, oekiterrors.New("通道名称不能为空")
 	}
 	if in.Mode == "" {
 		in.Mode = model.MirrorModePublish
@@ -280,7 +279,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		return nil, oekiterrors.Errorf("不支持的模式: %s", in.Mode)
 	}
 	if len(in.Targets) == 0 {
-		return nil, errors.New("至少需要一个目标")
+		return nil, oekiterrors.New("至少需要一个目标")
 	}
 
 	repo, err := m.svc.GetRepoByKey(in.RepoKey)
@@ -301,7 +300,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		}
 		raw, err := json.Marshal(in.ScrubRules)
 		if err != nil {
-			return nil, errors.Wrap(err, "marshal scrub rules failed")
+			return nil, oekiterrors.Wrap(err, "marshal scrub rules failed")
 		}
 		ch.ScrubRules = string(raw)
 	}
@@ -316,7 +315,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 	//
 	// 落库后任何失败都回滚(不留半成品通道)。
 	if err := m.channels.Create(ch); err != nil {
-		return nil, errors.Wrap(err, "create mirror channel failed")
+		return nil, oekiterrors.Wrap(err, "create mirror channel failed")
 	}
 	rollback := true
 	defer func() {
@@ -337,7 +336,7 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 		}
 		// module 是建通道时从克隆里读出来的 ⇒ 回写
 		if err := m.channels.Update(ch); err != nil {
-			return nil, errors.Wrap(err, "update mirror channel failed")
+			return nil, oekiterrors.Wrap(err, "update mirror channel failed")
 		}
 	}
 
@@ -356,7 +355,7 @@ func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetIn
 	}
 	if ch.Mode == model.MirrorModePublish {
 		if in.TargetModule == "" {
-			return nil, errors.New("目标 module 不能为空")
+			return nil, oekiterrors.New("目标 module 不能为空")
 		}
 		if in.TargetModule == ch.Module {
 			return nil, oekiterrors.Errorf("目标 module 与源相同(%s),无改写意义", ch.Module)
@@ -378,12 +377,12 @@ func (m *MirrorService) createTarget(ch *model.MirrorChannel, in *MirrorTargetIn
 	if in.Credential != "" {
 		enc, err := m.cm.Encrypt(in.Credential)
 		if err != nil {
-			return nil, errors.Wrap(err, "encrypt credential failed")
+			return nil, oekiterrors.Wrap(err, "encrypt credential failed")
 		}
 		t.Credential = enc
 	}
 	if err := m.channels.CreateTarget(t); err != nil {
-		return nil, errors.Wrap(err, "create mirror target failed")
+		return nil, oekiterrors.Wrap(err, "create mirror target failed")
 	}
 	t.HasCredential = t.Credential != ""
 	return t, nil
@@ -396,7 +395,7 @@ func validateTargetInput(in *MirrorTargetInput, requireCredential bool) error {
 		return oekiterrors.Errorf("远端名非法: %q", in.Remote)
 	}
 	if strings.TrimSpace(in.RepoURL) == "" {
-		return errors.New("目标仓库 URL 不能为空")
+		return oekiterrors.New("目标仓库 URL 不能为空")
 	}
 	switch in.CredType {
 	case "", model.MirrorCredNone:
@@ -432,7 +431,7 @@ func (m *MirrorService) UpdateMirrorTarget(ctx context.Context, targetID uint, i
 	if in.Credential != "" {
 		enc, err := m.cm.Encrypt(in.Credential)
 		if err != nil {
-			return nil, errors.Wrap(err, "encrypt credential failed")
+			return nil, oekiterrors.Wrap(err, "encrypt credential failed")
 		}
 		t.Credential = enc
 	}
@@ -659,7 +658,7 @@ func (m *MirrorService) targetAuth(t *model.MirrorTarget) (gitbackend.AuthConfig
 	case model.MirrorCredToken:
 		plain, err := m.cm.Decrypt(t.Credential)
 		if err != nil {
-			return gitbackend.AuthConfig{}, errors.Wrap(err, "decrypt credential failed")
+			return gitbackend.AuthConfig{}, oekiterrors.Wrap(err, "decrypt credential failed")
 		}
 		user := t.Username
 		if user == "" {
@@ -669,7 +668,7 @@ func (m *MirrorService) targetAuth(t *model.MirrorTarget) (gitbackend.AuthConfig
 	case model.MirrorCredSSHKey:
 		plain, err := m.cm.Decrypt(t.Credential)
 		if err != nil {
-			return gitbackend.AuthConfig{}, errors.Wrap(err, "decrypt credential failed")
+			return gitbackend.AuthConfig{}, oekiterrors.Wrap(err, "decrypt credential failed")
 		}
 		if plain == "" {
 			// 构造器把空 key 折叠成 AuthNone;这里保持原语义(空 key 是坏配置,
@@ -698,7 +697,7 @@ func (m *MirrorService) PreviewMirrorRun(ctx context.Context, channelID, targetI
 		return nil, err
 	}
 	if ch.Mode != model.MirrorModePublish {
-		return nil, errors.New("预检仅支持 publish 模式")
+		return nil, oekiterrors.New("预检仅支持 publish 模式")
 	}
 	// 预检整段持通道闸门:与发布同一把 ⇒ 预检不会读到"发布改到一半"的工作区。
 	unlock, lerr := m.lockChannelLocal(ctx, channelID)
@@ -745,7 +744,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 		return nil, oekiterrors.Errorf("不支持的执行类别: %s", kind)
 	}
 	if len(in.Tags) == 0 {
-		return nil, errors.New("Tags 至少需要一个")
+		return nil, oekiterrors.New("Tags 至少需要一个")
 	}
 	// --- 同通道执行权:**同步占位** ---
 	//
@@ -755,7 +754,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 	// 占位必须发生在**创建 run 记录之前**,竞争窗口才为零。
 	releaseReserve, reserved := m.reserveChannel(channelID)
 	if !reserved {
-		return nil, errors.New("该通道有执行中的任务,请稍后再试")
+		return nil, oekiterrors.New("该通道有执行中的任务,请稍后再试")
 	}
 	// 跨实例:配 redis 时抢分布式锁,被别的实例占用即忙碌(不排队)。
 	releaseRemote, acquired, lerr := m.tryLockRemote(ctx, channelID)
@@ -764,7 +763,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 		if lerr != nil {
 			return nil, lerr
 		}
-		return nil, errors.New("该通道正在其它实例执行,请稍后再试")
+		return nil, oekiterrors.New("该通道正在其它实例执行,请稍后再试")
 	}
 
 	// DB 里的"有在跑的 run"仍然查一遍:覆盖**进程重启后遗留的僵尸 run**
@@ -778,7 +777,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 	if running {
 		releaseRemote()
 		releaseReserve()
-		return nil, errors.New("该通道有执行中的任务,请稍后再试")
+		return nil, oekiterrors.New("该通道有执行中的任务,请稍后再试")
 	}
 
 	tagsJSON, _ := json.Marshal(in.Tags)
@@ -795,7 +794,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 	if err := m.runs.Create(run); err != nil {
 		releaseRemote()
 		releaseReserve()
-		return nil, errors.Wrap(err, "create mirror run failed")
+		return nil, oekiterrors.Wrap(err, "create mirror run failed")
 	}
 
 	// 异步执行:挂到 Service 的后台上下文,随服务关停而取消
@@ -851,7 +850,7 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 	case model.MirrorModePublish:
 		runErr = m.executePublish(ctx, run, ch, t, in)
 	case model.MirrorModeBackup:
-		runErr = errors.New("backup 模式将在 P1 提供")
+		runErr = oekiterrors.New("backup 模式将在 P1 提供")
 	}
 
 	fin := time.Now()
@@ -973,7 +972,7 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 		return nil, err
 	}
 	if len(rep2.Tags) == 0 {
-		return nil, errors.New("空报告")
+		return nil, oekiterrors.New("空报告")
 	}
 	return &rep2.Tags[0], nil
 }
@@ -985,7 +984,7 @@ func (m *MirrorService) VerifyMirrorTargetVersion(ctx context.Context, channelID
 		return nil, err
 	}
 	if t.TargetModule == "" {
-		return nil, errors.New("该目标无 module 身份(backup 模式用 hash 比对验证,P1)")
+		return nil, oekiterrors.New("该目标无 module 身份(backup 模式用 hash 比对验证,P1)")
 	}
 	if err := mirror.VerifyModule(ctx, t.TargetModule, tag); err != nil {
 		return nil, err
@@ -1064,7 +1063,7 @@ func (m *MirrorService) loadChannelAndTarget(channelID, targetID uint) (*model.M
 		return nil, nil, oekiterrors.Errorf("目标不存在: %d", targetID)
 	}
 	if t.ChannelID != channelID {
-		return nil, nil, errors.New("目标不属于该通道")
+		return nil, nil, oekiterrors.New("目标不属于该通道")
 	}
 	return ch, t, nil
 }

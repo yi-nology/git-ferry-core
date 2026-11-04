@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/pkg/cache"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/githubapp"
 )
@@ -34,7 +34,7 @@ var ghAppTokenCache = cache.NewSingleFlightCache(ghAppTokenInner)
 func MintGitHubAppJWT(appID int64, privateKeyPEM string) (string, error) {
 	token, err := githubapp.MintJWT(appID, privateKeyPEM)
 	if err != nil {
-		return "", errors.Wrap(err, "mint github app jwt")
+		return "", oekiterrors.Wrap(err, "mint github app jwt")
 	}
 	return token, nil
 }
@@ -46,7 +46,7 @@ func FetchGitHubInstallationToken(ctxTimeout time.Duration, apiBase string, appI
 	defer cancel()
 	token, err := githubapp.FetchInstallationToken(ctx, apiBase, appID, installationID, privateKeyPEM)
 	if err != nil {
-		return "", errors.Wrap(err, "fetch github installation token")
+		return "", oekiterrors.Wrap(err, "fetch github installation token")
 	}
 	return token, nil
 }
@@ -56,7 +56,7 @@ func FetchGitHubInstallationToken(ctxTimeout time.Duration, apiBase string, appI
 // App token 带缓存,过期前自动刷新。
 func ResolvePlatformToken(p *model.Platform) (string, error) {
 	if p == nil {
-		return "", errors.New("platform is nil")
+		return "", oekiterrors.New("platform is nil")
 	}
 	// GitHub App
 	if p.GitHubAppID > 0 && p.GitHubInstallationID > 0 && p.GitHubPrivateKey != "" {
@@ -92,7 +92,7 @@ func githubAppToken(p *model.Platform) (string, error) {
 		return "", err
 	}
 	if token == nil {
-		return "", errors.New("empty installation token")
+		return "", oekiterrors.New("empty installation token")
 	}
 	return *token, nil
 }

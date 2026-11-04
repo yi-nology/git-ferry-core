@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -23,13 +23,13 @@ import (
 // (gitbackend GitError)。临时 remote 推送后清理。
 func (s *Service) PushTaskBackup(ctx context.Context, task *model.SyncTask, workDir, remoteURL, refspec string, force bool) (string, error) {
 	if task == nil {
-		return "", errors.New("task is nil")
+		return "", oekiterrors.New("task is nil")
 	}
 	if strings.TrimSpace(workDir) == "" {
-		return "", errors.New("workDir is required")
+		return "", oekiterrors.New("workDir is required")
 	}
 	if strings.TrimSpace(remoteURL) == "" {
-		return "", errors.New("remote URL is required")
+		return "", oekiterrors.New("remote URL is required")
 	}
 	if refspec == "" {
 		refspec = "+refs/heads/*:refs/heads/*"
@@ -41,7 +41,7 @@ func (s *Service) PushTaskBackup(ctx context.Context, task *model.SyncTask, work
 	}
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{Type: backendType})
 	if err != nil {
-		return "", errors.Wrap(err, "init git backend failed")
+		return "", oekiterrors.Wrap(err, "init git backend failed")
 	}
 
 	// 远端以临时名注册(与 executor/backup_remote.go 一致:remove 失败忽略),
@@ -49,7 +49,7 @@ func (s *Service) PushTaskBackup(ctx context.Context, task *model.SyncTask, work
 	const remoteName = "backup-manual"
 	_ = backend.RemoveRemote(ctx, workDir, remoteName)
 	if err := backend.AddRemote(ctx, workDir, remoteName, remoteURL); err != nil {
-		return "", errors.Wrap(err, "add backup remote failed")
+		return "", oekiterrors.Wrap(err, "add backup remote failed")
 	}
 	defer func() { _ = backend.RemoveRemote(ctx, workDir, remoteName) }()
 

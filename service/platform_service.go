@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -73,10 +73,10 @@ func (s *PlatformService) UpdatePlatformStatus(ctx context.Context, key, status,
 func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string) (*sdkprov.TestConnectionResult, error) {
 	platform, err := s.platformDAO.FindByKey(key)
 	if err != nil {
-		return nil, errors.Wrap(err, "query platform failed")
+		return nil, oekiterrors.Wrap(err, "query platform failed")
 	}
 	if platform == nil {
-		return nil, errors.Newf("platform not found: %s", key)
+		return nil, oekiterrors.Errorf("platform not found: %s", key)
 	}
 
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
@@ -87,7 +87,7 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 	// 测试连接
 	result, err := provider.TestConnection(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "test connection failed")
+		return nil, oekiterrors.Wrap(err, "test connection failed")
 	}
 
 	return result, nil
@@ -97,10 +97,10 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkprov.PlatformRepo, error) {
 	platform, err := s.platformDAO.FindByKey(key)
 	if err != nil {
-		return nil, errors.Wrap(err, "query platform failed")
+		return nil, oekiterrors.Wrap(err, "query platform failed")
 	}
 	if platform == nil {
-		return nil, errors.Newf("platform not found: %s", key)
+		return nil, oekiterrors.Errorf("platform not found: %s", key)
 	}
 
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
@@ -112,7 +112,7 @@ func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perP
 	p, pp := parsePageOpts(page, perPage)
 	repos, err := provider.ListRepos(ctx, sdkprov.ListRepoOptions{Page: p, PerPage: pp})
 	if err != nil {
-		return nil, errors.Wrap(err, "list repos failed")
+		return nil, oekiterrors.Wrap(err, "list repos failed")
 	}
 
 	return repos, nil
@@ -128,10 +128,10 @@ func (s *PlatformService) SyncPlatformRepos(ctx context.Context, key string) (in
 func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key string, filter *RepoImportFilter) (int, error) {
 	platform, err := s.platformDAO.FindByKey(key)
 	if err != nil {
-		return 0, errors.Wrap(err, "query platform failed")
+		return 0, oekiterrors.Wrap(err, "query platform failed")
 	}
 	if platform == nil {
-		return 0, errors.Newf("platform not found: %s", key)
+		return 0, oekiterrors.Errorf("platform not found: %s", key)
 	}
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
 	if err != nil {
@@ -140,7 +140,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 	// 翻页拉全量,否则超过一页的仓库永远不会被同步
 	repos, err := fetchAllPlatformRepos(ctx, provider)
 	if err != nil {
-		return 0, errors.Wrap(err, "list repos failed")
+		return 0, oekiterrors.Wrap(err, "list repos failed")
 	}
 
 	existingRepos, existingErr := s.repoDAO.FindByPlatformID(platform.ID)
@@ -202,7 +202,7 @@ func (s *PlatformService) ListReposByPlatform(ctx context.Context, platformKey s
 		return nil, err
 	}
 	if platform == nil {
-		return nil, errors.Newf("platform not found: %s", platformKey)
+		return nil, oekiterrors.Errorf("platform not found: %s", platformKey)
 	}
 	return s.repoDAO.FindByPlatformID(platform.ID)
 }
@@ -214,7 +214,7 @@ func (s *PlatformService) CountReposByPlatform(ctx context.Context, platformKey 
 		return 0, err
 	}
 	if platform == nil {
-		return 0, errors.Newf("platform not found: %s", platformKey)
+		return 0, oekiterrors.Errorf("platform not found: %s", platformKey)
 	}
 	return s.repoDAO.CountByPlatformID(platform.ID)
 }

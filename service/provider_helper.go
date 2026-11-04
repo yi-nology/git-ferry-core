@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/pkg/convert"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
@@ -31,7 +30,7 @@ func providerConfig(p *model.Platform, token string, hooks *sdkprov.Hooks) sdkpr
 // tokenOverride 非空时优先;否则按平台解析(GitHub App installation token 感知)。
 func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride string, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
 	if mgr == nil {
-		return nil, errors.New("provider manager is nil")
+		return nil, oekiterrors.New("provider manager is nil")
 	}
 	token := tokenOverride
 	if token == "" {
@@ -59,10 +58,10 @@ func platformProvider(mgr *sdkprov.Manager, p *model.Platform, hooks *sdkprov.Ho
 // tokenOverride 非空优先,否则 ResolvePlatformToken(GitHub App 感知)。
 func (s *Service) ProviderForPlatform(p *model.Platform, tokenOverride string) (sdkprov.Provider, error) {
 	if p == nil {
-		return nil, errors.New("platform is nil")
+		return nil, oekiterrors.New("platform is nil")
 	}
 	if s.platforms == nil {
-		return nil, errors.New("provider manager is nil")
+		return nil, oekiterrors.New("provider manager is nil")
 	}
 	return providerFromManager(s.platforms.providerMgr, p, tokenOverride, s.providerHooks)
 }

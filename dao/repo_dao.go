@@ -3,7 +3,7 @@ package dao
 import (
 	"github.com/yi-nology/go-git-platform/pkg/credential"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -43,7 +43,7 @@ type RepoDAO struct {
 func NewRepoDAO(db *gorm.DB) (*RepoDAO, error) {
 	cm, err := credential.NewCryptoManager()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create CryptoManager")
+		return nil, oekiterrors.Wrap(err, "failed to create CryptoManager")
 	}
 	return &RepoDAO{db: db, cm: cm}, nil
 }
@@ -57,7 +57,7 @@ func (d *RepoDAO) FindAll(page Pagination) ([]*model.Repo, int64, error) {
 func (d *RepoDAO) FindByKey(key string) (*model.Repo, error) {
 	var repo model.Repo
 	err := d.db.Where("`key` = ?", key).First(&repo).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -139,7 +139,7 @@ func (d *RepoDAO) Delete(key string) error {
 func (d *RepoDAO) FindByCloneURL(cloneURL string) (*model.Repo, error) {
 	var repo model.Repo
 	err := d.db.Where("clone_url = ?", cloneURL).First(&repo).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -154,7 +154,7 @@ func (d *RepoDAO) FindByCloneURL(cloneURL string) (*model.Repo, error) {
 func (d *RepoDAO) FindByPlatformAndRepo(platformID uint, platformRepo string) (*model.Repo, error) {
 	var repo model.Repo
 	err := d.db.Where("platform_id = ? AND platform_repo = ?", platformID, platformRepo).First(&repo).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {

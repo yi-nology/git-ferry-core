@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/syncx"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/redisx/distlock"
@@ -83,11 +82,11 @@ const historyLockTTL = 30 * time.Minute
 func NewHistoryService(svc *Service, db *gorm.DB) (*HistoryService, error) {
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{})
 	if err != nil {
-		return nil, errors.Wrap(err, "init git backend failed")
+		return nil, oekiterrors.Wrap(err, "init git backend failed")
 	}
 	cm, err := credential.NewCryptoManager()
 	if err != nil {
-		return nil, errors.Wrap(err, "init credential manager failed")
+		return nil, oekiterrors.Wrap(err, "init credential manager failed")
 	}
 	// 配 redis 时追加跨实例互斥;未配或 redis 抖动只降级为进程内互斥(有告警)。
 	var locker *distlock.RedisLocker
@@ -168,7 +167,7 @@ func (h *HistoryService) lockChannel(ctx context.Context, chID uint) (func(), er
 		switch {
 		case lerr == nil:
 			ownerID = id
-		case errors.Is(lerr, distlock.ErrLockNotAcquired):
+		case oekiterrors.Is(lerr, distlock.ErrLockNotAcquired):
 			releaseLocal()
 			return func() {}, oekiterrors.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
 		default:
@@ -511,7 +510,7 @@ func (h *HistoryService) encryptCredential(in HistoryTargetInput) (credType, enc
 		}
 		enc, err := h.cm.Encrypt(in.Credential)
 		if err != nil {
-			return "", "", "", errors.Wrap(err, "encrypt credential failed")
+			return "", "", "", oekiterrors.Wrap(err, "encrypt credential failed")
 		}
 		if username == "" {
 			username = "oauth2"
@@ -520,7 +519,7 @@ func (h *HistoryService) encryptCredential(in HistoryTargetInput) (credType, enc
 	case model.HistoryCredSSHKey:
 		enc, err := h.cm.Encrypt(in.Credential)
 		if err != nil {
-			return "", "", "", errors.Wrap(err, "encrypt credential failed")
+			return "", "", "", oekiterrors.Wrap(err, "encrypt credential failed")
 		}
 		return credType, enc, username, nil
 	default:
@@ -536,7 +535,7 @@ func (h *HistoryService) targetAuth(t *model.HistoryTarget) (gitbackend.AuthConf
 	case model.HistoryCredToken:
 		plain, err := h.cm.Decrypt(t.Credential)
 		if err != nil {
-			return gitbackend.AuthConfig{}, errors.Wrap(err, "decrypt credential failed")
+			return gitbackend.AuthConfig{}, oekiterrors.Wrap(err, "decrypt credential failed")
 		}
 		user := t.Username
 		if user == "" {
@@ -546,7 +545,7 @@ func (h *HistoryService) targetAuth(t *model.HistoryTarget) (gitbackend.AuthConf
 	case model.HistoryCredSSHKey:
 		plain, err := h.cm.Decrypt(t.Credential)
 		if err != nil {
-			return gitbackend.AuthConfig{}, errors.Wrap(err, "decrypt credential failed")
+			return gitbackend.AuthConfig{}, oekiterrors.Wrap(err, "decrypt credential failed")
 		}
 		if plain == "" {
 			return gitbackend.AuthConfig{Type: gitbackend.AuthSSH}, nil

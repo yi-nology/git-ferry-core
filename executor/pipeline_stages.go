@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	"github.com/oekit/concurrency/retry"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -25,17 +25,17 @@ func (cloneFetchStage) Run(ctx context.Context, rc *RunContext) error {
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); os.IsNotExist(err) {
 		rc.logf("initial clone of source repo...\n")
 		if err := rc.Exec.cloneRepo(ctx, repoDir, rc.SourceRepo, rc.Task, rc.Platforms[rc.SourceRepo.PlatformID]); err != nil {
-			return errors.Wrap(err, "clone failed")
+			return oekiterrors.Wrap(err, "clone failed")
 		}
 	} else {
 		rc.logf("fetch updates from source repo...\n")
 		if err := rc.Exec.fetchRepo(ctx, repoDir, rc.Task, rc.SourceRepo, rc.Platforms[rc.SourceRepo.PlatformID]); err != nil {
-			return errors.Wrap(err, "fetch failed")
+			return oekiterrors.Wrap(err, "fetch failed")
 		}
 	}
 	if rc.Task.GitLFS {
 		if err := rc.Exec.syncLFS(ctx, repoDir, RemoteOrigin, true); err != nil {
-			return errors.Wrap(err, "lfs fetch failed")
+			return oekiterrors.Wrap(err, "lfs fetch failed")
 		}
 		rc.logf("  LFS objects fetched\n")
 	}
@@ -116,10 +116,10 @@ func (pushStage) Run(ctx context.Context, rc *RunContext) error {
 		}
 		return nil
 	}
-	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
-		return errors.Wrap(err, "retry aborted")
+	if ctx.Err() != nil && oekiterrors.Is(err, ctx.Err()) {
+		return oekiterrors.Wrap(err, "retry aborted")
 	}
-	return errors.Wrapf(err, "push failed after %d attempts", maxRetries)
+	return oekiterrors.Wrap(err, fmt.Sprintf("push failed after %d attempts", maxRetries))
 }
 
 // wikiStage 同步 wiki(可选,失败不阻断)。

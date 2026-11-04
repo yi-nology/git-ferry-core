@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
@@ -25,14 +25,14 @@ import (
 func expandBranchSpec(sourceSpec string, listRefs func() ([]string, error)) (branches []string, multi bool, err error) {
 	spec := strings.TrimSpace(sourceSpec)
 	if spec == "" {
-		return nil, false, errors.New("empty source branch")
+		return nil, false, oekiterrors.New("empty source branch")
 	}
 	if !strings.ContainsAny(spec, "*?[") {
 		return []string{spec}, false, nil
 	}
 	refs, err := listRefs()
 	if err != nil {
-		return nil, false, errors.Wrap(err, "list refs for branch glob failed")
+		return nil, false, oekiterrors.Wrap(err, "list refs for branch glob failed")
 	}
 	var out []string
 	for _, r := range refs {
@@ -45,7 +45,7 @@ func expandBranchSpec(sourceSpec string, listRefs func() ([]string, error)) (bra
 		}
 	}
 	if len(out) == 0 {
-		return nil, true, errors.Newf("branch glob %q matched nothing", spec)
+		return nil, true, oekiterrors.Errorf("branch glob %q matched nothing", spec)
 	}
 	return out, true, nil
 }
@@ -73,7 +73,7 @@ func (e *divergentError) Error() string {
 // isDivergent 判断是否分歧保护错误。
 func isDivergent(err error) bool {
 	var d *divergentError
-	return errors.As(err, &d)
+	return oekiterrors.As(err, &d)
 }
 
 // checkDivergencePolicy 按显式策略做分歧保护。
@@ -99,7 +99,7 @@ func (e *Executor) checkDivergencePolicy(ctx context.Context, dir, sourceBranch,
 	// 若按 block 落审批,运维一次"放行"就会在**没有备份**的情况下覆盖目标侧独有提交 ——
 	// 那正是这个策略要防的数据丢失。配置没配好就该是配置错,不该被审批绕过。
 	if policy == "backup_on_demand" && backupDir == "" {
-		return false, "", errors.New("force_push_policy=backup_on_demand 需要先打回滚快照," +
+		return false, "", oekiterrors.New("force_push_policy=backup_on_demand 需要先打回滚快照," +
 			"但未配置 sync.backup_dir(备份目录);请配置备份目录后重试。" +
 			"本次未覆盖任何内容,也未产生审批申请 —— 避免在没有备份的情况下被放行覆盖")
 	}
@@ -157,7 +157,7 @@ func (e *Executor) fetchTargetForDivergence(ctx context.Context, dir string,
 	}); err != nil {
 		// 目标分支**已知存在**(本地留有远端跟踪 ref)却连不上 ⇒ fail-closed。
 		if e.targetBranchKnown(ctx, dir, knownBranches) {
-			return false, errors.Wrapf(err,
+			return false, oekiterrors.Wrap(err,
 				"cannot verify divergence: target fetch failed while the target branch is known to exist")
 		}
 		// 已经是**全量** fetch 还是失败 ⇒ 目标端不可达/损坏 ⇒
@@ -167,14 +167,14 @@ func (e *Executor) fetchTargetForDivergence(ctx context.Context, dir string,
 		// 逐分支判定也判不出来("目标分支不存在"与"连不上"都表现为查不到 ref)
 		// ⇒ 目标侧独有提交被静默覆盖,而任务报 success。
 		if fetchBranches == nil {
-			return false, errors.Wrapf(err,
+			return false, oekiterrors.Wrap(err,
 				"cannot verify divergence: target fetch failed (target unreachable or broken); "+
 					"refusing to overwrite without knowing the target state")
 		}
 		// 分支专属的 fetch 失败,可能只是"目标端确实没这个分支"(首次推送)⇒
 		// 全量再取一次来区分:全量也失败 ⇒ 目标端不可达 ⇒ fail-closed。
 		if ferr := e.fetchTargetAll(ctx, dir, repo, platform); ferr != nil {
-			return false, errors.Wrapf(err, "cannot verify divergence: target fetch failed")
+			return false, oekiterrors.Wrap(err, "cannot verify divergence: target fetch failed")
 		}
 		slog.Info("目标端没有这些分支(首次推送),按无分歧处理",
 			"branches", strings.Join(knownBranches, ","), "error", err)
@@ -247,15 +247,15 @@ func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBran
 		// 只有一种情况可以放行:目标分支**压根不存在**(首次推送,没有独有提交可覆盖)。
 		// 本地有该远端跟踪 ref 却算不出来 ⇒ fail-closed,报错让人工介入。
 		if _, rerr := e.backend.RevParse(ctx, dir, targetRef); rerr == nil {
-			return false, "", errors.Wrapf(err,
-				"cannot verify divergence for %q: target branch exists but the comparison failed", targetBranch)
+			return false, "", oekiterrors.Wrap(err, fmt.Sprintf(
+				"cannot verify divergence for %q: target branch exists but the comparison failed", targetBranch))
 		}
 		if !targetKnown {
 			// 目标端状态**未知**(取回失败)且本地也没有它的跟踪 ref ⇒
 			// "查不到"既可能是"目标端没这个分支",也可能是"目标端连不上"——
 			// 不区分就会把"不知道"当成"没有"⇒ 放行覆盖目标侧独有提交。
-			return false, "", errors.Wrapf(err,
-				"cannot verify divergence for %q: target state unknown (fetch failed and no local tracking ref)", targetBranch)
+			return false, "", oekiterrors.Wrap(err, fmt.Sprintf(
+				"cannot verify divergence for %q: target state unknown (fetch failed and no local tracking ref)", targetBranch))
 		}
 		return false, "", nil
 	}
@@ -271,7 +271,7 @@ func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBran
 		snap := filepath.Join(backupDir,
 			fmt.Sprintf("predemote-%s-%s.bundle", strutil.SanitizeFileToken(targetBranch), time.Now().Format("20060102-150405")))
 		if _, berr := e.gitOutput(ctx, dir, "bundle", "create", snap, targetRef); berr != nil {
-			return false, "", errors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
+			return false, "", oekiterrors.Wrap(berr, "backup_on_demand snapshot failed; refusing to overwrite divergent branch")
 		}
 		return false, "", nil
 	}
@@ -287,8 +287,8 @@ func (e *Executor) checkDivergenceForBranch(ctx context.Context, dir, sourceBran
 	// 算不出来就不该放行:报错让人工介入。
 	targetSHA, shaErr := e.backend.RevParse(ctx, dir, targetRef)
 	if shaErr != nil {
-		return false, "", errors.Wrapf(shaErr,
-			"cannot resolve target HEAD %q for divergence check", targetRef)
+		return false, "", oekiterrors.Wrap(shaErr, fmt.Sprintf(
+			"cannot resolve target HEAD %q for divergence check", targetRef))
 	}
 	if e.Approver != nil {
 		if e.Approver.IsForcePushApproved(taskKey, targetBranch, targetSHA) {
@@ -343,14 +343,14 @@ func (e *Executor) gitOutput(ctx context.Context, dir string, args ...string) (s
 // 非 native(gogit 不 shell out)时,不存在“平台跑过一次又跑一次”的重复执行。
 func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
-		return "", errors.New("empty git args")
+		return "", oekiterrors.New("empty git args")
 	}
 	if native, ok := backend.(*gitbackend.NativeGitBackend); ok && native != nil {
 		stdout, stderr, err := native.RunRaw(ctx, dir, args)
 		switch {
 		case err == nil:
 			return stdout, nil
-		case errors.Is(err, gitbackend.ErrInvalidGitArg):
+		case oekiterrors.Is(err, gitbackend.ErrInvalidGitArg):
 			// 平台白名单之外(bundle/fsck/update-ref/lfs/...)→ 回落裸 git
 		default:
 			return "", gitCmdError(args, stderr, err)
@@ -367,7 +367,7 @@ func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, di
 
 // gitCmdError 保持历史错误文案:`git <argv>: <输出>`。
 func gitCmdError(args []string, out string, err error) error {
-	return errors.Wrapf(err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(out))
+	return oekiterrors.Wrap(err, fmt.Sprintf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(out)))
 }
 
 // syncLFS 同步 LFS 对象(git-lfs 命令行;未安装时返回可识别错误)。
@@ -375,7 +375,7 @@ func gitCmdError(args []string, out string, err error) error {
 // `git lfs` 不在平台 RunRaw 白名单内,实际仍走裸 git(gitOutput 内回落)。
 func (e *Executor) syncLFS(ctx context.Context, dir, remote string, pull bool) error {
 	if _, err := exec.LookPath("git-lfs"); err != nil {
-		return errors.New("git-lfs not installed in PATH (install git-lfs to sync LFS objects)")
+		return oekiterrors.New("git-lfs not installed in PATH (install git-lfs to sync LFS objects)")
 	}
 	var args []string
 	if pull {

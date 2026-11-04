@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -262,11 +262,11 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRepo *model.Repo) (string, error) {
 	backend := lifecycleBackend()
 	if backend == nil {
-		return "", errors.New("git backend 不可用")
+		return "", oekiterrors.New("git backend 不可用")
 	}
 	srcRepo, err := s.GetRepoByKey(t.SourceRepoKey)
 	if err != nil || srcRepo == nil {
-		return "", errors.New("源仓记录不存在")
+		return "", oekiterrors.New("源仓记录不存在")
 	}
 	var srcPlat *model.Platform
 	if srcRepo.PlatformID > 0 {
@@ -276,7 +276,7 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 	}
 	base := s.GetConfig().Git.TempDir
 	if base == "" {
-		return "", errors.New("未配置 git.temp_dir")
+		return "", oekiterrors.New("未配置 git.temp_dir")
 	}
 	dir := filepath.Join(base, "drift", t.Key, "repo")
 	// **仓库必须可用,不能只看 .git 在不在**:
@@ -329,11 +329,11 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.SyncTask, dstRepo *model.Repo) (string, string, error) {
 	backend := lifecycleBackend()
 	if backend == nil {
-		return "", "", errors.New("git backend 不可用")
+		return "", "", oekiterrors.New("git backend 不可用")
 	}
 	srcRepo, err := s.GetRepoByKey(t.SourceRepoKey)
 	if err != nil || srcRepo == nil {
-		return "", "", errors.New("源仓记录不存在")
+		return "", "", oekiterrors.New("源仓记录不存在")
 	}
 	var srcPlat, dstPlat *model.Platform
 	if srcRepo.PlatformID > 0 {
@@ -489,11 +489,11 @@ func gitLsRemote(ctx context.Context, dir, remote, ref string) string {
 func (s *Service) fetchDriftSource(ctx context.Context, gitDir string, t *model.SyncTask) error {
 	backend := lifecycleBackend()
 	if backend == nil {
-		return errors.New("git backend 不可用")
+		return oekiterrors.New("git backend 不可用")
 	}
 	repo, err := s.GetRepoByKey(t.SourceRepoKey)
 	if err != nil || repo == nil {
-		return errors.New("源仓记录不存在")
+		return oekiterrors.New("源仓记录不存在")
 	}
 	var p *model.Platform
 	if repo.PlatformID > 0 {
@@ -538,7 +538,7 @@ func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int, o
 // 后原样返回,不额外包装错误)。
 func runGitQuiet(ctx context.Context, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
-		return "", errors.New("empty git args")
+		return "", oekiterrors.New("empty git args")
 	}
 	backend := lifecycleBackend()
 	if native, ok := backend.(*gitbackend.NativeGitBackend); ok && native != nil {
@@ -546,7 +546,7 @@ func runGitQuiet(ctx context.Context, dir string, args ...string) (string, error
 		switch {
 		case err == nil:
 			return stdout, nil
-		case errors.Is(err, gitbackend.ErrInvalidGitArg):
+		case oekiterrors.Is(err, gitbackend.ErrInvalidGitArg):
 			// 白名单之外 → 回落裸 git
 		default:
 			return stdout + stderr, err

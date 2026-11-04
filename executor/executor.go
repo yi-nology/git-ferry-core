@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	errors "github.com/cockroachdb/errors"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/oekit/pkg/ptrx"
@@ -83,7 +82,7 @@ func NewExecutor(svc Service) (*Executor, error) {
 	}
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{Type: backendType})
 	if err != nil {
-		return nil, errors.Wrap(err, "init git backend failed")
+		return nil, oekiterrors.Wrap(err, "init git backend failed")
 	}
 	return &Executor{
 		service: svc,
@@ -218,17 +217,17 @@ func (e *Executor) runPostExec(task *model.SyncTask, run *model.SyncRun, details
 func (e *Executor) prepareRunContext(ctx context.Context, task *model.SyncTask, run *model.SyncRun, details *strings.Builder) (*RunContext, error) {
 	sourceRepo, err := e.service.GetRepoByKey(task.SourceRepoKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "query source repo failed")
+		return nil, oekiterrors.Wrap(err, "query source repo failed")
 	}
 	if sourceRepo == nil {
-		return nil, errors.Newf("source repo not found: %s", task.SourceRepoKey)
+		return nil, oekiterrors.Errorf("source repo not found: %s", task.SourceRepoKey)
 	}
 	targetRepo, err := e.service.GetRepoByKey(task.TargetRepoKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "query target repo failed")
+		return nil, oekiterrors.Wrap(err, "query target repo failed")
 	}
 	if targetRepo == nil {
-		return nil, errors.Newf("target repo not found: %s", task.TargetRepoKey)
+		return nil, oekiterrors.Errorf("target repo not found: %s", task.TargetRepoKey)
 	}
 
 	// 空分支回退默认分支:避免坏 refspec 静默零推送
@@ -243,7 +242,7 @@ func (e *Executor) prepareRunContext(ctx context.Context, task *model.SyncTask, 
 	platforms := e.prefetchPlatforms(ctx, sourceRepo, targetRepo)
 	workDir := e.service.GetTempDir(task.Key)
 	if err := os.MkdirAll(workDir, 0o750); err != nil {
-		return nil, errors.Wrap(err, "create work dir failed")
+		return nil, oekiterrors.Wrap(err, "create work dir failed")
 	}
 
 	return &RunContext{
@@ -651,12 +650,12 @@ func (e *Executor) alignSourceBranch(ctx context.Context, dir, branch string) er
 	}
 	if cur == branch {
 		if _, err := e.gitOutput(ctx, dir, "reset", "--hard", ref); err != nil {
-			return errors.Wrapf(err, "align source branch %q to %s failed", branch, ref)
+			return oekiterrors.Wrap(err, fmt.Sprintf("align source branch %q to %s failed", branch, ref))
 		}
 		return nil
 	}
 	if _, err := e.gitOutput(ctx, dir, "update-ref", "refs/heads/"+branch, srcSHA); err != nil {
-		return errors.Wrapf(err, "align source branch %q to %s failed", branch, srcSHA)
+		return oekiterrors.Wrap(err, fmt.Sprintf("align source branch %q to %s failed", branch, srcSHA))
 	}
 	return nil
 }
@@ -814,7 +813,7 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 		// 目标侧独有提交被静默覆盖。
 		targetKnown, ferr := e.fetchTargetForDivergence(ctx, dir, nil, branches, repo, platform)
 		if ferr != nil {
-			return false, "", "", errors.Wrap(ferr,
+			return false, "", "", oekiterrors.Wrap(ferr,
 				"cannot verify divergence for multi-branch task: target fetch failed")
 		}
 		for _, b := range branches {
@@ -888,7 +887,7 @@ func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, ta
 		Branches: nil, // 全量:要知道目标端**所有**分支
 		Auth:     e.authConfig(ctx, repo, platform),
 	}); err != nil {
-		return errors.Wrap(err, "fetch target for mirror prune failed")
+		return oekiterrors.Wrap(err, "fetch target for mirror prune failed")
 	}
 	srcBranches, err := e.remoteTrackingBranches(ctx, dir, RemoteOrigin)
 	if err != nil {
@@ -923,7 +922,7 @@ func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, ta
 		}
 	}
 	if len(failures) > 0 {
-		return errors.Errorf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+		return oekiterrors.Errorf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
 	}
 	slog.Info("已删除目标上源端已不存在的分支",
 		"task", task.Key, "count", len(victims), "branches", strings.Join(victims, ","))
@@ -990,8 +989,8 @@ func (e *Executor) pushTags(ctx context.Context, dir string, task *model.SyncTas
 		}
 	}
 	if len(failed) > 0 {
-		return errors.Wrapf(bulkErr, "push tags failed for %d/%d tag(s): %s",
-			len(failed), len(tags), strings.Join(failed, ","))
+		return oekiterrors.Wrap(bulkErr, fmt.Sprintf("push tags failed for %d/%d tag(s): %s",
+			len(failed), len(tags), strings.Join(failed, ",")))
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	errors "github.com/cockroachdb/errors"
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -62,7 +62,7 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 				details.WriteString("  wiki: not found on source, skip\n")
 				return nil
 			}
-			return errors.Wrap(err, "clone wiki failed")
+			return oekiterrors.Wrap(err, "clone wiki failed")
 		}
 	} else {
 		details.WriteString("  wiki: fetch\n")
@@ -77,7 +77,7 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 			Prune: true,
 			Auth:  srcAuth,
 		}); err != nil {
-			return errors.Wrap(err, "fetch wiki failed")
+			return oekiterrors.Wrap(err, "fetch wiki failed")
 		}
 	}
 
@@ -90,12 +90,12 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	// 用 "*" 对齐**全部分支**:clone 只把默认分支建成本地分支,
 	// 其余 wiki 分支只存在于 refs/remotes/origin/* ⇒ 不对齐就永远同步不过去。
 	if err := e.alignSourceBranches(ctx, wikiDir, "*"); err != nil {
-		return errors.Wrap(err, "align wiki branches failed")
+		return oekiterrors.Wrap(err, "align wiki branches failed")
 	}
 
 	// ensure target remote
 	if err := e.ensureWikiRemote(ctx, wikiDir, dstURL); err != nil {
-		return errors.Wrap(err, "ensure wiki remote failed")
+		return oekiterrors.Wrap(err, "ensure wiki remote failed")
 	}
 
 	details.WriteString("  wiki: push\n")
@@ -111,7 +111,7 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	// 要覆盖必须显式开 git_force。
 	branches, berr := e.remoteTrackingBranches(ctx, wikiDir, RemoteOrigin)
 	if berr != nil {
-		return errors.Wrap(berr, "list wiki branches")
+		return oekiterrors.Wrap(berr, "list wiki branches")
 	}
 	if len(branches) == 0 {
 		details.WriteString("  wiki: no branches to push\n")
@@ -140,7 +140,7 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	}
 	if len(failed) > 0 {
 		// 逐分支推:失败的分支明确点名,其它分支已经送达。
-		return errors.Errorf("push wiki failed for %d/%d branch(es):%s",
+		return oekiterrors.Errorf("push wiki failed for %d/%d branch(es):%s",
 			len(failed), len(branches), strings.Join(failed, "; "))
 	}
 	details.WriteString("  wiki: done\n")
