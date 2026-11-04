@@ -15,13 +15,13 @@ Git 仓库镜像 / 备份 / 容灾演练 / 生命周期治理 / 组织编排等�
 |---|---|
 | `service` | 业务服务层入口：`NewService(cfg *Config, opts ...Option)` 装配各领域服务 |
 | `executor` | 同步/备份/DR 演练执行引擎、pipeline、bundle 与远端备份操作 |
-| `mirror` | 镜像通道门禁、语义校验、跨实例镜像互斥 |
+| `mirror` | 镜像通道门禁、语义校验、跨实例镜像互斥；`mirror/history` 为双仓内容差异发布引擎 |
 | `dao` | GORM 数据访问层（平台/仓库/任务/运行/审批/模板/操作日志等） |
 | `model` | GORM 模型与 `AutoMigrate` 注册（启动自动建表） |
 | `health` | 健康检查聚合 |
 | `lock` | 进程内互斥与 redis 跨实例锁（抖动时降级为进程内互斥） |
 | `tpl` | 模板存储（文件实现，可被 `service.TemplateStore` 注入替换） |
-| `pkg` | 公共件：`proclog`、`textutil` 等 |
+| `pkg` | 公共件：`proclog`（进程级日志/退出）、`strutil`、`deploykey` |
 
 ## 安装
 
