@@ -2,6 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.32.0] - 2026-11-06
+
+### Changed
+
+- **冷备加密收编 oekit `secretx` 信封格式**：新密文一律 `v1:` 版本前缀
+  （`v1:` + base64(nonce‖ct)，AES-GCM 带认证，文本形态）——未来主密钥轮换
+  按前缀选钥重封的缝线已在；**解密双格式兼容**：`v1:` 前缀走 secretx，
+  无前缀的存量裸二进制（nonce‖ct）走 legacy 路径只读兼容——升级前落库的
+  冷备密文零迁移、不解密失败。`deriveKey` 放宽 base64 16/24B（secretx 支持）。
+- **依赖地板追最新**：oekit concurrency v0.25.0（Supervise 监督循环 /
+  IntervalAfterCompletion / ratelimit 热更三件套，待用）、pkg v0.34.1、
+  go-git-platform v0.113.0（`ForkProjectOptions.Namespace→NamespacePath`
+  BREAKING，本仓无消费面零影响）、gorm mysql driver v1.6.0、x/tools v0.52.0。
+
+### Fixed
+
+- **crypt 能力面补契约测试**：此前 `EncryptFile/DecryptFile/DecryptToTemp`
+  零测试零外部调用（DR 恢复能力面），本轮补 5 个契约用例——legacy 格式兼容
+  （升级前密文可解）、v1 信封前缀断言、WithSuffix、DecryptToTemp、派生档位。
+
 ## [v0.31.1] - 2026-11-05
 
 ### Fixed
