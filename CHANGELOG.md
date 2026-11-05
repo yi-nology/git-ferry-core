@@ -2,6 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.32.1] - 2026-11-06
+
+### Fixed
+
+- **补齐 go.sum**（v0.32.0 发版 commit 与依赖升级不同体，go.sum 停留在旧依赖
+  的哈希集）——CI 报 `missing go.sum entry`，重建 go.sum 使发布态
+  `GOWORK=off build/vet/test` 全绿。功能与 v0.32.0 完全一致。
+
 ## [v0.32.0] - 2026-11-06
 
 ### Changed
