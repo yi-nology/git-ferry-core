@@ -7,19 +7,19 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
-	github.com/oekit/concurrency v0.23.4
+	github.com/oekit/concurrency v0.25.0
 	github.com/oekit/logx v0.8.2
-	github.com/oekit/pkg v0.33.0
+	github.com/oekit/pkg v0.34.1
 	github.com/oekit/redisx v0.11.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sergi/go-diff v1.4.0
 	github.com/sethvargo/go-envconfig v1.4.3
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v0.108.0
-	golang.org/x/tools v0.51.0
+	github.com/yi-nology/go-git-platform v0.113.0
+	golang.org/x/tools v0.52.0
 	gopkg.in/yaml.v3 v3.0.1
-	gorm.io/driver/mysql v1.5.7
+	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
 )
