@@ -88,7 +88,7 @@ func TestDecryptToTemp(t *testing.T) {
 
 	plain, err := DecryptToTemp(enc, key32())
 	require.NoError(t, err)
-	defer os.RemoveAll(filepath.Dir(plain))
+	defer func() { _ = os.RemoveAll(filepath.Dir(plain)) }()
 	assert.Equal(t, "dump.tar.gz", filepath.Base(plain))
 	got, err := os.ReadFile(plain)
 	require.NoError(t, err)
