@@ -58,3 +58,5 @@ make test   # go test ./... -race -count=1
 ## License
 
 [MIT](LICENSE)
+
+# CI 环境验证占位(验证后移除)
