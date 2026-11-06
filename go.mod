@@ -27,6 +27,7 @@ require (
 require (
 	codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3 v3.0.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	gitea.dev/sdk v1.5.1 // indirect
 	github.com/42wim/httpsig v1.3.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -56,7 +57,7 @@ require (
 	github.com/go-openapi/swag/stringutils v0.29.2 // indirect
 	github.com/go-openapi/swag/typeutils v0.29.2 // indirect
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
-	github.com/go-sql-driver/mysql v1.7.0 // indirect
+	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-github/v93 v93.0.0 // indirect
@@ -83,7 +84,7 @@ require (
 	go.uber.org/atomic v1.12.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 // indirect
-	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

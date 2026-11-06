@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.32.2] - 2026-11-06
+
+### Fixed
+
+- **go.mod 恢复 tidy 态**（v0.32.0/v0.32.1 的实际回归）：升 gorm mysql driver
+  到 v1.6.0 时，其 require `go-sql-driver/mysql v1.8.1` + `filippo.io/edwards25519`，
+  但 go.mod 的 indirect 仍写旧版 `mysql v1.7.0`——go.mod 与 go.sum 不一致（go.sum
+  已是 v1.8.1 哈希集），CI `go vet`（`-mod=readonly`）报 `updates to go.mod needed`
+  失败，golangci 连锁报 "no go files to analyze"。本轮 tidy 对齐（go.sum 零改动，
+  证明缺的只是 go.mod 的 require 声明）。功能与 v0.32.1 完全一致。
+
 ## [v0.32.1] - 2026-11-06
 
 ### Fixed
