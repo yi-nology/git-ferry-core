@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.33.0] - 2026-11-08
+
+### Changed
+
+- **依赖地板追最新发布**（2026-11-06~08 上游三轮发布潮，含本轮自提 issue 的落地物）：
+  oekit concurrency v0.28.1（GoDetached / RunCursor / supervisor.Group / Throttle /
+  FanIn 并发上限 / breaker 半开三修）、logx v0.8.6（slog 桥接七修）、
+  pkg v0.37.1（**ctxscope 新子包** / secretx SecureString+NewPassphraseBox /
+  pagination.Walk / SingleValue / bufiox.TailLines）、redisx v0.11.2、
+  go-git-platform v0.117.0。
+
 ## [v0.32.2] - 2026-11-06
 
 ### Fixed
