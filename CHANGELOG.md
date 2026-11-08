@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.33.3] - 2026-11-08
+
+### Changed
+
+- **`MirrorService.reservations` 补收编 `syncx.KeyedMutex`**（上轮漏网：v0.33.1
+  收编了 localGuard，通道执行权占位表的同款手搓 `LoadOrStore`+`sync.Once` 防重复
+  Delete 在本轮自查中补齐——`Acquire` 即拒语义逐字对位，release 幂等上游担保）。
+- **pkg v0.38.0**（ctxscope With/From 写读对称修复 #245 落地物上浮）。
+
 ## [v0.33.2] - 2026-11-08
 
 ### Fixed

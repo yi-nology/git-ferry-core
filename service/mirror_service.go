@@ -45,8 +45,9 @@ type MirrorService struct {
 	//
 	// 与 locks 分工：locks 是**排队**闸门（保护工作目录不被交错读写），
 	// reservations 是**即拒**占位（同一通道同时只允许一次执行）。
-	// key = channelID，值 = struct{}。
-	reservations sync.Map
+	// key = channelID。收编 oekit syncx.KeyedMutex（concurrency#195 落地物）：
+	// LoadOrStore+once 防重复 Delete 手搓面删除，release 幂等上游担保。
+	reservations *syncx.KeyedMutex[uint]
 	// locker 配 redis 时提供跨实例互斥：抢不到 = 另一实例正在执行同一通道，
 	// 直接返回忙碌错误而不是两边同时克隆（TTL 见 mirrorLockTTL，覆盖整次操作）。
 	locker  *distlock.RedisLocker
@@ -76,15 +77,16 @@ func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 		locker = lock.NewLocker(lockClient)
 	}
 	return &MirrorService{
-		svc:        svc,
-		channels:   dao.NewMirrorChannelDAO(db),
-		runs:       dao.NewMirrorRunDAO(db),
-		backend:    backend,
-		cm:         cm,
-		locks:      syncx.NewKeyedGate(1),
-		locker:     locker,
-		lockTTL:    mirrorLockTTL,
-		lockClient: lockClient,
+		svc:          svc,
+		channels:     dao.NewMirrorChannelDAO(db),
+		runs:         dao.NewMirrorRunDAO(db),
+		backend:      backend,
+		cm:           cm,
+		locks:        syncx.NewKeyedGate(1),
+		reservations: syncx.NewKeyedMutex[uint](),
+		locker:       locker,
+		lockTTL:      mirrorLockTTL,
+		lockClient:   lockClient,
 	}, nil
 }
 
@@ -172,11 +174,7 @@ func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release fun
 // 两个并发请求可以同时查到"没有在跑的 run",然后各建一条 run 各跑一遍。
 // 占位必须**同步**发生在创建 run 记录之前,窗口才为零。
 func (m *MirrorService) reserveChannel(chID uint) (release func(), ok bool) {
-	if _, loaded := m.reservations.LoadOrStore(chID, struct{}{}); loaded {
-		return nil, false
-	}
-	var once sync.Once
-	return func() { once.Do(func() { m.reservations.Delete(chID) }) }, true
+	return m.reservations.Acquire(chID)
 }
 
 // ---------- 请求/响应结构 ----------
