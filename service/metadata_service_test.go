@@ -151,6 +151,9 @@ func (f *fakeEngineProv) ReopenIssue(context.Context, string, string, string) (*
 func (f *fakeEngineProv) UpdateIssueComment(context.Context, string, string, string, int64, string) (*sdkprov.IssueComment, error) {
 	panic("fakeEngineProv: UpdateIssueComment not expected")
 }
+func (f *fakeEngineProv) DeleteIssueComment(context.Context, string, string, string, int64) error {
+	panic("fakeEngineProv: DeleteIssueComment not expected")
+}
 func (f *fakeEngineProv) AddIssueLabels(context.Context, string, string, string, []string) error {
 	panic("fakeEngineProv: AddIssueLabels not expected")
 }

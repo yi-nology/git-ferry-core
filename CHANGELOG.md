@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.33.2] - 2026-11-08
+
+### Fixed
+
+- **测试 fake 补齐 `DeleteIssueComment` stub**：go-git-platform v0.117 给
+  `IssueManager` 新增该方法（c6bc6f0），`fakeEngineProv` 未实现 ⇒ 不再满足接口
+  ⇒ 元数据回灌误报 capability warning（"target does not support IssueManager"
+  进 warnings/历史文件），3 个 metadata 测试 CI 红（本地无 -race 全绿被掩盖）。
+  本版补 stub 后 `-race` 全量绿。
+
 ## [v0.33.1] - 2026-11-08
 
 ### Changed
