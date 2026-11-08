@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,11 +60,13 @@ const (
 
 // ---------------- 本地(进程内)实现 ----------------
 
-// localGuard 单实例并发控制:sync.Map 做 taskKey 互斥,Gate 做全局并发上限。
+// localGuard 单实例并发控制:KeyedMutex 做 taskKey 互斥,Gate 做全局并发上限。
 // Gate 走 TryAcquire(满额即拒,不排队)——与迁移前 chan 缓冲的实现语义一致:
 // 全局并发用满就立即回 ErrTooManyConcurrent,而不是把请求堆在队列里。
+// taskKey 互斥收编 oekit syncx.KeyedMutex(concurrency#195 落地物):
+// LoadOrStore+失败还名额+Delete 回调三件套手搓面删除,release 幂等上游担保。
 type localGuard struct {
-	runningTasks sync.Map
+	runningTasks *syncx.KeyedMutex[string]
 	gate         *syncx.Gate
 }
 
@@ -73,22 +74,25 @@ func newLocalGuard(maxConcurrent int) *localGuard {
 	if maxConcurrent <= 0 {
 		maxConcurrent = model.DefaultMaxConcurrent
 	}
-	return &localGuard{gate: syncx.NewGate(maxConcurrent)}
+	return &localGuard{
+		runningTasks: syncx.NewKeyedMutex[string](),
+		gate:         syncx.NewGate(maxConcurrent),
+	}
 }
 
 func (g *localGuard) Acquire(_ context.Context, taskKey string) (releaseFunc, error) {
-	release, ok := g.gate.TryAcquire()
+	gateRelease, ok := g.gate.TryAcquire()
 	if !ok {
 		return nil, ErrTooManyConcurrent
 	}
-	// 只有成功 store 才注册 Delete,避免误删别的执行流的标记
-	if _, loaded := g.runningTasks.LoadOrStore(taskKey, struct{}{}); loaded {
-		release()
+	keyRelease, ok := g.runningTasks.Acquire(taskKey)
+	if !ok {
+		gateRelease()
 		return nil, ErrTaskRunning
 	}
 	return func() {
-		g.runningTasks.Delete(taskKey)
-		release()
+		keyRelease()
+		gateRelease()
 	}, nil
 }
 

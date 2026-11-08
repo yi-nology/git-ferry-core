@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.33.1] - 2026-11-08
+
+### Changed
+
+- **oekit concurrency v0.29.0**（发布当天收编本仓自提 issue 的落地物）：
+  - **`PanicHandler` 签名适配**（上游 BREAKING #184：`func(ctx, r any, stack)`）：
+    `proclog.Setup` 的 panic 汇报回调改新签名，任务标签经 `async.TaskFromContext`
+    取（不再拼消息前缀），日志可按请求聚合；
+  - **`localGuard` 收编 `syncx.KeyedMutex`**（上游 #195，即本仓 2026-11-08 提的
+    issue 的落地物）：taskKey 互斥的 `sync.Map.LoadOrStore`+失败还名额+Delete
+    回调三件套手搓面删除——release 幂等与 CAS 防护由上游担保，局部 `sync`
+    import 随之删除。
+
 ## [v0.33.0] - 2026-11-08
 
 ### Changed

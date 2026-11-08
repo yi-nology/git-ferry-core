@@ -6,6 +6,8 @@
 package proclog
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -40,8 +42,12 @@ func Setup(level, format string) {
 	}
 	slog.SetDefault(slog.New(h))
 
-	async.SetPanicHandler(func(msg string, stack []byte) {
-		slog.Error("goroutine panic recovered", "panic", msg, "stack", string(stack))
+	// concurrency v0.29 新签名(#184):ctx 可按请求聚合,r 为 recover 原始值
+	// (错误上报路径是 fn 返回的 error);任务标签经 TaskFromContext 取,不再拼 msg。
+	async.SetPanicHandler(func(ctx context.Context, r any, stack []byte) {
+		slog.Error("goroutine panic recovered",
+			"panic", fmt.Sprintf("%v", r), "stack", string(stack),
+			"task", async.TaskFromContext(ctx))
 	})
 
 	opts := []logx.SlogOption{logx.WithHandler(h)}
