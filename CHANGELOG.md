@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.34.0] - 2026-11-09
+
+### Changed
+
+- **依赖地板追最新**：oekit concurrency v0.31.0（`DetachedContext` 改
+  `WithoutCancel` 派生保留 values——#211 修复落地，且 enricher panic 收编 #217）、
+  logx v0.8.12、pkg v0.40.0（`errors.Wrap` 的 kv 结构化出口 `Kv()`/`KvFromChain`
+  ——#292 修复落地）、redisx v0.12.0（Unlock 三态显式契约 `ErrLockNotHeld`、
+  Lockout 集群 hash-tag、ResilientLimiter、per-instance logger 注入）、
+  go-git-platform v0.121.0。本仓 distlock Unlock 调用点只 Debug 记录，
+  三态契约零适配；`DetachedContext` 留 values 后 delegate 类后台任务重新可
+  收编（壳侧 v2.6.0 落实）。
+
 ## [v0.33.3] - 2026-11-08
 
 ### Changed
