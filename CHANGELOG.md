@@ -2,6 +2,16 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.34.1] - 2026-11-09
+
+### Fixed
+
+- **按 redisx v0.12 的 Unlock 三态新契约更新存量测试**：非本人解锁从
+  「静默 no-op」改为显式 `ErrLockNotHeld`（上游 #115/#117 的契约修正——
+  陈旧持有者此前拿到假成功会继续假装持有），`TestNewLocker_KeyLayout_miniredis`
+  断言改 `ErrorIs(ErrLockNotHeld)` 并补锁完好性断言。业务调用点
+  （mirror/history 的 defer Unlock）只 Debug 记录，无需适配。
+
 ## [v0.34.0] - 2026-11-09
 
 ### Changed

@@ -37,7 +37,10 @@ func TestNewLocker_KeyLayout_miniredis(t *testing.T) {
 	_, err = locker.TryLock(ctx, "task:k1", 2*time.Second)
 	require.ErrorIs(t, err, distlock.ErrLockNotAcquired, "second holder must be rejected")
 
-	require.NoError(t, locker.Unlock(ctx, "task:k1", "wrong-owner"), "non-owner unlock is a no-op, not an error")
+	// redisx v0.12 Unlock 三态契约(#115/#117):非本人解锁不再静默 no-op,
+	// 显式返回 ErrLockNotHeld(errors.Is 可辨)——锁仍完好,只是「你没持有」。
+	err = locker.Unlock(ctx, "task:k1", "wrong-owner")
+	require.ErrorIs(t, err, distlock.ErrLockNotHeld, "non-owner unlock is ErrLockNotHeld, not silent no-op")
 	require.True(t, mr.Exists("git-sync:lock:task:k1"), "non-owner must not release the lock")
 
 	require.NoError(t, locker.Unlock(ctx, "task:k1", ownerID))
