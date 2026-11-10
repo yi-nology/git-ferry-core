@@ -20,7 +20,7 @@ func TestApplyScrub_MultipleMatchesOnSameLine(t *testing.T) {
 		Replacement: "***",
 	}
 
-	res := ApplyScrub([]byte("aaa SECRET bbb SECRET ccc"), []ScrubRule{rule})
+	res := ApplyScrub("f.txt", []byte("aaa SECRET bbb SECRET ccc"), []ScrubRule{rule})
 	got := string(res.Content)
 	if strings.Contains(got, "SECRET") {
 		t.Errorf("痕迹没清干净: %q", got)
@@ -41,7 +41,7 @@ func TestApplyScrub_DeleteSemantics_MultipleMatches(t *testing.T) {
 		Pattern:  regexp.MustCompile(`AA`),
 		// Replacement 为空 = 删除命中内容
 	}
-	res := ApplyScrub([]byte("x AA y AA z"), []ScrubRule{rule})
+	res := ApplyScrub("f.txt", []byte("x AA y AA z"), []ScrubRule{rule})
 	got := string(res.Content)
 	if strings.Contains(got, "AA") {
 		t.Errorf("删除语义没清干净: %q", got)
@@ -58,7 +58,7 @@ func TestApplyScrub_ManyMatchesDoesNotPanic(t *testing.T) {
 		Category: "internal-host",
 		Pattern:  regexp.MustCompile(`AA`),
 	}
-	res := ApplyScrub([]byte("x AA y AA z AA w"), []ScrubRule{rule})
+	res := ApplyScrub("f.txt", []byte("x AA y AA z AA w"), []ScrubRule{rule})
 	if got := string(res.Content); strings.Contains(got, "AA") {
 		t.Errorf("痕迹没清干净: %q", got)
 	}
@@ -75,7 +75,7 @@ func TestApplyScrub_MandatoryReportsEveryMatch(t *testing.T) {
 		Pattern:  regexp.MustCompile(`SECRET`),
 		Severity: ScrubMandatory,
 	}
-	res := ApplyScrub([]byte("a SECRET b SECRET c"), []ScrubRule{rule})
+	res := ApplyScrub("f.txt", []byte("a SECRET b SECRET c"), []ScrubRule{rule})
 	if len(res.MandatoryHits) != 2 {
 		t.Errorf("密钥类命中数不对: got %d, want 2", len(res.MandatoryHits))
 	}

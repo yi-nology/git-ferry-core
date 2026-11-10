@@ -33,8 +33,8 @@ const (
 )
 
 // ApplyScrub 对内容做痕迹清理(见 mirror.ApplyScrub)。
-func ApplyScrub(content []byte, rules []ScrubRule) ScrubResult {
-	return mirror.ApplyScrub(content, rules)
+func ApplyScrub(path string, content []byte, rules []ScrubRule) ScrubResult {
+	return mirror.ApplyScrub(path, content, rules)
 }
 
 // HasMandatory 判断内容是否命中强制人工处理的规则。

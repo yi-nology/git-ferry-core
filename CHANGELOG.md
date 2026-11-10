@@ -2,6 +2,43 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.35.0] - 2026-11-10
+
+### Added
+
+- **镜像发布自毁保护（oss-sync 同款守卫,fail-closed）**:发布前把镜像目标与
+  源仓库做 URL 归一化比对(github.com/org/bar ↔ git@github.com:org/bar.git
+  归一到同形态),命中即拒绝且零写入。三层守卫:
+  ① `guardSelfPublish` 核心层三判据——目标=源工作区本身 / 目标与 canonical
+  其他远端同址 / 目标 module 身份与 URL 不一致(网络身份 vs 网络 URL 才判定);
+  ② 服务层 `CheckTargetAgainstSource` 在建通道与发布前各拦一次
+  (建通道后源仓库 URL 可能改过);③ 变异验收用例钉住:https 形式 vs scp 形式
+  的等价 URL 必须被识别为同址——删掉归一化,用例立刻红。
+- **痕迹规则路径白名单(放行但留痕,oss-sync forbidden.allowlist 同款)**:
+  `ScrubRule.PathAllowlist`(glob,'/' 分段,'**' 跨层,'*' 不跨段,大小写敏感,
+  不采用 basename 语义)。命中但在白名单内 ⇒ 内容不动、不计 Cleaned、不构成
+  中止,命中照常记入 ScrubHits(`Allowlisted=true` + 新增 `Path` 字段)——
+  「不报警」与「不留痕」是两件事。mandatory(密钥类)规则**没有放行面**:
+  service 层编译期拒绝 mandatory+allowlist 矛盾配置,glob 非法同样编译期拒绝;
+  本包防御性再兜一层(mandatory 忽略 allowlist)。glob 匹配器与
+  `ValidateGlob` 导出,allowlist 语义保守(跨层必须显式 `**`)。
+- **策略快照 + 公开侧禁词复验(oss-sync「两侧同源才叫钉契约」同款)**:
+  ① `BuildPolicySnapshot` 从发布输入构造**确定性 JSON 快照**(字段序固定、
+  规则保声明序,同 tag 重跑逐字节一致),随 `TagReport.PolicySnapshot` 逐 tag
+  带出(DryRun 预检也带);② `mirror/verifycmd` 独立可执行——公开仓 CI 用
+  同一份快照复验整个仓树,语义与发布侧单一实现(`Rewriter.Pending` 边界残留 +
+  scrub auto/mandatory/allowlist;二进制/超限只查身份残留与 mandatory,与
+  发布侧同分法);严格解析(未知字段/未知版本/坏正则即失败,exit 2;命中 exit 1;
+  allowlisted 打印但不算失败);③ `VerifyWorkflowTemplate` 生成公开仓
+  GitHub Actions 门禁 workflow 文本(钉 core 版本 ref)。
+
+### Changed
+
+- **ApplyScrub 签名**:新增首参 `path`(文件相对路径,allowlist 匹配与命中
+  留痕用;空串=无白名单语义)。调用方:mirror/gitobj、mirror/history、
+  verifycmd 与测试已同步更新。
+- **ScrubHit 新增 Path/Allowlisted 字段**(JSON 兼容增量,报告透明扩展)。
+
 ## [v0.34.1] - 2026-11-09
 
 ### Fixed

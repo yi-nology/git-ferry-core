@@ -233,3 +233,66 @@ func TestChannelScrubRulesCompile(t *testing.T) {
 	_, err = channelScrubRules(&model.MirrorChannel{ScrubRules: "{not json"})
 	require.Error(t, err)
 }
+
+// TestCompileScrubRulesAllowlist 白名单规则的编译期校验:
+// mandatory+allowlist 矛盾配置拒绝;坏 glob 拒绝;合法配置通过并保留。
+func TestCompileScrubRulesAllowlist(t *testing.T) {
+	// ① mandatory(密钥类)不允许配置 allowlist —— 密钥类没有放行面。
+	_, err := compileScrubRules([]MirrorScrubRuleInput{
+		{Name: "secret", Pattern: `SECRET-\w+`, Severity: "mandatory",
+			PathAllowlist: []string{"**/*_test.go"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "不允许配置 pathAllowlist")
+
+	// ② 坏 glob 编译期拒绝(而不是发布时静默不放行)。
+	_, err = compileScrubRules([]MirrorScrubRuleInput{
+		{Name: "alias", Pattern: `rd1`, PathAllowlist: []string{"a//b"}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pathAllowlist")
+
+	// ③ 合法配置:通过编译并保留到规则上。
+	rules, err := compileScrubRules([]MirrorScrubRuleInput{
+		{Name: "alias", Pattern: `rd1`, Replacement: "cluster-a",
+			PathAllowlist: []string{"**/*_test.go", "fixtures/**"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, []string{"**/*_test.go", "fixtures/**"}, rules[0].PathAllowlist)
+}
+
+// TestMirrorChannelCreate_RejectsTargetSameAsSource 自毁预检(服务层):
+// 目标 URL 与源仓库同址(名字不同、URL 相同的错配)在建通道时就拒绝。
+func TestMirrorChannelCreate_RejectsTargetSameAsSource(t *testing.T) {
+	m, repoDAO, _ := setupMirrorServiceTest(t)
+	ctx := context.Background()
+
+	src := filepath.Join(t.TempDir(), "src")
+	makeHistoryRepo(t, src, map[string]string{"go.mod": "module example.com/src\n"})
+	require.NoError(t, repoDAO.Create(&model.Repo{
+		Key: "internal/src", Name: "src", Platform: "github",
+		CloneURL: src, Status: model.RepoStatusActive,
+	}))
+
+	// scp 形式 vs 本地路径形式——同一仓库的不同写法,守卫必须识别为同址。
+	// (本地路径不可 scp 化,这里用「clean 路径 vs 带点路径」的等价写法。)
+	_, err := m.CreateMirrorChannel(ctx, CreateMirrorChannelInput{
+		Name: "self", Mode: model.MirrorModeBackup, RepoKey: "internal/src",
+		Targets: []MirrorTargetInput{{
+			Remote: "github", RepoURL: src + "/.", Credential: "tok", CredType: model.MirrorCredToken,
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "同址")
+
+	// 不同仓库放行。
+	ch, err := m.CreateMirrorChannel(ctx, CreateMirrorChannelInput{
+		Name: "ok", Mode: model.MirrorModeBackup, RepoKey: "internal/src",
+		Targets: []MirrorTargetInput{{
+			Remote: "github", RepoURL: "https://github.com/org/other.git", Credential: "tok", CredType: model.MirrorCredToken,
+		}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ch)
+}

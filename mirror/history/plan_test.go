@@ -263,7 +263,7 @@ func TestScrubMandatoryHitRedactsSecret(t *testing.T) {
 			Pattern:  regexp.MustCompile(`ghp_[a-zA-Z0-9]{20,}`),
 			Severity: ScrubMandatory},
 	}
-	res := ApplyScrub(content, rules)
+	res := ApplyScrub("f.txt", content, rules)
 
 	require.NotEmpty(t, res.MandatoryHits, "密钥命中必须被检出")
 	for _, h := range res.MandatoryHits {
@@ -277,7 +277,7 @@ func TestScrubMandatoryHitRedactsSecret(t *testing.T) {
 // 那不是密钥,而且审计要看得见「清理了什么」。
 func TestScrubAutoHitKeepsText(t *testing.T) {
 	content := []byte("host = git.enjoye.top\n")
-	res := ApplyScrub(content, []ScrubRule{StripInternalHost("git.enjoye.top")})
+	res := ApplyScrub("f.txt", content, []ScrubRule{StripInternalHost("git.enjoye.top")})
 
 	require.NotEmpty(t, res.Hits)
 	for _, h := range res.Hits {

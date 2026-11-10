@@ -214,6 +214,11 @@ type MirrorScrubRuleInput struct {
 	Severity string `json:"severity"`
 	// Replacement 命中后的替换文本;auto 且为空表示删除。
 	Replacement string `json:"replacement"`
+	// PathAllowlist 路径白名单(glob,'/' 分段,'**' 跨层)。
+	//
+	// 命中但在白名单内 = 放行但留痕(内容不动,报告可见)。
+	// mandatory(密钥类)规则禁止配置白名单 —— 密钥类没有放行面。
+	PathAllowlist []string `json:"pathAllowlist,omitempty"`
 }
 
 type CreateMirrorChannelInput struct {
@@ -242,9 +247,23 @@ func compileScrubRules(in []MirrorScrubRuleInput) ([]mirror.ScrubRule, error) {
 		if r.Severity == "mandatory" {
 			severity = mirror.ScrubMandatory
 		}
+		// mandatory + allowlist 是矛盾配置:密钥类没有放行面。
+		// 编译时拒绝(建通道时就暴露),而非发布时静默失效。
+		if severity == mirror.ScrubMandatory && len(r.PathAllowlist) > 0 {
+			return nil, oekiterrors.Errorf(
+				"第 %d 条痕迹规则(%s)是 mandatory(密钥类),不允许配置 pathAllowlist", i+1, r.Name)
+		}
+		// glob 模式也要在编译期校验:非法模式留给发布时 = 静默不放行。
+		for _, g := range r.PathAllowlist {
+			if err := mirror.ValidateGlob(g); err != nil {
+				return nil, oekiterrors.Errorf(
+					"第 %d 条痕迹规则(%s)的 pathAllowlist 模式非法 %q", i+1, r.Name, g)
+			}
+		}
 		out = append(out, mirror.ScrubRule{
 			Name: r.Name, Category: r.Category, Pattern: pattern,
 			Severity: severity, Replacement: r.Replacement,
+			PathAllowlist: r.PathAllowlist,
 		})
 	}
 	return out, nil
@@ -283,6 +302,14 @@ func (m *MirrorService) CreateMirrorChannel(ctx context.Context, in CreateMirror
 	repo, err := m.svc.GetRepoByKey(in.RepoKey)
 	if err != nil || repo == nil {
 		return nil, oekiterrors.Errorf("源仓库不存在: %s", in.RepoKey)
+	}
+
+	// **自毁预检(建通道时)**:目标与源仓库同址拒绝(名字不同、URL 相同的错配)。
+	// 发布时(publishOne)还会再验一次 —— 仓库 URL 可能中途改过。
+	for i := range in.Targets {
+		if err := mirror.CheckTargetAgainstSource(repo.CloneURL, in.Targets[i].RepoURL); err != nil {
+			return nil, err
+		}
 	}
 
 	ch := &model.MirrorChannel{
@@ -950,6 +977,14 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 	auth = m.applyTargetPlatformTLS(ctx, t, auth)
 	scrubRules, err := channelScrubRules(ch)
 	if err != nil {
+		return nil, err
+	}
+	// **自毁预检(发布时)**:建通道后源仓库 URL 可能改过,再验一次。
+	repo, rerr := m.svc.GetRepoByKey(ch.RepoKey)
+	if rerr != nil || repo == nil {
+		return nil, oekiterrors.Errorf("源仓库不存在: %s", ch.RepoKey)
+	}
+	if err := mirror.CheckTargetAgainstSource(repo.CloneURL, t.RepoURL); err != nil {
 		return nil, err
 	}
 	rep2, err := mirror.Publish(ctx, mirror.Options{

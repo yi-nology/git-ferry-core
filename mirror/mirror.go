@@ -116,6 +116,10 @@ type TagReport struct {
 	ResidualFiles []string
 	// VerifyCmd 是发布后建议执行的验证命令。
 	VerifyCmd string
+	// PolicySnapshot 是本次发布应用的策略快照(确定性 JSON,见
+	// PolicySnapshot):身份映射 + 痕迹规则(含 allowlist)。
+	// 公开仓侧 verifycmd 用同一份文件复验 —— 两侧同源才叫钉契约。
+	PolicySnapshot string
 
 	// RemoteTagExisted 表示推送前镜像远端已存在同名 tag。
 	RemoteTagExisted bool
@@ -232,6 +236,14 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 		return nil, err
 	}
 
+	// **自毁保护**:改写后的内容推回源仓库自身 = 毁仓。守卫跑在
+	// 一切写入(连临时仓库初始化)之前,fail-closed。
+	// 判据:目标=RepoDir 本身 / 与 canonical 其他远端同址 /
+	// 目标 module 身份与 URL 不一致。
+	if err := guardSelfPublish(repo, opts.RepoDir, mirrorURL, opts.Mapping.Target, remote); err != nil {
+		return nil, err
+	}
+
 	p := &publisher{
 		opts:    opts,
 		remote:  remote,
@@ -310,6 +322,9 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 			len(b.mandatoryHits), strings.Join(b.mandatoryHits, ", "))
 	}
 	report.Tree = treeHash.String()
+	// 策略快照在门禁通过前就绪:DryRun 预检报告也要能带出
+	// 「将应用什么规则」。
+	report.PolicySnapshot = BuildPolicySnapshot(p.opts.Mapping, p.opts.ScrubRules)
 	slog.Info("mirror: 身份改写完成", "tag", tag, "tree", treeHash.String(),
 		"files", len(b.replaced), "residual", len(b.residual))
 

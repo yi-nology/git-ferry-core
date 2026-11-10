@@ -460,7 +460,7 @@ func applyFileContent(opts ApplyOptions, replayer *mirror.Rewriter,
 		}
 	}
 
-	return ApplyScrub(rewritten, opts.ScrubRules), nil
+	return ApplyScrub(path, rewritten, opts.ScrubRules), nil
 }
 
 // findPlanFile 在计划里按路径找文件条目。

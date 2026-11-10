@@ -84,7 +84,7 @@ func (b *builder) scrub(path string, data []byte) []byte {
 	if len(b.scrubRules) == 0 {
 		return data
 	}
-	res := ApplyScrub(data, b.scrubRules)
+	res := ApplyScrub(path, data, b.scrubRules)
 	for _, h := range res.Hits {
 		b.scrubHits = append(b.scrubHits, h)
 		if h.Mandatory {
@@ -112,7 +112,7 @@ func (b *builder) checkMandatoryOnly(path string, data []byte) {
 	if len(mandatory) == 0 {
 		return
 	}
-	res := ApplyScrub(data, mandatory)
+	res := ApplyScrub(path, data, mandatory)
 	for _, h := range res.Hits {
 		b.scrubHits = append(b.scrubHits, h)
 		b.mandatoryHits = append(b.mandatoryHits,
