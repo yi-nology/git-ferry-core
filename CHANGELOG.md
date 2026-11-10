@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.35.1] - 2026-11-10
+
+### Fixed
+
+- **CI lint 红修复（staticcheck S1016）**：`BuildPolicySnapshot` 的
+  `Mapping→snapshotMapping` 改用类型转换（两结构体同形；转换在 Mapping
+  增字段时编译期报错，优于结构体字面量的静默丢字段）。功能零变化，
+  策略快照字节级确定性不变（用例复核通过）。
+
 ## [v0.35.0] - 2026-11-10
 
 ### Added

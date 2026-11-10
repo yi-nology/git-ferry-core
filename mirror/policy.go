@@ -48,7 +48,7 @@ type snapshotMapping struct {
 func BuildPolicySnapshot(m Mapping, rules []ScrubRule) string {
 	out := PolicySnapshot{
 		Version: 1,
-		Mapping: snapshotMapping{Source: m.Source, Target: m.Target},
+		Mapping: snapshotMapping(m),
 	}
 	for _, r := range rules {
 		sev := string(ScrubAuto)
