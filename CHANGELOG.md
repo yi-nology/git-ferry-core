@@ -2,6 +2,32 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（P2 Distributed GitFerry——持久化执行队列,首个切片）
+
+- **`execution_jobs` 持久化执行队列 + lease 认领**(P2 分布式地基):
+  新配置 `sync.durable_queue`(env `GIT_SYNC_DURABLE_QUEUE`,**默认 false =
+  旧直跑行为零变化**)。开启后所有触发(webhook/cron/manual/retry)改为
+  入队:`INSERT ... SELECT ... WHERE NOT EXISTS` 单语句原子去重——同一任务
+  同时最多一条 pending/claimed 作业,并发/重复触发自动合并(**不重复发布**);
+  本实例(`execute_jobs` 未配或 true)的派发器按 lease 认领执行
+  (条件 UPDATE 原子单胜者,多实例安全),执行中周期续租(TTL 5min);
+  lease 过期由 reaper 放回 pending(attempt+1)供其它实例**安全接管**
+  (实例崩溃/K8s 驱逐不丢任务,对应评审验收),attempt 超 5 次判 failed
+  毒丸防接管风暴;执行权被占时退避重排不丢作业;非 owner 不得完成
+  (防脑裂);已完成作业保留 7 天清理。
+  `sync.execute_jobs: false` 可把实例配成**纯 API/调度节点**(只入队),
+  是 Worker 化的第一步(同二进制,无 RPC)。panic 安全:作业停留 claimed
+  等 lease 过期接管,宁可慢不可丢。含显式迁移 v2(存量库补建表)。
+
+### Added（P3 Repository Governance——RPO 可观测,首个切片）
+
+- **health 新增 RPO 事实键**:`last_backup_at`(最近一次**备份成功**时间,
+  RFC3339;同步成功但备份失败的运行不计入——同步 ≠ 备份)与
+  `backup_age_hours`(备份年龄;无成功备份 = -1 未知)。与既有
+  `backup_failed` 计数互补,恢复点时效性可独立验证。
+
 ## [v0.36.0] - 2026-11-12
 
 ### Fixed（P0 Correctness + P1 Durable Execution,技术评审 2026-11-12 全部落地）

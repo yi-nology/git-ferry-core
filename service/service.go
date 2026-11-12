@@ -37,7 +37,11 @@ type Service struct {
 	pending *dao.PendingTriggerDAO
 	// outbox 事务外发盒(outbox_events 表,见 events.go):运行完成事件
 	// 与 run 落库同事务写入,派发器保证通知至少送达一次。
-	outbox          *dao.OutboxEventDAO
+	outbox *dao.OutboxEventDAO
+	// jobs 持久化执行队列(execution_jobs 表,见 queue.go);instanceID 为
+	// lease 属主标识。仅 durable_queue=true 时启用。
+	jobs            *dao.ExecutionJobDAO
+	instanceID      string
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
@@ -114,6 +118,8 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		bgCancel:     bgCancel,
 		pending:      daos.pending,
 		outbox:       daos.outbox,
+		jobs:         daos.jobs,
+		instanceID:   newInstanceID(),
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -194,6 +200,23 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		defer svc.wg.Done()
 		svc.dispatchOutboxLoop()
 	})
+
+	// P2 持久化执行队列:本实例负责执行时启动派发器与 reaper;
+	// execute_jobs=false 的纯 API 实例只入队(由 Worker 实例认领执行)。
+	if svc.durableQueueOn() && svc.executesJobs() {
+		slog.Info("durable execution queue enabled", "instance", svc.instanceID,
+			"dispatch_interval", jobDispatchInterval, "lease", jobLeaseTTL)
+		svc.wg.Add(1)
+		async.GoSafe(func() {
+			defer svc.wg.Done()
+			svc.dispatchJobLoop()
+		})
+		svc.wg.Add(1)
+		async.GoSafe(func() {
+			defer svc.wg.Done()
+			svc.reaperJobLoop()
+		})
+	}
 
 	svc.wg.Add(1)
 	async.GoSafe(func() {

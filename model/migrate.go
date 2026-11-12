@@ -57,7 +57,15 @@ const schemaMigrateLockName = "gitferry_schema_migrate"
 const schemaMigrateLockTimeoutSec = 60
 
 // migrations 已登记的版本化迁移(按 Version 升序;**只追加,不改写**)。
-var migrations = []Migration{}
+var migrations = []Migration{
+	// v2 (2026-11-12, P2):持久化执行队列 execution_jobs。
+	// 已在 baseline(v1)之前建成的库只记了 v1,baseline 之后启动不再
+	// AutoMigrate ⇒ 必须显式补建(模型+迁移缺一不可的纪律实例)。
+	{Version: 2, Name: "create execution_jobs (durable queue)",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&ExecutionJob{})
+		}},
+}
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。
 func ensureSchema(db *gorm.DB, driver string) error {

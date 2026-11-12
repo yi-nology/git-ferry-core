@@ -32,14 +32,17 @@ func TestEnsureSchema_FreshInstallBaseline(t *testing.T) {
 	}
 	// baseline 已记录。
 	var rows []SchemaMigration
-	require.NoError(t, db.Find(&rows).Error)
-	require.Len(t, rows, 1)
+	require.NoError(t, db.Order("version").Find(&rows).Error)
+	// baseline + 真实 v2(execution_jobs)
+	require.Len(t, rows, 2)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
+	assert.Equal(t, uint64(2), rows[1].Version)
+	assert.True(t, db.Migrator().HasTable(&ExecutionJob{}), "v2 迁移必须建 execution_jobs")
 
 	// 二次启动幂等:不再记录、不再 AutoMigrate 也不报错。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 1, "baseline 只能记录一次")
+	assert.Len(t, rows, 2, "已应用版本只能记录一次")
 }
 
 // TestEnsureSchema_LegacyConverge 存量库(无 schema_migrations,只有部分旧表):
@@ -62,9 +65,11 @@ func TestEnsureSchema_LegacyConverge(t *testing.T) {
 	assert.Equal(t, int64(1), cnt, "存量数据必须原样保留")
 
 	var rows []SchemaMigration
-	require.NoError(t, db.Find(&rows).Error)
-	require.Len(t, rows, 1)
+	require.NoError(t, db.Order("version").Find(&rows).Error)
+	// baseline + v2 迁移在存量库上补建 execution_jobs
+	require.Len(t, rows, 2)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
+	assert.True(t, db.Migrator().HasTable(&ExecutionJob{}), "存量库必须经 v2 迁移补建 execution_jobs")
 }
 
 // TestEnsureSchema_AppliesPendingMigrations baseline 之后只补跑未应用的显式迁移,
@@ -78,11 +83,11 @@ func TestEnsureSchema_AppliesPendingMigrations(t *testing.T) {
 	orig := migrations
 	defer func() { migrations = orig }()
 	migrations = append(migrations,
-		Migration{Version: 2, Name: "test: add idx on sync_runs.status",
+		Migration{Version: 90001, Name: "test: add idx on sync_runs.status",
 			Apply: func(tx *gorm.DB) error {
 				return tx.Exec("CREATE INDEX idx_mig_test_status ON sync_runs (status)").Error
 			}},
-		Migration{Version: 3, Name: "test: add mig_test_col",
+		Migration{Version: 90002, Name: "test: add mig_test_col",
 			Apply: func(tx *gorm.DB) error {
 				return tx.Exec("ALTER TABLE sync_runs ADD COLUMN mig_test_col TEXT").Error
 			}},
@@ -97,13 +102,13 @@ func TestEnsureSchema_AppliesPendingMigrations(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	require.Len(t, rows, 3, "baseline + v2 + v3 都应记录")
-	assert.Equal(t, uint64(3), rows[2].Version)
+	require.Len(t, rows, 4, "baseline + 真实v2 + 测试v90001/v90002 都应记录")
+	assert.Equal(t, uint64(90002), rows[3].Version)
 
 	// 重复启动:v2/v3 不得重放(幂等;重放 ALTER TABLE 会炸,天然可验)。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 3, "已应用迁移不得重复记录/重复执行")
+	assert.Len(t, rows, 4, "已应用迁移不得重复记录/重复执行")
 }
 
 // TestEnsureSchema_MigrationFailureStops 迁移失败:该版本不记录,
@@ -116,11 +121,11 @@ func TestEnsureSchema_MigrationFailureStops(t *testing.T) {
 	orig := migrations
 	defer func() { migrations = orig }()
 	migrations = append(migrations,
-		Migration{Version: 9, Name: "test: always fail",
+		Migration{Version: 90009, Name: "test: always fail",
 			Apply: func(tx *gorm.DB) error {
 				return gorm.ErrInvalidTransaction // 任意错误
 			}},
-		Migration{Version: 10, Name: "test: after failure",
+		Migration{Version: 90010, Name: "test: after failure",
 			Apply: func(tx *gorm.DB) error {
 				return tx.Exec("CREATE INDEX idx_mig_after ON sync_runs (status)").Error
 			}},
@@ -130,7 +135,7 @@ func TestEnsureSchema_MigrationFailureStops(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 1, "失败的迁移不得记录版本")
+	assert.Len(t, rows, 2, "失败的迁移不得记录版本(baseline+真实v2 在)")
 	assert.False(t, db.Migrator().HasIndex(&SyncRun{}, "idx_mig_after"),
 		"失败迁移之后的版本不得继续执行(顺序性)")
 }

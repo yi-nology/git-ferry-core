@@ -39,6 +39,7 @@ var allModels = []any{
 	&ForcePushApproval{},
 	&PendingTrigger{},
 	&OutboxEvent{},
+	&ExecutionJob{},
 }
 
 func InitDB(driver, dsn string) (*gorm.DB, error) {

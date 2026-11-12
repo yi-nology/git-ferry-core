@@ -25,6 +25,7 @@ type appDAOs struct {
 	approv   *dao.ForcePushApprovalDAO
 	pending  *dao.PendingTriggerDAO
 	outbox   *dao.OutboxEventDAO
+	jobs     *dao.ExecutionJobDAO
 	provider *sdkprov.Manager
 }
 
@@ -68,6 +69,7 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 		approv:   dao.NewForcePushApprovalDAO(db),
 		pending:  dao.NewPendingTriggerDAO(db),
 		outbox:   dao.NewOutboxEventDAO(db),
+		jobs:     dao.NewExecutionJobDAO(db),
 		provider: sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64)),
 	}, nil
 }

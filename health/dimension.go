@@ -349,13 +349,15 @@ type RunSnapshot struct {
 // CollectRunFacts 从最近 N 次执行采 reliability/freshness 事实。
 func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 	f := Facts{
-		"run_total":      "0",
-		"run_success":    "0",
-		"fail_streak":    "0",
-		"has_history":    "false",
-		"recent_success": "false",
-		"error_free":     "true",
-		"backup_failed":  "0",
+		"run_total":        "0",
+		"run_success":      "0",
+		"fail_streak":      "0",
+		"has_history":      "false",
+		"recent_success":   "false",
+		"error_free":       "true",
+		"backup_failed":    "0",
+		"last_backup_at":   "",
+		"backup_age_hours": "-1",
 	}
 	if len(runs) == 0 {
 		return f
@@ -367,6 +369,7 @@ func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 	stepFails := 0
 	retrySum := 0
 	backupFailed := 0
+	var lastBackup time.Time
 	errTypes := map[string]int{}
 	for _, r := range runs {
 		if r.Status == "success" {
@@ -380,9 +383,18 @@ func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 		if r.BackupStatus == model.BackupStatusFailed {
 			backupFailed++
 		}
+		// RPO 事实:最近一次**备份成功**时间(同步成功不等于备份成功,
+		// 必须只看 BackupStatus=success 的运行)。
+		if r.BackupStatus == model.BackupStatusSuccess && r.EndAt.After(lastBackup) {
+			lastBackup = r.EndAt
+		}
 	}
 	f["run_success"] = strconv.Itoa(ok)
 	f["backup_failed"] = strconv.Itoa(backupFailed)
+	if !lastBackup.IsZero() {
+		f["last_backup_at"] = lastBackup.Format(time.RFC3339)
+		f["backup_age_hours"] = strconv.FormatInt(int64(now.Sub(lastBackup).Hours()), 10)
+	}
 	f["step_fail_count"] = strconv.Itoa(stepFails)
 	f["retry_total"] = strconv.Itoa(retrySum)
 	if len(errTypes) > 0 {

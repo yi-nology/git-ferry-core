@@ -127,6 +127,15 @@ type SyncConfig struct {
 	// **为什么需要它**：这三张表此前**没有任何清理入口** ⇒ 随运行次数无限增长
 	// （现网两个月已有 92 次运行 / 355 条步骤）。
 	HistoryRetentionDays int `yaml:"history_retention_days" env:"GIT_SYNC_HISTORY_RETENTION_DAYS"`
+	// DurableQueue 持久化执行队列(execution_jobs,P2 分布式地基):
+	// true=触发先入队,由派发器按 lease 认领执行——实例崩溃/K8s 驱逐后
+	// 任务可被其它实例接管,重复触发自动合并不重复发布;
+	// false(默认)=直接执行(旧行为,零变化)。
+	DurableQueue bool `yaml:"durable_queue" env:"GIT_SYNC_DURABLE_QUEUE"`
+	// ExecuteJobs 本实例是否执行队列任务:nil/true=入队+派发执行(API/Worker 合一);
+	// false=只入队不执行(纯 API/调度实例,配合独立 Worker 进程)。
+	// 仅 DurableQueue=true 时有意义。
+	ExecuteJobs *bool `yaml:"execute_jobs" env:"GIT_SYNC_EXECUTE_JOBS"`
 	// MirrorLockFailClosed 镜像跨实例锁的 Redis 异常策略:
 	// false(默认,单实例友好)= 获取锁遇非竞争类错误(Redis 抖动)时降级为
 	// 仅进程内互斥,不阻断镜像任务(可用性优先,接受双实例短暂并发窗口);

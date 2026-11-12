@@ -1,6 +1,7 @@
 package health
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -246,4 +247,31 @@ func TestCollectRunFacts_BackupFailed(t *testing.T) {
 	f := CollectRunFacts(runs, now)
 	assert.Equal(t, "3", f["run_success"], "同步成功不受备份状态影响")
 	assert.Equal(t, "1", f["backup_failed"], "只有明确 failed 的备份才计数")
+}
+
+// TestCollectRunFacts_BackupRPO RPO 事实:只看备份成功的运行,
+// 同步成功但备份失败的运行不得刷新 last_backup_at。
+func TestCollectRunFacts_BackupRPO(t *testing.T) {
+	now := time.Now()
+	runs := []RunSnapshot{
+		// 最近一次运行:同步成功但备份失败 ⇒ 不得算成备份点
+		{Status: "success", BackupStatus: model.BackupStatusFailed, EndAt: now.Add(-time.Hour)},
+		// 上一次:备份成功(2 天前)⇒ 这才是恢复点
+		{Status: "success", BackupStatus: model.BackupStatusSuccess, EndAt: now.Add(-48 * time.Hour)},
+	}
+	f := CollectRunFacts(runs, now)
+	assert.Equal(t, "1", f["backup_failed"])
+	assert.NotEmpty(t, f["last_backup_at"])
+	age, err := strconv.ParseInt(f["backup_age_hours"], 10, 64)
+	require.NoError(t, err)
+	assert.Equal(t, int64(48), age, "备份年龄必须从最近一次**备份成功**起算")
+
+	// 从未备份成功 ⇒ 空 + -1(未知)
+	never := []RunSnapshot{
+		{Status: "success", EndAt: now.Add(-time.Hour)},
+		{Status: "success", BackupStatus: model.BackupStatusFailed, EndAt: now.Add(-2 * time.Hour)},
+	}
+	f = CollectRunFacts(never, now)
+	assert.Empty(t, f["last_backup_at"])
+	assert.Equal(t, "-1", f["backup_age_hours"], "无成功备份 ⇒ 年龄未知")
 }

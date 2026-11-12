@@ -130,6 +130,7 @@ const (
 	TableOperationLogs    = "operation_logs"
 	TablePendingTriggers  = "pending_triggers"
 	TableOutboxEvents     = "outbox_events"
+	TableExecutionJobs    = "execution_jobs"
 )
 
 // Model default value constants

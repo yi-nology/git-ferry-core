@@ -110,6 +110,11 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 		return ErrTaskDisabled
 	}
 
+	// P2 持久化队列:开启后触发改为入队(同任务去重),由派发器认领执行。
+	if s.durableQueueOn() {
+		return s.enqueueTaskRun(taskKey, trigger, webhookEventID)
+	}
+
 	// **并发互斥必须在这里拿**(而不是只在 RunTaskWithTrigger 里):
 	//
 	// cron / webhook 走 RunTaskWithTrigger ⇒ 有同 taskKey 互斥;
@@ -181,6 +186,11 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 	// 已禁用的任务不执行(cron/webhook/手动均拦截),需要运行请先启用
 	if !task.Enabled {
 		return ErrTaskDisabled
+	}
+
+	// P2 持久化队列:开启后触发改为入队(同任务去重),由派发器认领执行。
+	if s.durableQueueOn() {
+		return s.enqueueTaskRun(taskKey, trigger, webhookEventID)
 	}
 
 	// 并发控制(配 redis 时为分布式,多实例安全):全局并发上限 + 同 taskKey 互斥。

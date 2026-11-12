@@ -32,6 +32,8 @@ func TestNewService_WiresAllStores(t *testing.T) {
 
 	assert.NotNil(t, svc.outbox, "outbox DAO 必须接线(构造函数赋值)")
 	assert.NotNil(t, svc.pending, "pending DAO 必须接线")
+	assert.NotNil(t, svc.jobs, "execution jobs DAO 必须接线")
+	assert.NotEmpty(t, svc.instanceID, "lease 属主标识必须生成")
 	assert.NotNil(t, svc.templates, "templates store 必须接线")
 	assert.NotNil(t, svc.approvals, "force-push approvals 必须接线")
 	assert.NotNil(t, svc.retryTracker, "重试判定器必须接线")
