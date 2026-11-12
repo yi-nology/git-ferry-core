@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -21,8 +23,9 @@ import (
 // 执行,而是入队;本实例(execute_jobs!=false 时)的派发器按 lease 认领:
 //
 //	触发 → 入队(同任务去重) → 派发器 Claim(原子单胜者)
-//	     → 执行(续租) → 完成写终态
-//	          ↑________(lease 过期)reaper 放回 pending,接管重试
+//	     → 执行(续租;失锁即中止) → 完成写终态
+//	          ↑________(lease 过期)reaper 放回 pending(attempt+1),接管重试
+//	执行权被占(良性繁忙)⇒ 退避放回 pending,attempt 不增(不烧毒丸预算)
 //
 // 收益(对应评审 P2 验收):实例崩溃/被 K8s 驱逐 ⇒ 作业不丢,lease 过期后
 // 其它实例安全接管;并发/重复触发 ⇒ 入队去重合并不重复发布;纯 API 实例
@@ -142,9 +145,14 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 
 		release, err := s.guard.Acquire(s.bgCtx, job.TaskKey)
 		if err != nil {
-			// 执行权被占(本实例或跨实例有执行在跑):退避重试,不丢作业。
-			slog.Warn("job: 执行权被占,退避重试", "id", job.ID, "task", job.TaskKey, "error", err)
+			// 执行权被占(本实例或跨实例有执行在跑)——良性繁忙:退避重排,
+			// 作业放回 pending 且 attempt 不增(毒丸预算只留给崩溃接管)。
+			slog.Warn("job: 执行权被占,退避重排(不占接管预算)", "id", job.ID, "task", job.TaskKey, "error", err)
 			if rerr := s.jobs.Reschedule(job.ID, s.instanceID, jobBusyBackoff); rerr != nil {
+				if errors.Is(rerr, dao.ErrLeaseLost) {
+					slog.Warn("job: 退避重排时已失锁(作业已被其它实例接管),本实例停手", "id", job.ID)
+					return
+				}
 				slog.Error("job: 退避重排失败", "id", job.ID, "error", rerr)
 			}
 			return
@@ -165,9 +173,13 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 			return
 		}
 
+		// 执行用可取消 ctx:续租发现失锁 ⇒ 取消,旧属主立即停手(防与
+		// 接管方并发推同一目标仓库 —— 脑裂分叉推送)。
+		execCtx, cancelExec := context.WithCancel(s.bgCtx)
+		defer cancelExec()
 		stopRenew := make(chan struct{})
-		go s.renewLeaseLoop(job.ID, stopRenew)
-		run, execErr := s.executor.Execute(s.bgCtx, task, job.Trigger, job.WebhookEventID)
+		go s.renewLeaseLoop(job.ID, stopRenew, cancelExec)
+		run, execErr := s.executor.Execute(execCtx, task, job.Trigger, job.WebhookEventID)
 		close(stopRenew)
 
 		s.finishRun(job.TaskKey, job.Trigger, run, execErr, release)
@@ -176,6 +188,10 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 			runID = run.ID
 		}
 		if cerr := s.jobs.Complete(job.ID, s.instanceID, runID, execErr); cerr != nil {
+			if errors.Is(cerr, dao.ErrLeaseLost) {
+				slog.Error("job: 完成落库时已失锁(执行结果未入终态,作业已被其它实例接管重试)", "id", job.ID)
+				return
+			}
 			slog.Error("job: 完成落库失败", "id", job.ID, "error", cerr)
 		}
 	})
@@ -187,12 +203,18 @@ func (s *Service) failJobAndRelease(job model.ExecutionJob, release func(), caus
 	release()
 	slog.Warn("job: 执行前失败,作业判失败", "id", job.ID, "task", job.TaskKey, "error", cause)
 	if cerr := s.jobs.Complete(job.ID, s.instanceID, 0, cause); cerr != nil {
+		if errors.Is(cerr, dao.ErrLeaseLost) {
+			slog.Warn("job: 失败落库时已失锁(作业已被其它实例接管重试)", "id", job.ID)
+			return
+		}
 		slog.Error("job: 失败落库失败", "id", job.ID, "error", cerr)
 	}
 }
 
-// renewLeaseLoop 执行中周期续租,直到 stop 关闭或实例退出。
-func (s *Service) renewLeaseLoop(id uint, stop <-chan struct{}) {
+// renewLeaseLoop 执行中周期续租,直到 stop 关闭或实例退出;
+// 续租发现失锁(ErrLeaseLost)⇒ Error 告警 + 取消执行 ctx(onLost),
+// 旧属主不得无感继续推送。
+func (s *Service) renewLeaseLoop(id uint, stop <-chan struct{}, onLost func()) {
 	tick := time.NewTicker(jobRenewInterval)
 	defer tick.Stop()
 	for {
@@ -202,10 +224,29 @@ func (s *Service) renewLeaseLoop(id uint, stop <-chan struct{}) {
 		case <-s.bgCtx.Done():
 			return
 		case <-tick.C:
-			if err := s.jobs.RenewLease(id, s.instanceID, jobLeaseTTL); err != nil {
-				slog.Warn("job: 续租失败(lease 过期将被接管重试)", "id", id, "error", err)
+			if !s.renewLeaseTick(id, onLost) {
+				return
 			}
 		}
+	}
+}
+
+// renewLeaseTick 续租一次:返回是否继续续租循环(false = 已失锁,该停手)。
+func (s *Service) renewLeaseTick(id uint, onLost func()) bool {
+	err := s.jobs.RenewLease(id, s.instanceID, jobLeaseTTL)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, dao.ErrLeaseLost):
+		// 失锁:执行权已被其它实例接管,继续执行 = 脑裂分叉推送。
+		slog.Error("job: 续租发现已失锁,中止本次执行", "id", id, "error", err)
+		if onLost != nil {
+			onLost()
+		}
+		return false
+	default:
+		slog.Warn("job: 续租失败(lease 过期将被接管重试)", "id", id, "error", err)
+		return true
 	}
 }
 
