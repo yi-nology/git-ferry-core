@@ -70,6 +70,14 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&ReconcileRecord{})
 		}},
+	// v4 (2026-11-13, #13):execution_jobs.defer_count —— 良性繁忙退避次数,
+	// 与接管次数(attempt)分离记账(毒丸预算只留给崩溃接管)。已应用 v2 的
+	// 存量库没有该列,而 Enqueue/Reschedule 的 SQL 直接引用它 ⇒ baseline 之后
+	// 不再 AutoMigrate,必须显式补列(模型+迁移缺一不可的纪律)。
+	{Version: 4, Name: "execution_jobs defer_count (benign busy backoff counter)",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&ExecutionJob{})
+		}},
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。
