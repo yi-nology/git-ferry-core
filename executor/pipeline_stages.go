@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,14 +158,18 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 	rc.logf("create cold backup bundle...\n")
 	path, err := rc.Exec.writeBundle(ctx, rc.WorkDir, cfg.Sync.BackupDir, rc.Task, rc.Details)
 	if err != nil {
+		// 备份目标未达成:同步结果不受影响(可选阶段),但 BackupStatus 必须红。
+		rc.markBackup(false)
 		return err
 	}
+	rc.BundlesPath = path
+	var errs []error
 	// 轮转:每任务只保留最近 N 份(backup_keep)。
 	//
 	// 原实现 rotateBundles **从来没有生产调用点**(全仓只有定义与测试)⇒
 	// 配置里那个"每任务保留最近 N 份"看起来是生效的,实际冷备目录只增不减,
 	// 备份频率 × 任务数 × 天数的产物把磁盘吃满。
-	// 轮转是 optional 阶段的一环,失败只记 details(不影响同步结果)。
+	// 轮转失败只影响保留策略,不毁掉已生成的 bundle ⇒ 记 failed 但继续扇出。
 	if keep := cfg.Sync.BackupKeep; keep > 0 {
 		removed, rerr := rotateBundles(cfg.Sync.BackupDir, rc.Task.Key, keep)
 		if removed > 0 {
@@ -174,17 +179,20 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 			// 轮转失败要留痕:否则"冷备只保留 N 份"看着是生效的,实际目录照样涨。
 			rc.logf("bundle: rotate failed: %v\n", rerr)
 			fmt.Fprintf(rc.Details, "  bundle rotate failed: %v\n", rerr)
+			errs = append(errs, rerr)
 		}
 	} else {
 		rc.logf("bundle: rotation skipped (sync.backup_keep not configured => keep all)\n")
 	}
-	rc.Exec.fanoutBundle(ctx, path, cfg, rc.Details)
-	rc.BundlesPath = path
-	return nil
+	if ferr := rc.Exec.fanoutBundle(ctx, path, cfg, rc.Details); ferr != nil {
+		errs = append(errs, ferr)
+	}
+	rc.markBackup(len(errs) == 0)
+	return errors.Join(errs...)
 }
 
 // backupRemoteStage 同步成功后向配置的备份远端 push 镜像副本（GitHub/GitLab 等）。
-// 失败只记 details，不影响主同步结果（冷备是附加能力）。
+// 失败不阻断主同步结果（可选阶段），但写入 Run.BackupStatus —— 灾备目标未达成必须可见。
 type backupRemoteStage struct{}
 
 func (backupRemoteStage) Name() string     { return stageBackupRemote }
@@ -196,8 +204,9 @@ func (backupRemoteStage) Run(ctx context.Context, rc *RunContext) error {
 		return nil
 	}
 	rc.logf("push backup remotes...\n")
-	rc.Exec.pushBackupRemotes(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, cfg.Sync.BackupRemotes, rc.Details)
-	return nil
+	err := rc.Exec.pushBackupRemotes(ctx, rc.RepoDir, rc.Task, rc.SourceRepo, cfg.Sync.BackupRemotes, rc.Details)
+	rc.markBackup(err == nil)
+	return err
 }
 
 // defaultPipeline 标准同步流水线:clone/fetch → remote → push → wiki → bundle → backup remotes。

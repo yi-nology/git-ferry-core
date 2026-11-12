@@ -43,6 +43,7 @@ func SnapshotsFromRuns(runs []*model.SyncRun) []RunSnapshot {
 			StepFails:    stepFails,
 			RetryTotal:   r.RetryTotal,
 			ErrorType:    r.ErrorType,
+			BackupStatus: r.BackupStatus,
 		})
 	}
 	return snaps

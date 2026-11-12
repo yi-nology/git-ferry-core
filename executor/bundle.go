@@ -3,6 +3,7 @@ package executor
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,14 +175,17 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error)
 }
 
 // fanoutBundle 冷备完成后:可选 AES-GCM 加密 + 多目的地扇出上传。
-// 失败只记 details,不影响同步主流程成功状态(冷备是附加能力)。
-func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *model.Config, details *strings.Builder) {
+// 逐目的地独立成败;任一失败聚合返回(调用方写 Run.BackupStatus)——
+// 失败不再只沉在 details 文本里。
+func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *model.Config, details *strings.Builder) error {
+	var errs []error
 	// 1) 可选加密
 	uploadPath := bundlePath
 	if cfg.Sync.BackupEncryptKey != "" {
 		encPath, err := EncryptFile(bundlePath, cfg.Sync.BackupEncryptKey)
 		if err != nil {
 			fmt.Fprintf(details, "  bundle encrypt error: %v\n", err)
+			errs = append(errs, err)
 		} else {
 			uploadPath = encPath
 			fmt.Fprintf(details, "  bundle encrypted: %s\n", filepath.Base(encPath))
@@ -211,7 +215,7 @@ func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *mod
 		})
 	}
 	if len(dests) == 0 {
-		return
+		return errors.Join(errs...)
 	}
 
 	results := FanoutUpload(ctx, uploadPath, dests)
@@ -226,4 +230,8 @@ func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *mod
 		}
 	}
 	fmt.Fprintf(details, "  fanout: %d ok, %d failed\n", okN, failN)
+	if failN > 0 {
+		errs = append(errs, fmt.Errorf("fanout: %d/%d destinations failed", failN, okN+failN))
+	}
+	return errors.Join(errs...)
 }

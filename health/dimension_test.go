@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 func TestCollectRunFacts_Empty(t *testing.T) {
@@ -230,4 +232,18 @@ func TestSortedDimensionNames(t *testing.T) {
 		[]string{"reliability", "freshness", "schedule", "safety", "completeness"},
 		names,
 	)
+}
+
+// TestCollectRunFacts_BackupFailed 备份失败事实采集:
+// 同步成功 + 备份失败 ⇒ backup_failed 计数,与 run_success 分离。
+func TestCollectRunFacts_BackupFailed(t *testing.T) {
+	now := time.Now()
+	runs := []RunSnapshot{
+		{Status: "success", BackupStatus: model.BackupStatusFailed, EndAt: now.Add(-time.Hour)},
+		{Status: "success", BackupStatus: model.BackupStatusSuccess, EndAt: now.Add(-2 * time.Hour)},
+		{Status: "success", EndAt: now.Add(-3 * time.Hour)}, // 未启用备份 ⇒ n/a 不计
+	}
+	f := CollectRunFacts(runs, now)
+	assert.Equal(t, "3", f["run_success"], "同步成功不受备份状态影响")
+	assert.Equal(t, "1", f["backup_failed"], "只有明确 failed 的备份才计数")
 }

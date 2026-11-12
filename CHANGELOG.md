@@ -6,6 +6,18 @@
 
 ### Fixed（P1 Durable Execution,技术评审 2026-11-12 落地）
 
+- **同步与备份状态分离**:`SyncRun` 新增 `BackupStatus` 列(空=未启用,
+  success/failed),与 `Status`(同步)正交 —— 同步成功 + 备份失败 ⇒
+  灾备目标未达成,不再被 details 文本淹没(评审验收:「备份上传 S3 失败,
+  但 Git 同步成功 ⇒ 两种状态分别显示」)。语义:`bundle` 与
+  `backup_remote` 两个可选阶段都经 `RunContext.markBackup` 写入,
+  **failed 粘滞**(任一环节失败即整体 failed,后续成功不得洗白;
+  阶段被跳过保持 n/a)。为此 `fanoutBundle`/`pushBackupRemotes` 从
+  「错误吞进 details」改为聚合返回(errors.Join),阶段据此标红;
+  轮转失败(保留策略未执行)同样计 failed 但不阻断扇出。
+  health 侧:`RunSnapshot.BackupStatus` 透传 + 新事实键
+  `backup_failed`(评分权重未动,展示随壳层 v0.36.0 升级轮落地)。
+
 - **运行完成通知持久化投递保障(transactional outbox)**:旧 `SubscribeRuns`
   是纯进程内回调 —— 进程在「运行记录落库之后、通知回调执行之前」崩溃,
   通知与自动补偿动作静默丢失(评审验收:「运行结果落库后立即 SIGKILL ⇒

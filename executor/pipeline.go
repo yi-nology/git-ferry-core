@@ -36,6 +36,19 @@ func (rc *RunContext) logf(format string, args ...any) {
 	fmt.Fprintf(rc.Details, format, args...)
 }
 
+// markBackup 记录备份环节结果(failed 粘滞):
+// 任一备份环节失败 ⇒ 整体 failed;成功仅当此前无失败。
+// 阶段被跳过(未启用)时不调用,BackupStatus 保持空 = n/a。
+func (rc *RunContext) markBackup(ok bool) {
+	if !ok {
+		rc.Run.BackupStatus = model.BackupStatusFailed
+		return
+	}
+	if rc.Run.BackupStatus != model.BackupStatusFailed {
+		rc.Run.BackupStatus = model.BackupStatusSuccess
+	}
+}
+
 // Pipeline 有序阶段执行器。
 type Pipeline struct {
 	stages []Stage

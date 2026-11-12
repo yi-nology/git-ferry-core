@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,9 +11,11 @@ import (
 )
 
 // pushBackupRemotes 把当前同步结果推到配置的备份远端（GitHub/GitLab 等）。
-// 与镜像中心区分：不改写 module 身份，纯备份副本。失败只记 details。
+// 与镜像中心区分：不改写 module 身份，纯备份副本。
+// 逐远端独立成败;任一失败聚合返回(调用方写 Run.BackupStatus)。
 func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *model.SyncTask,
-	repo *model.Repo, remotes []model.BackupRemoteConfig, details *strings.Builder) {
+	repo *model.Repo, remotes []model.BackupRemoteConfig, details *strings.Builder) error {
+	var errs []error
 	for _, r := range remotes {
 		if r.Enabled != nil && !*r.Enabled {
 			continue
@@ -31,6 +34,7 @@ func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *mode
 		_ = e.backend.RemoveRemote(ctx, dir, remoteName)
 		if err := e.backend.AddRemote(ctx, dir, remoteName, url); err != nil {
 			fmt.Fprintf(details, "  backup remote %s: add failed: %v\n", name, err)
+			errs = append(errs, fmt.Errorf("backup remote %s: add: %w", name, err))
 			continue
 		}
 		// 推送当前分支 + tags
@@ -51,10 +55,12 @@ func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *mode
 			Auth:     e.authConfig(ctx, repo, nil),
 		}); err != nil {
 			fmt.Fprintf(details, "  backup remote %s: push failed: %v\n", name, err)
+			errs = append(errs, fmt.Errorf("backup remote %s: push: %w", name, err))
 			continue
 		}
 		fmt.Fprintf(details, "  backup remote %s: ok (%s)\n", name, url)
 	}
+	return errors.Join(errs...)
 }
 
 // expandBackupURL 替换 {owner}/{repo}/{key} 占位。

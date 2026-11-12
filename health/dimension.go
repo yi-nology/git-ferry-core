@@ -15,6 +15,7 @@ import (
 
 	"github.com/oekit/pkg/convert"
 	"github.com/oekit/pkg/slicex"
+	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // Dimension 单项健康维度（Scorecards 模式）。
@@ -341,6 +342,8 @@ type RunSnapshot struct {
 	RetryTotal int
 	// ErrorType 错误分类（auth/network/divergent/...）
 	ErrorType string
+	// BackupStatus 冷备/备份远端阶段状态(空=n/a):failed = 同步成功但灾备目标未达成
+	BackupStatus string
 }
 
 // CollectRunFacts 从最近 N 次执行采 reliability/freshness 事实。
@@ -352,6 +355,7 @@ func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 		"has_history":    "false",
 		"recent_success": "false",
 		"error_free":     "true",
+		"backup_failed":  "0",
 	}
 	if len(runs) == 0 {
 		return f
@@ -362,6 +366,7 @@ func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 	ok := 0
 	stepFails := 0
 	retrySum := 0
+	backupFailed := 0
 	errTypes := map[string]int{}
 	for _, r := range runs {
 		if r.Status == "success" {
@@ -372,8 +377,12 @@ func CollectRunFacts(runs []RunSnapshot, now time.Time) Facts {
 		if r.ErrorType != "" {
 			errTypes[r.ErrorType]++
 		}
+		if r.BackupStatus == model.BackupStatusFailed {
+			backupFailed++
+		}
 	}
 	f["run_success"] = strconv.Itoa(ok)
+	f["backup_failed"] = strconv.Itoa(backupFailed)
 	f["step_fail_count"] = strconv.Itoa(stepFails)
 	f["retry_total"] = strconv.Itoa(retrySum)
 	if len(errTypes) > 0 {

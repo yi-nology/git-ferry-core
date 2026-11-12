@@ -7,6 +7,12 @@ const (
 	StatusFailed  = "failed"
 )
 
+// Backup status constants(BackupStatus 列;空 = 未启用/未执行)
+const (
+	BackupStatusSuccess = "success"
+	BackupStatusFailed  = "failed"
+)
+
 // Webhook event status constants
 const (
 	StatusReceived   = "received"
