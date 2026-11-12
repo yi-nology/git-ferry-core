@@ -2,9 +2,9 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.36.0] - 2026-11-12
 
-### Fixed（P1 Durable Execution,技术评审 2026-11-12 落地）
+### Fixed（P0 Correctness + P1 Durable Execution,技术评审 2026-11-12 全部落地）
 
 - **同步与备份状态分离**:`SyncRun` 新增 `BackupStatus` 列(空=未启用,  success/failed),与 `Status`(同步)正交 —— 同步成功 + 备份失败 ⇒
   灾备目标未达成,不再被 details 文本淹没(评审验收:「备份上传 S3 失败,
