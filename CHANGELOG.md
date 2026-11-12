@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.38.0] - 2026-11-12
 
 ### Added（P2 Distributed GitFerry——大仓库资源限制,切片 2）
 
