@@ -48,12 +48,21 @@ type Service interface {
 	PlatformProvider
 }
 
+// RecoveryRecorder 记录恢复点(冷备成功后):由 Service 注入;
+// nil=不记录(裸构造的测试路径/未接线场景)。
+type RecoveryRecorder interface {
+	RecordRecoveryPoint(taskKey, fileName, format, sourceSHA string, sizeBytes int64) error
+}
+
 type Executor struct {
 	service Service
 	backend gitbackend.GitBackend
 	// Approver 可选：force_push_policy=block 时查询是否已获人工放行。
 	// 由壳层注入（如 force-push-approvals 审批表）；nil=始终未放行。
 	Approver ForcePushApprover
+	// Recovery 可选:冷备成功后记录恢复点(P3 可恢复性索引);
+	// nil=不记录。与 Approver 同为可选注入,不动 Service 接口。
+	Recovery RecoveryRecorder
 }
 
 // ForcePushApprover 查询某任务/分支的强制推送是否已获放行。

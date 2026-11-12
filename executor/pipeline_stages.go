@@ -188,6 +188,11 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 	if ferr := rc.Exec.fanoutBundle(ctx, path, cfg, rc.Details); ferr != nil {
 		errs = append(errs, ferr)
 	}
+	// 冷备成功 ⇒ 记录恢复点(文件名+源 HEAD,可恢复性索引)。
+	// 只在 bundle 本身成功的前提下记——文件没落盘的恢复点是假锚。
+	if len(errs) == 0 {
+		rc.Exec.recordRecoveryPoint(rc, path, cfg.Sync.BackupFormat)
+	}
 	rc.markBackup(len(errs) == 0)
 	return errors.Join(errs...)
 }

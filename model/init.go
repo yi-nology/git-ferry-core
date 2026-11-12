@@ -41,6 +41,7 @@ var allModels = []any{
 	&OutboxEvent{},
 	&ExecutionJob{},
 	&ReconcileRecord{},
+	&RecoveryPoint{},
 }
 
 func InitDB(driver, dsn string) (*gorm.DB, error) {

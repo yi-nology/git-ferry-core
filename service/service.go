@@ -44,7 +44,9 @@ type Service struct {
 	instanceID string
 	// reconciles 对账结果存储(reconcile_results,见 reconcile.go);
 	// 仅 reconcile_interval_hours>0 时启用。
-	reconciles      *dao.ReconcileDAO
+	reconciles *dao.ReconcileDAO
+	// recovery 恢复点索引(recovery_points,见 recovery.go)。
+	recovery        *dao.RecoveryPointDAO
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
@@ -124,6 +126,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		jobs:         daos.jobs,
 		instanceID:   newInstanceID(),
 		reconciles:   daos.reconcile,
+		recovery:     daos.recovery,
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -165,6 +168,8 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	} else {
 		exec.Approver = svc.approvals
 	}
+	// 恢复点索引:冷备成功后记录(P3 可恢复性)。
+	exec.Recovery = svc
 
 	mirrorSvc, err := NewMirrorService(svc, db)
 	if err != nil {

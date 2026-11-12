@@ -70,6 +70,11 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&ReconcileRecord{})
 		}},
+	// v4 (2026-11-12, P3):恢复点索引 recovery_points(可恢复性独立验证)。
+	{Version: 4, Name: "create recovery_points (restore index)",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&RecoveryPoint{})
+		}},
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。

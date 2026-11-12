@@ -174,6 +174,34 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error)
 	return removed, nil
 }
 
+// recordRecoveryPoint 冷备成功后记恢复点:源 HEAD(状态锚)+ 文件名 + 大小。
+// Recovery 未接线 / RevParse 失败只降级为「不记录」——恢复点是观测面,
+// 不得让索引失败毁掉已成功的冷备(backup_status 已由上层判定)。
+func (e *Executor) recordRecoveryPoint(rc *RunContext, path, format string) {
+	if e.Recovery == nil {
+		return
+	}
+	repoDir := filepath.Join(rc.WorkDir, RepoDir)
+	sha, err := e.backend.RevParse(context.Background(), repoDir, "HEAD")
+	if err != nil {
+		rc.logf("recovery point: rev-parse HEAD failed: %v\n", err)
+		return
+	}
+	var size int64
+	if fi, serr := os.Stat(path); serr == nil {
+		size = fi.Size()
+	}
+	fname := filepath.Base(path)
+	if format == "" {
+		format = "bundle"
+	}
+	if rerr := e.Recovery.RecordRecoveryPoint(rc.Task.Key, fname, format, sha, size); rerr != nil {
+		rc.logf("recovery point: record failed: %v\n", rerr)
+		return
+	}
+	rc.logf("recovery point recorded: %s @ %s\n", fname, sha)
+}
+
 // fanoutBundle 冷备完成后:可选 AES-GCM 加密 + 多目的地扇出上传。
 // 逐目的地独立成败;任一失败聚合返回(调用方写 Run.BackupStatus)——
 // 失败不再只沉在 details 文本里。

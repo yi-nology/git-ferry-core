@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（P3 Repository Governance——恢复点索引,切片 4）
+
+- **恢复点索引 `recovery_points`**(新表,迁移 v4):一次成功冷备的可检索
+  条目——任务/文件名/格式/源 HEAD SHA(状态锚)/大小。BackupManifest 回答
+  「文件有没有被篡改」(完整性),恢复点回答「恢复到某任务某状态该用哪个
+  文件」(可恢复性)——对应评审验收「可恢复性可以独立验证」。
+  `Service.ListRecoveryPoints`(最新优先,惰性清理文件已不存在的条目:
+  轮转删 bundle ⇒ 索引跟着走,不留假锚)/`LatestRecoveryPoint`(快速回答
+  「现在能恢复到哪」)。executor 经可选注入 `RecoveryRecorder` 记录
+  (冷备成功才记;RevParse 取源 HEAD;观测面失败只留痕不毁冷备)。
+  顺带发现:`SyncRun.CommitRange` 全仓无赋值点(恒空字段),恢复点改用
+  RevParse 真实 HEAD,不依赖它。
+
 ## [v0.39.0] - 2026-11-12
 
 ### Added（P3 Repository Governance——对账周期化,切片 3,闭环）

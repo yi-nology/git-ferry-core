@@ -27,6 +27,7 @@ type appDAOs struct {
 	outbox    *dao.OutboxEventDAO
 	jobs      *dao.ExecutionJobDAO
 	reconcile *dao.ReconcileDAO
+	recovery  *dao.RecoveryPointDAO
 	provider  *sdkprov.Manager
 }
 
@@ -72,6 +73,7 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 		outbox:    dao.NewOutboxEventDAO(db),
 		jobs:      dao.NewExecutionJobDAO(db),
 		reconcile: dao.NewReconcileDAO(db),
+		recovery:  dao.NewRecoveryPointDAO(db),
 		provider:  sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64)),
 	}, nil
 }

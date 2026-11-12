@@ -132,6 +132,7 @@ const (
 	TableOutboxEvents     = "outbox_events"
 	TableExecutionJobs    = "execution_jobs"
 	TableReconcileResults = "reconcile_results"
+	TableRecoveryPoints   = "recovery_points"
 )
 
 // Model default value constants
