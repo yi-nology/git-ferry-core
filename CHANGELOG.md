@@ -6,8 +6,7 @@
 
 ### Fixed（P1 Durable Execution,技术评审 2026-11-12 落地）
 
-- **同步与备份状态分离**:`SyncRun` 新增 `BackupStatus` 列(空=未启用,
-  success/failed),与 `Status`(同步)正交 —— 同步成功 + 备份失败 ⇒
+- **同步与备份状态分离**:`SyncRun` 新增 `BackupStatus` 列(空=未启用,  success/failed),与 `Status`(同步)正交 —— 同步成功 + 备份失败 ⇒
   灾备目标未达成,不再被 details 文本淹没(评审验收:「备份上传 S3 失败,
   但 Git 同步成功 ⇒ 两种状态分别显示」)。语义:`bundle` 与
   `backup_remote` 两个可选阶段都经 `RunContext.markBackup` 写入,
@@ -17,6 +16,17 @@
   轮转失败(保留策略未执行)同样计 failed 但不阻断扇出。
   health 侧:`RunSnapshot.BackupStatus` 透传 + 新事实键
   `backup_failed`(评分权重未动,展示随壳层 v0.36.0 升级轮落地)。
+
+- **版本化 schema 迁移(AutoMigrate 退役为基线构建器)**:技术评审指出
+  AutoMigrate 适合轻量部署,但多实例并发启动会并发 DDL 且不可审计。
+  新机制(model/migrate.go):`schema_migrations` 版本表 + 显式迁移注册表
+  (migrations,**只追加不改写**)。策略:全新安装 = AutoMigrate 建齐当前
+  schema 记 baseline(v1),此后启动**不再 AutoMigrate**;存量库(无版本记录)
+  首次启动 AutoMigrate 收敛(与旧行为等价,零风险)记 baseline;之后启动
+  只按版本表补跑未应用的显式迁移(单事务,失败即停且不记录版本=下次重试,
+  顺序执行)。MySQL 用 GET_LOCK 命名锁串行化多实例启动(等 60s 不到
+  fail-closed 拒启);sqlite 单写者天然串行。新 schema 变更纪律:
+  模型字段(新装)+ 显式迁移(存量)缺一不可。
 
 - **运行完成通知持久化投递保障(transactional outbox)**:旧 `SubscribeRuns`
   是纯进程内回调 —— 进程在「运行记录落库之后、通知回调执行之前」崩溃,
