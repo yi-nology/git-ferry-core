@@ -2,6 +2,49 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed（清零战役 Y3——7 个真缺陷）
+
+- **durable_queue/MySQL 保留字**（#12）:`Enqueue` 裸 SQL 的列名 `trigger`
+  是 MySQL 保留字,裸写在 MySQL 部署下每次触发都 1064 语法错误,持久化
+  队列完全不可用(sqlite 宽容保留字,单测全绿测不出)。列名反引号包裹
+  (sqlite 同样接受反引号标识符,一条语句两种后端通用),迁移口径 =
+  **零迁移**:只改语句文本,不动 schema 与既有数据。
+- **durable_queue/毒丸预算**（#13）:「执行权被占」的良性繁忙此前只推
+  lease、作业停在 claimed 等 reaper 回收 ⇒ attempt 必然 +1,连续 5 次
+  退避(约 2.5 分钟)后作业被误判 failed 丢弃。现在 `Reschedule` 把作业
+  放回 pending(attempt 不增),`lease_until` 在 pending 态复用作
+  not-before(退避窗口内不得提前认领,防派发器忙旋),退避次数另立
+  `defer_count` 列记账(显式迁移 v6 补列,模型+迁移缺一不可);毒丸预算
+  只留给「lease 过期被接管」的崩溃场景。
+- **durable_queue/失锁哨兵**（#14）:`RenewLease`/`Complete` 此前丢弃
+  RowsAffected,0 行命中返回 nil —— 旧属主失锁后无感继续推送(脑裂)且
+  无告警。现在 0 行命中返回 `dao.ErrLeaseLost`(errors.Is 可判定),
+  `RenewLease` 顺带校验租约未过期(已过期槽不得借续租复活,对齐 lock
+  包语义);service 侧续租失锁即 Error 告警并**取消执行 ctx**(旧属主
+  立即停手),完成/失败落库失锁分级告警。
+- **outbox/无订阅者不标记**（#15）:此前无订阅者时事件一个字节都没投出
+  却被标记已发布(启动零宽限扫描先于壳层 SubscribeRuns,必然踩空)——
+  at-least-once 退化 at-most-once,通知与自动补偿永久丢失。现在派发器
+  只标记「真的投递了」或「run 已清理(明确废弃)」的事件;无订阅者不
+  标记,留待订阅者注册后重投;快速路径 `finishRun` 同口径(投递成功才
+  按 run 闭环)。
+- **quota/fail-closed 复活**（#16）:`dirSizeBytes` 此前把一切遍历错误
+  吞成 nil,恒返回 (total, nil),「测不出也中止」的 fail-closed 分支是
+  死代码 —— 体积测不出被当成 0 字节静默放行。现在区分根不可达
+  (不存在/无权限/读目录失败 ⇒ 上抛,fail-closed)与子项不可读(容错
+  跳过,记 debug 日志)。
+- **quota/测量口径对齐**（#17）:配额此前只测 RepoDir,而 wiki 是
+  WorkDir 下平级的第二个完整 clone 且 clone 发生在检查之后 ⇒ 配额被
+  绕过。现在测整棵 WorkDir,与超限清理口径(os.RemoveAll(WorkDir))及
+  CHANGELOG「单任务工作区体积」一致;日志/留痕写明测量根路径。
+- **health/RPO 解耦窗口**（#18）:`last_backup_at`/`backup_age_hours`
+  此前只看「最近 10 次运行」评分窗口,窗口外的成功备份被谎报为
+  「从未成功备份 / -1」。现在按 `backup_status=success` 全历史单独取
+  最近一条(`SyncRunDAO.FindLastBackupSuccess`)覆写 RPO 事实键,评分
+  窗口照旧;另附 `backup_in_recent_window` 区分两种「窗口内没看到备份」。
+
 ## [v0.40.0] - 2026-11-13
 
 ### Added（P3 Repository Governance——策略即代码,切片 5）

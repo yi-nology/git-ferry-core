@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/oekit/concurrency/syncx"
@@ -100,6 +101,13 @@ func summarizeHealth(items []HealthScoreItem) HealthSummary {
 	return sum
 }
 
+// taskHealthInput 单任务的评分输入:评分窗口内的运行 + 全历史最近一次
+// 备份成功(RPO 事实键用,与窗口解耦)。
+type taskHealthInput struct {
+	runs       []*model.SyncRun
+	lastBackup *model.SyncRun
+}
+
 // computeHealthScores 取任务与历史、跑规则打分。
 // 历史按任务并行拉取（并发上限 8）——每任务各自取最近 N 条，保持既有语义。
 func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask map[string]int) ([]HealthScoreItem, error) {
@@ -114,9 +122,14 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	// 信号量),结果按 index 序返回(与原「逐任务 channel 保序」等价),
 	// panic 落槽不丢结果;ctx 取消时不再启动新工作——原实现的 goroutine
 	// 会在信号量上一直排队直到 ListHistory 自己超时。
-	histSlots := syncx.FanInLimitCtx(ctx, len(tasks), 8, func(ctx context.Context, i int) ([]*model.SyncRun, error) {
+	histSlots := syncx.FanInLimitCtx(ctx, len(tasks), 8, func(ctx context.Context, i int) (taskHealthInput, error) {
 		runs, _, err := s.ListHistory(ctx, tasks[i].Key, 0, healthHistoryLimit)
-		return runs, err
+		if err != nil {
+			return taskHealthInput{}, err
+		}
+		// RPO 事实键与评分窗口解耦:全历史单独取最近一次备份成功。
+		lastBackup, err := s.tasks.runDAO.FindLastBackupSuccess(tasks[i].Key)
+		return taskHealthInput{runs: runs, lastBackup: lastBackup}, err
 	})
 
 	items := make([]HealthScoreItem, 0, len(tasks))
@@ -136,12 +149,13 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		}
 
 		hist := histSlots[i]
-		runs := hist.Val
+		runs := hist.Val.runs
 		if hist.Err == nil && len(runs) > 0 {
 			// 快照映射是 health 包的唯一实现(core 与壳层 agent 工具共用)
 			for k, v := range health.CollectRunFacts(health.SnapshotsFromRuns(runs), now) {
 				facts[k] = v
 			}
+			applyRPOFacts(facts, hist.Val.lastBackup, runs, now)
 		} else {
 			facts["has_history"] = "false"
 		}
@@ -178,4 +192,27 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		})
 	}
 	return items, nil
+}
+
+// applyRPOFacts 覆写 RPO 事实键:以「全历史最近一次备份成功」为准
+// (FindLastBackupSuccess,与评分用的最近 N 次窗口解耦),并附
+// backup_in_recent_window 区分两种「窗口内没看到备份」的情形。
+//
+// 契约:backup_age_hours=-1 = 无成功备份。若沿用评分窗口做 RPO,
+// 同步频繁的任务会把「窗口外有成功备份」谎报成「从未成功备份(-1)」
+// —— 恰恰在 RPO 最该被关注的时刻报出最强的乐观信号。收集函数
+// (health.CollectRunFacts)保持纯函数不动:它只对喂进来的 runs 负责。
+func applyRPOFacts(facts health.Facts, lastBackup *model.SyncRun, windowRuns []*model.SyncRun, now time.Time) {
+	if lastBackup != nil && lastBackup.EndTime != nil {
+		facts["last_backup_at"] = lastBackup.EndTime.Format(time.RFC3339)
+		facts["backup_age_hours"] = strconv.FormatInt(int64(now.Sub(*lastBackup.EndTime).Hours()), 10)
+	}
+	inWindow := false
+	for _, r := range windowRuns {
+		if r != nil && r.BackupStatus == model.BackupStatusSuccess {
+			inWindow = true
+			break
+		}
+	}
+	facts["backup_in_recent_window"] = strutil.BoolFact(inWindow)
 }

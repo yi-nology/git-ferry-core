@@ -279,3 +279,43 @@ func TestSyncRunDAO_AutoRetryChainStats(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// TestSyncRunDAO_FindLastBackupSuccess RPO 事实键的全历史查询(#18):
+// 不受评分窗口(最近 N 条)截断影响 —— 窗口外的成功备份也能取到;
+// backup_status=failed/空(未启用)的运行不得入选;没有成功备份 ⇒ (nil, nil)。
+func TestSyncRunDAO_FindLastBackupSuccess(t *testing.T) {
+	db := setupSyncRunTestDB(t)
+	d := NewSyncRunDAO(db)
+
+	// 无任何运行
+	got, err := d.FindLastBackupSuccess("t-rpo")
+	require.NoError(t, err)
+	assert.Nil(t, got, "没有成功备份必须返回 nil,而不是零值记录")
+
+	// 12 条运行:仅第 2 条(id=2)备份成功 —— 落在「最近 10 条」窗口之外
+	end := time.Now().Add(-time.Hour)
+	for i := 0; i < 12; i++ {
+		r := &model.SyncRun{
+			TaskKey: "t-rpo", TriggerSource: "cron", Status: model.StatusSuccess,
+			StartTime: end, EndTime: &end,
+		}
+		switch i {
+		case 1: // 第 2 条:唯一备份成功的运行
+			r.BackupStatus = model.BackupStatusSuccess
+		case 0, 2: // 同步成功但备份失败,不得入选
+			r.BackupStatus = model.BackupStatusFailed
+		}
+		require.NoError(t, d.Create(r))
+	}
+
+	got, err = d.FindLastBackupSuccess("t-rpo")
+	require.NoError(t, err)
+	require.NotNil(t, got, "窗口外的成功备份必须能取到(RPO 不得被 10 条窗口截断)")
+	assert.Equal(t, model.BackupStatusSuccess, got.BackupStatus)
+	assert.Equal(t, uint(2), got.ID, "必须取最近一次(全历史)备份成功的那条")
+
+	// 另一个任务完全隔离
+	got, err = d.FindLastBackupSuccess("t-other")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}

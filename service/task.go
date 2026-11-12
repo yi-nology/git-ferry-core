@@ -158,10 +158,12 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 // 先放行执行权,补偿/重跑才能立刻接上。
 func (s *Service) finishRun(taskKey, trigger string, run *model.SyncRun, err error, release func()) {
 	release()
-	s.emitRunCompleted(taskKey, trigger, run, err)
-	// 快速路径已投递 ⇒ 闭环 outbox 行(派发器宽限后不会重投)。
+	delivered := s.emitRunCompleted(taskKey, trigger, run, err)
+	// 快速路径**真的投递了**才闭环 outbox 行(派发器宽限后不会重投)。
+	// 无订阅者时不得标记 —— 否则事件被标记已发布却从未投递,
+	// at-least-once 退化成 at-most-once;留在 outbox 由派发器重投。
 	// 崩溃在标记之前 ⇒ 派发器/启动扫描按 at-least-once 重投,订阅方幂等吸收。
-	if run != nil {
+	if delivered && run != nil {
 		s.markOutboxPublishedByRun(run.ID)
 	}
 	// RunTaskAsync 路径(手动/重试/auto_retry)在这里消费待补跑 —— 旧实现
