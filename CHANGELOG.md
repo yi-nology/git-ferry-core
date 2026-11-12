@@ -2,7 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.37.0] - 2026-11-12
+
+### Fixed
+
+- **v0.36.0 事故修复:`svc.outbox` 构造漏接线**:outbox 派发器空转——完成事件
+  仍随事务落库,但进程内重投/启动扫描/快速路径标记全部不生效(nil 守卫
+  掩盖,无 NewService 全链路测试所以漏网),outbox_events 只增不重投。
+  修复接线;新增 `TestNewService_WiresAllStores` 逐字段接线断言兜底。
 
 ### Added（P2 Distributed GitFerry——持久化执行队列,首个切片）
 
