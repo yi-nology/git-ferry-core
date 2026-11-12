@@ -219,3 +219,19 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 		Payload: string(payload),
 	})
 }
+
+// ListReconcileDrift 全部非 in_sync 的对账结果(告警面)。
+func (s *Service) ListReconcileDrift(_ context.Context) ([]model.ReconcileRecord, error) {
+	if s.reconciles == nil {
+		return nil, nil
+	}
+	return s.reconciles.ListDrift()
+}
+
+// ListReconcileAll 全部对账结果(观测面)。
+func (s *Service) ListReconcileAll(_ context.Context) ([]model.ReconcileRecord, error) {
+	if s.reconciles == nil {
+		return nil, nil
+	}
+	return s.reconciles.ListAll()
+}
