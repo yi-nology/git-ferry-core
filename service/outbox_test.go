@@ -125,6 +125,88 @@ func TestOutbox_CrashRecoveryRedelivers(t *testing.T) {
 	}
 }
 
+// TestOutbox_NoSubscriberNotMarkedPublished 无订阅者时事件**不得被标记
+// 已发布**(#15):启动零宽限扫描先于壳层 SubscribeRuns 执行,若无订阅者
+// 也照单标记,事件一个字节都没投出去就闭环 —— at-least-once 退化成
+// at-most-once,通知与自动补偿永久丢失。修复后:无订阅者 ⇒ 不标记,
+// 补上订阅者再扫 ⇒ 投递并闭环。
+func TestOutbox_NoSubscriberNotMarkedPublished(t *testing.T) {
+	svc := newOutboxTestService(t)
+
+	task := &model.SyncTask{Key: "ob-nosub", Name: "ob", Enabled: true,
+		SourceBranch: "main", TargetBranch: "main"}
+	require.NoError(t, svc.tasks.taskDAO.Create(task))
+	end := time.Now().Add(-time.Minute)
+	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
+		Status: model.StatusFailed, StartTime: end.Add(-time.Second), EndTime: &end}
+	require.NoError(t, svc.tasks.runDAO.Create(run))
+	// 模拟崩溃残留:未发布、已过宽限期的事件
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runDAO.DB(), &model.OutboxEvent{
+		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
+		Trigger: model.TriggerCron, Status: model.StatusFailed,
+		CreatedAt: time.Now().Add(-2 * time.Minute),
+	}))
+
+	// 关键差异:扫描时刻**没有订阅者**(= NewService 启动扫描的必然情形)
+	svc.publishDueOutbox(0)
+
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "无订阅者时事件不得被标记已发布(投递字节都没出去)")
+
+	// 补上订阅者后再扫 ⇒ 事件被投递并闭环
+	got := make(chan RunEvent, 1)
+	svc.SubscribeRuns(func(ev RunEvent) { got <- ev })
+	svc.publishDueOutbox(0)
+
+	select {
+	case ev := <-got:
+		assert.Equal(t, task.Key, ev.TaskKey)
+		require.NotNil(t, ev.Run)
+		assert.Equal(t, run.ID, ev.Run.ID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("订阅者注册后,此前未投递的事件没有被重投")
+	}
+	n, err = svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Zero(t, n, "投递后事件必须闭环")
+}
+
+// TestOutbox_FastPathNoSubscriberKeepsEvent 快速路径同样不得「未投递先闭环」:
+// finishRun 在无订阅者时不得按 run 标记已发布,事件留在 outbox 等派发器重投。
+func TestOutbox_FastPathNoSubscriberKeepsEvent(t *testing.T) {
+	svc := newOutboxTestService(t)
+
+	task := &model.SyncTask{Key: "ob-fastnosub", Name: "ob", Enabled: true,
+		SourceBranch: "main", TargetBranch: "main"}
+	require.NoError(t, svc.tasks.taskDAO.Create(task))
+	end := time.Now()
+	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
+		Status: model.StatusSuccess, StartTime: end, EndTime: &end}
+	require.NoError(t, svc.tasks.runDAO.Create(run))
+	require.NoError(t, svc.tasks.CompleteRun(run)) // 同事务写 outbox 事件
+
+	// 此刻无订阅者:finishRun 语义下不得闭环
+	svc.finishRun(task.Key, model.TriggerCron, run, nil, func() {})
+
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "快速路径无订阅者时事件不得被标记已发布")
+
+	// 订阅者注册后派发器重投闭环
+	got := make(chan RunEvent, 1)
+	svc.SubscribeRuns(func(ev RunEvent) { got <- ev })
+	svc.publishDueOutbox(0)
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("快速路径未闭环的事件,派发器应重投给订阅者")
+	}
+	n, err = svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Zero(t, n)
+}
+
 // TestOutbox_GraceSkipsFreshEvents 宽限内的事件(快速路径正在处理中)
 // 不得被派发器抢投 —— 否则每条事件都投两遍。
 func TestOutbox_GraceSkipsFreshEvents(t *testing.T) {

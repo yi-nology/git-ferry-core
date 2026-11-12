@@ -64,14 +64,19 @@ func (s *Service) SubscribeRuns(fn func(RunEvent)) (cancel func()) {
 // emitRunCompleted 广播一次运行结束（快照订阅者后异步分发）。
 //
 // 这是**快速路径**:outbox 行已在 CompleteRun*(同一事务)落库,
-// 这里投递进程内订阅,随后由 finishRun 标记已发布;
+// 这里投递进程内订阅,投递成功才由 finishRun 标记已发布;
 // 崩溃在标记之前 ⇒ 后台派发器/启动扫描重投(at-least-once)。
-func (s *Service) emitRunCompleted(taskKey, trigger string, run *model.SyncRun, err error) {
+//
+// 返回是否真的投递了(有订阅者):无订阅者时**不得标记已发布**,
+// 事件留在 outbox 由派发器在订阅者注册后重投 —— 否则就是
+// 「标记已发布却从未投递」,at-least-once 退化成 at-most-once。
+func (s *Service) emitRunCompleted(taskKey, trigger string, run *model.SyncRun, err error) (delivered bool) {
 	subs := s.snapshotRunSubs()
 	if len(subs) == 0 {
-		return
+		return false
 	}
 	s.dispatchRunEvent(subs, RunEvent{TaskKey: taskKey, Run: run, Trigger: trigger, Err: err, At: time.Now()})
+	return true
 }
 
 // snapshotRunSubs 快照当前订阅者列表(持锁时间最短化)。
@@ -99,23 +104,35 @@ func (s *Service) dispatchRunEvent(subs []runSubscriber, ev RunEvent) {
 // run 从 DB 重新加载(状态以库为准,不用事件里的快照);
 // 重投事件的 Err 恒为 nil —— 错误信息已落在 run.ErrorMessage,
 // 订阅方应以 Run.Status / Run.ErrorMessage 为准。
-func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) {
+//
+// 返回 (delivered, abandoned):
+//   - delivered=true:已投给订阅者 ⇒ 可标记已发布;
+//   - abandoned=true:run 记录已被保留期清理,事件失去意义 ⇒ 同样标记
+//     已发布闭环(CHANGELOG 明示的设计取舍,不然每轮都空重试);
+//   - 两者皆 false:此刻**没有订阅者**,一个字节都没投出去 ⇒ **不得标记**,
+//     留待订阅者注册后的下一轮扫描(at-least-once:标记了却没投 = 静默丢失)。
+func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned bool) {
 	subs := s.snapshotRunSubs()
 	if len(subs) == 0 {
-		return
+		return false, false
 	}
 	run, err := s.tasks.runDAO.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
 	if err != nil || run == nil {
-		// run 记录已被清理(保留期) ⇒ 事件失去意义,直接放弃投递。
-		slog.Warn("outbox: 重投时 run 记录不存在,跳过", "run_id", ev.RunID, "task", ev.TaskKey)
-		return
+		// run 记录已被清理(保留期) ⇒ 事件失去意义,跳过投递并闭环。
+		slog.Warn("outbox: 重投时 run 记录不存在,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)
+		return false, true
 	}
 	s.dispatchRunEvent(subs, RunEvent{TaskKey: ev.TaskKey, Run: run, Trigger: ev.Trigger, At: time.Now()})
+	return true, true
 }
 
 // publishDueOutbox 派发「已过宽限期仍未标记已发布」的 outbox 事件,
 // 并顺手清理过期已发布事件。快速路径正常闭环时这里应恒为空转 ——
 // 不为空转 = 有崩溃/异常发生,这正是它存在的意义。
+//
+// 只把「真的投递了」或「明确废弃(run 已清理)」的事件标记已发布;
+// 无订阅者的事件不标记 —— 启动零宽限扫描先于壳层 SubscribeRuns 执行,
+// 若照单全收必然把恢复窗口里的事件标记成已发布却从未投递。
 func (s *Service) publishDueOutbox(grace time.Duration) {
 	if s.outbox == nil {
 		return
@@ -126,9 +143,18 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 		return
 	}
 	published := make([]uint, 0, len(evs))
+	noSubscriber := 0
 	for i := range evs {
-		s.deliverOutboxEvent(evs[i])
-		published = append(published, evs[i].ID)
+		delivered, abandoned := s.deliverOutboxEvent(evs[i])
+		if delivered || abandoned {
+			published = append(published, evs[i].ID)
+		} else {
+			noSubscriber++
+		}
+	}
+	if noSubscriber > 0 {
+		slog.Warn("outbox: 无订阅者,事件未投递也不标记已发布(留待订阅者注册后重投)",
+			"count", noSubscriber)
 	}
 	if err := s.outbox.MarkPublished(published); err != nil {
 		slog.Error("outbox: 标记已发布失败(下轮可能重复投递,订阅方需幂等)", "error", err)

@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
@@ -47,6 +48,26 @@ func (d *SyncRunDAO) FindByTaskKeyAndRunID(taskKey string, runID uint) (*model.S
 		q = q.Where("task_key = ?", taskKey)
 	}
 	if err := q.First(&run).Error; err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+// FindLastBackupSuccess 取某任务**全历史**里最近一次备份成功的运行
+// (backup_status=success,ORDER BY id DESC LIMIT 1);没有则返回 (nil, nil)。
+//
+// RPO 事实键专用,与评分用的「最近 N 条」窗口解耦:契约把
+// backup_age_hours=-1 定义为「无成功备份」,若只看最近 10 次窗口,
+// 窗口外的成功备份会被谎报成「从未成功备份」—— 恰恰在 RPO 最该被
+// 关注的时刻报出最强的乐观信号。
+func (d *SyncRunDAO) FindLastBackupSuccess(taskKey string) (*model.SyncRun, error) {
+	var run model.SyncRun
+	err := d.db.Where("task_key = ? AND backup_status = ?", taskKey, model.BackupStatusSuccess).
+		Order("id DESC").First(&run).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &run, nil
