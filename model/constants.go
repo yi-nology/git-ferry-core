@@ -131,6 +131,7 @@ const (
 	TablePendingTriggers  = "pending_triggers"
 	TableOutboxEvents     = "outbox_events"
 	TableExecutionJobs    = "execution_jobs"
+	TableReconcileResults = "reconcile_results"
 )
 
 // Model default value constants

@@ -65,6 +65,11 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&ExecutionJob{})
 		}},
+	// v3 (2026-11-12, P3):对账结果表 reconcile_results(每任务最新一条)。
+	{Version: 3, Name: "create reconcile_results (drift records)",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&ReconcileRecord{})
+		}},
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。

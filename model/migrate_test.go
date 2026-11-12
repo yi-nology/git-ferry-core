@@ -33,16 +33,18 @@ func TestEnsureSchema_FreshInstallBaseline(t *testing.T) {
 	// baseline 已记录。
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	// baseline + 真实 v2(execution_jobs)
-	require.Len(t, rows, 2)
+	// baseline + v2(execution_jobs) + v3(reconcile_results)
+	require.Len(t, rows, 3)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
 	assert.Equal(t, uint64(2), rows[1].Version)
+	assert.Equal(t, uint64(3), rows[2].Version)
 	assert.True(t, db.Migrator().HasTable(&ExecutionJob{}), "v2 迁移必须建 execution_jobs")
+	assert.True(t, db.Migrator().HasTable(&ReconcileRecord{}), "v3 迁移必须建 reconcile_results")
 
 	// 二次启动幂等:不再记录、不再 AutoMigrate 也不报错。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 2, "已应用版本只能记录一次")
+	assert.Len(t, rows, 3, "已应用版本只能记录一次")
 }
 
 // TestEnsureSchema_LegacyConverge 存量库(无 schema_migrations,只有部分旧表):
@@ -66,10 +68,11 @@ func TestEnsureSchema_LegacyConverge(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	// baseline + v2 迁移在存量库上补建 execution_jobs
-	require.Len(t, rows, 2)
+	// baseline + v2 + v3 在存量库上补建
+	require.Len(t, rows, 3)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
 	assert.True(t, db.Migrator().HasTable(&ExecutionJob{}), "存量库必须经 v2 迁移补建 execution_jobs")
+	assert.True(t, db.Migrator().HasTable(&ReconcileRecord{}), "存量库必须经 v3 迁移补建 reconcile_results")
 }
 
 // TestEnsureSchema_AppliesPendingMigrations baseline 之后只补跑未应用的显式迁移,
@@ -102,13 +105,13 @@ func TestEnsureSchema_AppliesPendingMigrations(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	require.Len(t, rows, 4, "baseline + 真实v2 + 测试v90001/v90002 都应记录")
-	assert.Equal(t, uint64(90002), rows[3].Version)
+	require.Len(t, rows, 5, "baseline + 真实v2/v3 + 测试v90001/v90002 都应记录")
+	assert.Equal(t, uint64(90002), rows[4].Version)
 
 	// 重复启动:v2/v3 不得重放(幂等;重放 ALTER TABLE 会炸,天然可验)。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 4, "已应用迁移不得重复记录/重复执行")
+	assert.Len(t, rows, 5, "已应用迁移不得重复记录/重复执行")
 }
 
 // TestEnsureSchema_MigrationFailureStops 迁移失败:该版本不记录,
@@ -135,7 +138,7 @@ func TestEnsureSchema_MigrationFailureStops(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 2, "失败的迁移不得记录版本(baseline+真实v2 在)")
+	assert.Len(t, rows, 3, "失败的迁移不得记录版本(baseline+真实v2/v3 在)")
 	assert.False(t, db.Migrator().HasIndex(&SyncRun{}, "idx_mig_after"),
 		"失败迁移之后的版本不得继续执行(顺序性)")
 }

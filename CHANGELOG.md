@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（P3 Repository Governance——对账周期化,切片 3,闭环）
+
+- **周期对账 + 漂移告警落地**:新配置 `sync.reconcile_interval_hours`
+  (env `GIT_SYNC_RECONCILE_INTERVAL_HOURS`,0=关闭,默认零变化)。>0 时
+  按间隔对**全部启用任务**跑 `ReconcileTask`:结果 upsert 进新表
+  `reconcile_results`(每任务最新一条,TaskKey 主键);drift/两端缺失
+  时写 `reconcile.drift` outbox 事件(状态/双端 SHA/ahead 量化在 payload,
+  订阅方接通知渠道即成告警);in_sync 不写事件(告警面不被噪音淹没)。
+  单任务失败不阻断本轮其它任务;任务间 100ms 间隔防平台 API 限流;
+  启动不立即打 API(FirstDelay=interval)。含显式迁移 v3(存量库补建表)。
+  对账循环随 `reconcileLoop` 进 Service 生命周期(Stop 等待取消)。
+
 ## [v0.38.0] - 2026-11-12
 
 ### Added（P2 Distributed GitFerry——大仓库资源限制,切片 2）

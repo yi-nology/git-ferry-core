@@ -132,6 +132,10 @@ type SyncConfig struct {
 	// 任务可被其它实例接管,重复触发自动合并不重复发布;
 	// false(默认)=直接执行(旧行为,零变化)。
 	DurableQueue bool `yaml:"durable_queue" env:"GIT_SYNC_DURABLE_QUEUE"`
+	// ReconcileIntervalHours 周期对账间隔(小时):>0 启用——按周期对全部
+	// 启用任务做跨平台一致性对账(ReconcileTask),drift/分支缺失落
+	// reconcile_results 并写 outbox 事件(reconcile.drift);0=关闭(默认)。
+	ReconcileIntervalHours int `yaml:"reconcile_interval_hours" env:"GIT_SYNC_RECONCILE_INTERVAL_HOURS"`
 	// MaxWorkdirMB 单任务工作目录(克隆+LFS 对象)磁盘配额,0=不限制。
 	// 超限即中止本次执行并清理工作区(reclaim 磁盘),下次执行全量重克隆。
 	// 大仓库/多任务共享 temp 目录时的宿主机保护(P2 资源限制)。

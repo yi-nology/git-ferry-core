@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
+	"github.com/oekit/concurrency/loop"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
@@ -116,4 +118,104 @@ func branchHeadSHA(ctx context.Context, q branchHeadQuerier, owner, repo, branch
 		return "", nil
 	}
 	return commits[0].SHA, nil
+}
+
+// ===== 周期对账 + 漂移告警(P3 闭环) =====
+
+// reconcileEnabled 周期对账是否启用(间隔 >0)。
+func (s *Service) reconcileEnabled() bool {
+	return s.config != nil && s.config.Sync.ReconcileIntervalHours > 0
+}
+
+// reconcileLoop 周期对账:按 sync.reconcile_interval_hours 对全部启用任务
+// 跑 ReconcileTask,结果落 reconcile_results,drift/缺失写 outbox 事件。
+func (s *Service) reconcileLoop() {
+	interval := time.Duration(s.config.Sync.ReconcileIntervalHours) * time.Hour
+	loop.Run(s.bgCtx, loop.Config{
+		Interval:   interval,
+		FirstDelay: interval, // 不在启动瞬间打平台 API
+		Name:       "periodic-reconcile",
+	}, func(ctx context.Context) {
+		s.runReconcilePass(ctx)
+	}).Wait()
+}
+
+// runReconcilePass 对全部启用任务跑一轮对账;单任务失败不阻断其它任务。
+func (s *Service) runReconcilePass(ctx context.Context) {
+	if s.reconciles == nil {
+		return
+	}
+	tasks, err := s.tasks.taskDAO.FindAllEnabled()
+	if err != nil {
+		slog.Error("reconcile: 列出启用任务失败", "error", err)
+		return
+	}
+	var drift int
+	for _, task := range tasks {
+		res, rerr := s.ReconcileTask(ctx, task.Key)
+		if rerr != nil {
+			slog.Error("reconcile: 任务对账失败", "task", task.Key, "error", rerr)
+			continue
+		}
+		if werr := s.recordReconcile(res); werr != nil {
+			slog.Error("reconcile: 结果落库失败", "task", task.Key, "error", werr)
+		}
+		if res.Status != model.ReconcileInSync {
+			drift++
+		}
+		// 平台 API 限速:任务间小睡,宁可慢不可被限流封。
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if drift > 0 {
+		slog.Warn("reconcile: 本轮发现漂移/缺失", "drift", drift, "total", len(tasks))
+	}
+}
+
+// recordReconcile 结果落库 + 漂移时写 outbox 事件(通知链的源头:
+// 壳层订阅 reconcile.drift 后可接 octopus/邮件等渠道)。
+func (s *Service) recordReconcile(res *model.ReconcileResult) error {
+	if s.reconciles == nil {
+		return nil
+	}
+	rec := &model.ReconcileRecord{
+		TaskKey:     res.TaskKey,
+		Status:      res.Status,
+		SourceSHA:   res.SourceSHA,
+		TargetSHA:   res.TargetSHA,
+		SourceAhead: res.SourceAhead,
+		TargetAhead: res.TargetAhead,
+		Message:     res.Message,
+		CheckedAt:   res.CheckedAt,
+	}
+	if err := s.reconciles.Upsert(rec); err != nil {
+		return err
+	}
+	if res.Status == model.ReconcileInSync {
+		return nil
+	}
+	slog.Warn("reconcile: 漂移/缺失", "task", res.TaskKey, "status", res.Status,
+		"source_ahead", res.SourceAhead, "target_ahead", res.TargetAhead, "msg", res.Message)
+	if s.outbox == nil {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"status":       res.Status,
+		"source_sha":   res.SourceSHA,
+		"target_sha":   res.TargetSHA,
+		"source_ahead": res.SourceAhead,
+		"target_ahead": res.TargetAhead,
+		"message":      res.Message,
+		"checked_at":   res.CheckedAt,
+	})
+	// 漂移事件直接落 outbox(独立事实,无需事务);投递沿用既有派发器。
+	return s.outbox.CreateInTx(s.tasks.runDAO.DB(), &model.OutboxEvent{
+		Topic:   model.OutboxTopicReconcileDrift,
+		TaskKey: res.TaskKey,
+		Status:  res.Status,
+		Payload: string(payload),
+	})
 }

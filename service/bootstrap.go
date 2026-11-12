@@ -13,20 +13,21 @@ import (
 
 // appDAOs 一次装配的全部 DAO(减少 NewService 样板,便于测试注入)。
 type appDAOs struct {
-	repo     *dao.RepoDAO
-	task     *dao.SyncTaskDAO
-	run      *dao.SyncRunDAO
-	runStep  *dao.SyncRunStepDAO
-	rule     *dao.WebhookRuleDAO
-	event    *dao.WebhookEventDAO
-	platform *dao.PlatformDAO
-	opLog    *dao.OperationLogDAO
-	template *dao.TemplateDAO
-	approv   *dao.ForcePushApprovalDAO
-	pending  *dao.PendingTriggerDAO
-	outbox   *dao.OutboxEventDAO
-	jobs     *dao.ExecutionJobDAO
-	provider *sdkprov.Manager
+	repo      *dao.RepoDAO
+	task      *dao.SyncTaskDAO
+	run       *dao.SyncRunDAO
+	runStep   *dao.SyncRunStepDAO
+	rule      *dao.WebhookRuleDAO
+	event     *dao.WebhookEventDAO
+	platform  *dao.PlatformDAO
+	opLog     *dao.OperationLogDAO
+	template  *dao.TemplateDAO
+	approv    *dao.ForcePushApprovalDAO
+	pending   *dao.PendingTriggerDAO
+	outbox    *dao.OutboxEventDAO
+	jobs      *dao.ExecutionJobDAO
+	reconcile *dao.ReconcileDAO
+	provider  *sdkprov.Manager
 }
 
 // initDB 初始化 GORM 与连接池。
@@ -57,20 +58,21 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 		return nil, oekiterrors.Wrap(err, "failed to create PlatformDAO")
 	}
 	return &appDAOs{
-		repo:     repoDAO,
-		task:     dao.NewSyncTaskDAO(db),
-		run:      dao.NewSyncRunDAO(db),
-		runStep:  dao.NewSyncRunStepDAO(db),
-		rule:     dao.NewWebhookRuleDAO(db),
-		event:    dao.NewWebhookEventDAO(db),
-		platform: platformDAO,
-		opLog:    dao.NewOperationLogDAO(db),
-		template: dao.NewTemplateDAO(db),
-		approv:   dao.NewForcePushApprovalDAO(db),
-		pending:  dao.NewPendingTriggerDAO(db),
-		outbox:   dao.NewOutboxEventDAO(db),
-		jobs:     dao.NewExecutionJobDAO(db),
-		provider: sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64)),
+		repo:      repoDAO,
+		task:      dao.NewSyncTaskDAO(db),
+		run:       dao.NewSyncRunDAO(db),
+		runStep:   dao.NewSyncRunStepDAO(db),
+		rule:      dao.NewWebhookRuleDAO(db),
+		event:     dao.NewWebhookEventDAO(db),
+		platform:  platformDAO,
+		opLog:     dao.NewOperationLogDAO(db),
+		template:  dao.NewTemplateDAO(db),
+		approv:    dao.NewForcePushApprovalDAO(db),
+		pending:   dao.NewPendingTriggerDAO(db),
+		outbox:    dao.NewOutboxEventDAO(db),
+		jobs:      dao.NewExecutionJobDAO(db),
+		reconcile: dao.NewReconcileDAO(db),
+		provider:  sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64)),
 	}, nil
 }
 

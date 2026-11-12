@@ -40,8 +40,11 @@ type Service struct {
 	outbox *dao.OutboxEventDAO
 	// jobs 持久化执行队列(execution_jobs 表,见 queue.go);instanceID 为
 	// lease 属主标识。仅 durable_queue=true 时启用。
-	jobs            *dao.ExecutionJobDAO
-	instanceID      string
+	jobs       *dao.ExecutionJobDAO
+	instanceID string
+	// reconciles 对账结果存储(reconcile_results,见 reconcile.go);
+	// 仅 reconcile_interval_hours>0 时启用。
+	reconciles      *dao.ReconcileDAO
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
@@ -120,6 +123,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		outbox:       daos.outbox,
 		jobs:         daos.jobs,
 		instanceID:   newInstanceID(),
+		reconciles:   daos.reconcile,
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -215,6 +219,15 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		async.GoSafe(func() {
 			defer svc.wg.Done()
 			svc.reaperJobLoop()
+		})
+	}
+
+	// P3 周期对账:interval>0 时启动(结果落库 + 漂移写 outbox)。
+	if svc.reconcileEnabled() {
+		svc.wg.Add(1)
+		async.GoSafe(func() {
+			defer svc.wg.Done()
+			svc.reconcileLoop()
 		})
 	}
 
