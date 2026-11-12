@@ -2,9 +2,9 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.41.0] — 2026-11-13
 
-### Fixed（清零战役 Y3——7 个真缺陷）
+### Fixed（清零战役 Y3——7 个真缺陷，#12-#18）
 
 - **durable_queue/MySQL 保留字**（#12）:`Enqueue` 裸 SQL 的列名 `trigger`
   是 MySQL 保留字,裸写在 MySQL 部署下每次触发都 1064 语法错误,持久化
