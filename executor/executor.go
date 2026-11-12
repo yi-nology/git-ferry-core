@@ -104,6 +104,9 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 	if err != nil {
 		return nil, err
 	}
+	// 执行时策略快照(P3):固化「这次执行是在什么策略下跑的」,
+	// 策略后续被改不影响历史执行的复核(随 CompleteRun* 落库)。
+	run.PolicySnapshot = model.BuildTaskPolicySnapshot(task)
 	startTime := time.Now()
 
 	var details strings.Builder

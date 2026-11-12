@@ -75,6 +75,11 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&RecoveryPoint{})
 		}},
+	// v5 (2026-11-13, P3):sync_runs.policy_snapshot(执行时策略快照)。
+	{Version: 5, Name: "add policy_snapshot to sync_runs",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&SyncRun{})
+		}},
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。

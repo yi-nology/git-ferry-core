@@ -90,8 +90,15 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 	if err := validateBranchName(req.TargetBranch); err != nil {
 		return nil, err
 	}
+	// Key:回放路径显式指定(策略文件身份),普通创建生成 UUID。
+	key := req.Key
+	if key == "" {
+		key = uuid.New().String()
+	} else if !validTaskKey(key) {
+		return nil, oekiterrors.Errorf("invalid task key %q: only [a-zA-Z0-9-]{1,64}", key)
+	}
 	task := &model.SyncTask{
-		Key:                uuid.New().String(),
+		Key:                key,
 		Name:               req.Name,
 		SourceRepoKey:      req.SourceRepoKey,
 		SourceBranch:       req.SourceBranch,
@@ -354,4 +361,20 @@ func (ts *TaskService) CompleteRunWithTaskUpdate(run *model.SyncRun, task *model
 		}
 		return nil
 	})
+}
+
+// validTaskKey 显式 key 的合法性(回放路径):[a-zA-Z0-9-]{1,64}。
+// 普通创建不受影响(key 为空走 UUID)。
+func validTaskKey(key string) bool {
+	if len(key) == 0 || len(key) > 64 {
+		return false
+	}
+	for _, c := range key {
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
 }

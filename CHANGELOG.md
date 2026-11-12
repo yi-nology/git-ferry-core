@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Added（P3 Repository Governance——策略即代码,切片 5）
+
+- **执行时策略快照**:`SyncRun.policy_snapshot`(迁移 v5)——执行开始时
+  固化任务策略的确定性 JSON(`BuildTaskPolicySnapshot`,mirror 侧
+  BuildPolicySnapshot 同纪律:结构体声明序、无 map、同状态同字节),
+  审计「这次执行是在什么策略下跑的」,策略后续被改不影响历史复核。
+- **全量策略导出/回放**: `ExportTaskPolicies`(全部任务的关键策略字段,
+  按 key 升序,确定性 JSON,可进 git 走 PR 审阅;凭据 WebhookToken
+  绝不入文件)与 `ApplyTaskPolicies`(回放:新任务创建、已有更新,
+  单任务失败记 Errors 不中断其余;禁用语义=建后立即关;
+  schema 版本信封 fail-closed 拒绝未知版本)。
+  `CreateTaskRequest.Key` 新增可选字段:回放保持策略文件身份
+  (同 key 跨环境),空=生成 UUID(普通创建零变化);显式 key 校验
+  [a-zA-Z0-9-]{1,64}。收敛性用例:导出→回放→导出 = 原文件。
+
 ### Added（P3 Repository Governance——恢复点索引,切片 4）
 
 - **恢复点索引 `recovery_points`**(新表,迁移 v4):一次成功冷备的可检索

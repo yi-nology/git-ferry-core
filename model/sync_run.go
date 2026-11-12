@@ -22,9 +22,13 @@ type SyncRun struct {
 	// 旧实现把备份异常只写进 details,run 恒 success,用户看到的是「健康」。
 	// 两个可选阶段(bundle/backup_remote)都会写;failed 粘滞——
 	// 任一备份环节失败即整体 failed,成功要求全程无失败。
-	BackupStatus string        `json:"backupStatus" gorm:"size:20"`
-	Steps        []SyncRunStep `json:"steps" gorm:"foreignKey:RunID"`
-	CreatedAt    time.Time     `json:"createdAt" gorm:"index:idx_sync_runs_created_at;index:idx_sync_runs_task_key_created,priority:2"`
+	BackupStatus string `json:"backupStatus" gorm:"size:20"`
+	// PolicySnapshot 执行开始时固化的任务策略快照(确定性 JSON,
+	// 见 BuildTaskPolicySnapshot):审计「这次执行是在什么策略下跑的」,
+	// 策略后续被改不影响对历史执行的复核。
+	PolicySnapshot string        `json:"policySnapshot" gorm:"type:text"`
+	Steps          []SyncRunStep `json:"steps" gorm:"foreignKey:RunID"`
+	CreatedAt      time.Time     `json:"createdAt" gorm:"index:idx_sync_runs_created_at;index:idx_sync_runs_task_key_created,priority:2"`
 }
 
 func (SyncRun) TableName() string {

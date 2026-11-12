@@ -51,6 +51,10 @@ func (SyncTask) TableName() string {
 }
 
 type CreateTaskRequest struct {
+	// Key 可选:显式指定任务 key(策略回放用,保持策略文件与环境间
+	// 同一身份);空 = 生成 UUID(普通创建路径)。
+	// 非空时须为 [a-zA-Z0-9-]{1,64}(防注入怪 key)。
+	Key           string `json:"key"`
 	Name          string `json:"name"`
 	SourceRepoKey string `json:"source_repo_key"`
 	SourceBranch  string `json:"source_branch"`
