@@ -1,6 +1,7 @@
 package service
 
 import (
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -21,13 +22,27 @@ type AutoRetryPolicy struct {
 	Cooldown time.Duration
 }
 
-// RetryTracker 自动重跑计数器（进程内；多实例部署时各实例只认自己触发的重跑，
-// 与 runwatch 历史行为一致）。
+// chainStatsFunc 查询「包含 runID 的连续 auto_retry 链」的统计,
+// 由 Service 注入并把事实落在 DB(见 dao.SyncRunDAO.AutoRetryChainStats)。
+// 返回:链内 auto_retry 条数 + 最近一条链内运行的结束时间(无链时为零值)。
+type chainStatsFunc func(taskKey string, runID uint, runIsRetry bool) (int64, time.Time, error)
+
+// RetryTracker 自动重跑判定器。
+//
+// 修复前的实现按 runID 内存记账——每次重跑都是一条**新 run 记录(新 ID)**,
+// 预算永远从零计起 ⇒ MaxAutoRetries 形同虚设,失败链可无限延伸(P0)。
+//
+// 现语义:
+//   - **计数从 DB 派生**(chain):「相邻两个非 auto_retry 运行之间的
+//     auto_retry 运行」构成一条链,链内条数就是已消耗预算。落库的好处:
+//     重启不丢、多实例一致、订阅+轮询双通道投递看到的是同一份事实。
+//   - **decided 只做同进程去重**:防止订阅事件与轮询扫描对同一条失败
+//     运行重复放行。它不参与预算——预算是 DB 里的链长,不是这个 map。
 type RetryTracker struct {
-	mu       sync.Mutex
-	counts   map[uint]int       // runID -> 已自动重跑次数
-	lastAuto map[uint]time.Time // runID -> 上次自动重跑时间
-	// maxKeep 淘汰阈值，防止 run ID 无限增长
+	mu      sync.Mutex
+	decided map[uint]struct{} // runID -> 已放行过重跑(同进程去重)
+	chain   chainStatsFunc    // nil = 未接 DB(仅裸构造的测试路径),预算恒按 0 算
+	// maxKeep 淘汰阈值，防止 decided 无限增长
 	maxKeep int
 }
 
@@ -40,10 +55,16 @@ func NewRetryTracker(maxKeep int) *RetryTracker {
 		maxKeep = 1000
 	}
 	return &RetryTracker{
-		counts:   map[uint]int{},
-		lastAuto: map[uint]time.Time{},
-		maxKeep:  maxKeep,
+		decided: make(map[uint]struct{}),
+		maxKeep: maxKeep,
 	}
+}
+
+// SetChainStats 注入 DB 链统计函数(由 NewService 用 run DAO 接线)。
+func (t *RetryTracker) SetChainStats(fn chainStatsFunc) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.chain = fn
 }
 
 // Decision 一次判定结果。
@@ -56,7 +77,7 @@ type Decision struct {
 	Reason string
 }
 
-// ShouldRetry 判定该失败运行是否应自动重跑，并在放行时记账。
+// ShouldRetry 判定该失败运行是否应自动重跑,放行时记账(同进程去重)。
 // 只对 Status=failed 的运行放行；成功运行直接跳过。
 func (t *RetryTracker) ShouldRetry(run *model.SyncRun, p AutoRetryPolicy) Decision {
 	if run == nil {
@@ -70,36 +91,54 @@ func (t *RetryTracker) ShouldRetry(run *model.SyncRun, p AutoRetryPolicy) Decisi
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	n := t.counts[run.ID]
-	if n >= p.MaxAutoRetries {
+	if _, ok := t.decided[run.ID]; ok {
+		t.mu.Unlock()
+		return Decision{Reason: "run already decided"}
+	}
+	chain := t.chain
+	t.mu.Unlock()
+
+	var already int64
+	var lastEnd time.Time
+	if chain != nil {
+		n, end, err := chain(run.TaskKey, run.ID, run.TriggerSource == model.TriggerAutoRetry)
+		if err != nil {
+			// 链事实查不出来时不放行:宁可少重试,不可超预算(fail-closed)。
+			slog.Warn("auto retry: chain stats unavailable, refuse to retry",
+				"run_id", run.ID, "task", run.TaskKey, "error", err)
+			return Decision{Reason: "chain stats unavailable"}
+		}
+		already, lastEnd = n, end
+	}
+
+	if int(already) >= p.MaxAutoRetries {
 		return Decision{Reason: "max auto retries reached"}
 	}
-	last := t.lastAuto[run.ID]
-	if !last.IsZero() && time.Since(last) < p.Cooldown {
+	// 冷却以「上一次链内重试的结束时间」起算;链为空(lastEnd 零值)不冷却。
+	if !lastEnd.IsZero() && time.Since(lastEnd) < p.Cooldown {
 		return Decision{Reason: "cooldown not elapsed"}
 	}
-	t.counts[run.ID] = n + 1
-	t.lastAuto[run.ID] = time.Now()
+
+	t.mu.Lock()
+	t.decided[run.ID] = struct{}{}
 	t.pruneLocked()
-	return Decision{Retry: true, Attempt: n + 1}
+	t.mu.Unlock()
+	return Decision{Retry: true, Attempt: int(already) + 1}
 }
 
 // pruneLocked 超过 maxKeep 时按 run ID 升序淘汰最老条目（run ID 单调递增）。
 func (t *RetryTracker) pruneLocked() {
-	if len(t.counts) <= t.maxKeep {
+	if len(t.decided) <= t.maxKeep {
 		return
 	}
-	ids := make([]uint, 0, len(t.counts))
-	for id := range t.counts {
+	ids := make([]uint, 0, len(t.decided))
+	for id := range t.decided {
 		ids = append(ids, id)
 	}
 	// 升序排序（run ID 单调递增，越小越老），淘汰最老的 extra 条。
-	// 原为手写 O(n²) 选择排序，条目多时比较次数爆炸，标准库排序是 O(n log n)。
 	slices.Sort(ids)
 	extra := len(ids) - t.maxKeep
 	for _, id := range ids[:extra] {
-		delete(t.counts, id)
-		delete(t.lastAuto, id)
+		delete(t.decided, id)
 	}
 }

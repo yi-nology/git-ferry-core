@@ -127,6 +127,12 @@ type SyncConfig struct {
 	// **为什么需要它**：这三张表此前**没有任何清理入口** ⇒ 随运行次数无限增长
 	// （现网两个月已有 92 次运行 / 355 条步骤）。
 	HistoryRetentionDays int `yaml:"history_retention_days" env:"GIT_SYNC_HISTORY_RETENTION_DAYS"`
+	// MirrorLockFailClosed 镜像跨实例锁的 Redis 异常策略:
+	// false(默认,单实例友好)= 获取锁遇非竞争类错误(Redis 抖动)时降级为
+	// 仅进程内互斥,不阻断镜像任务(可用性优先,接受双实例短暂并发窗口);
+	// true(多实例推荐)= 直接拒绝执行 —— 无法证明互斥成立时**不许进入
+	// 互斥区**(fail-closed),宁可镜像任务失败重试,不可两个实例同时发布。
+	MirrorLockFailClosed bool `yaml:"mirror_lock_fail_closed" env:"GIT_SYNC_MIRROR_LOCK_FAIL_CLOSED"`
 }
 
 // BackupRemoteConfig 备份远端（git push）。

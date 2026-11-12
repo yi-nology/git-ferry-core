@@ -28,6 +28,7 @@ sync:
   max_concurrent: 5
   default_timeout: 300
   retry_count: 3
+  mirror_lock_fail_closed: true
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -49,6 +50,9 @@ sync:
 	}
 	if cfg.Database.DSN != "test.db" {
 		t.Errorf("Expected dsn test.db, got %s", cfg.Database.DSN)
+	}
+	if !cfg.Sync.MirrorLockFailClosed {
+		t.Error("Expected mirror_lock_fail_closed true, got false")
 	}
 }
 

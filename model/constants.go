@@ -31,6 +31,12 @@ const (
 	// 它单独列一个常量而不是复用 TriggerRebuild,是为了让 run 记录里
 	// 保留"是谁发起的"这一维(运维要能区分人工重建和 AI 重建)。
 	TriggerAIRebuild = "ai_rebuild"
+	// TriggerAutoRetry 失败自动补偿触发的重跑。
+	//
+	// 单独列常量而非散落字面量,是因为重试预算按「连续 auto_retry 链」计数
+	// (见 RetryTracker):触发源字符串就是链的界定符,写错一个字节,
+	// 预算约束就会静默失效。
+	TriggerAutoRetry = "auto_retry"
 )
 
 // IsRebuildTrigger 判断该触发器语义是否为"全量重建"(清 workdir + 重克隆)。
@@ -116,6 +122,7 @@ const (
 	TableWebhookRuleTasks = "webhook_rule_tasks"
 	TableWebhookEvents    = "webhook_events"
 	TableOperationLogs    = "operation_logs"
+	TablePendingTriggers  = "pending_triggers"
 )
 
 // Model default value constants

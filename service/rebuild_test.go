@@ -22,7 +22,7 @@ func newRebuildTestService(t *testing.T, key string) (*Service, string, func()) 
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}, &model.Repo{}))
+	require.NoError(t, db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}, &model.Repo{}, &model.PendingTrigger{}))
 	// sqlite ":memory:" 每个连接是独立库 ⇒ 强制单连接
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -36,11 +36,11 @@ func newRebuildTestService(t *testing.T, key string) (*Service, string, func()) 
 
 	tempDir := t.TempDir()
 	svc := &Service{
-		tasks:          NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO),
-		guard:          newLocalGuard(2),
-		pendingWebhook: newPendingTriggerSet(),
-		bgCtx:          context.Background(),
-		config:         &model.Config{Git: model.GitConfig{TempDir: tempDir}},
+		tasks:   NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO),
+		guard:   newLocalGuard(2),
+		pending: dao.NewPendingTriggerDAO(db),
+		bgCtx:   context.Background(),
+		config:  &model.Config{Git: model.GitConfig{TempDir: tempDir}},
 	}
 	// repo 服务要装上:executor 的 prepareRunContext 会查源仓库
 	// (查不到 ⇒ 返回错误而不是 panic,接线用例才能正常跑完)。

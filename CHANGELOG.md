@@ -2,6 +2,38 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.36.0] - 2026-11-12
+
+### Fixed（P0 Correctness,技术评审 2026-11-12 落地）
+
+- **自动重试预算按执行链严格受控**:旧 `RetryTracker` 按 runID 内存记账——
+  每次重跑都是新 run 记录(新 ID),预算永远从零计起,`MaxAutoRetries`
+  形同虚设,失败链可无限延伸。现改为从 DB 派生「连续 auto_retry 链」
+  (相邻两个非 auto_retry 运行之间的 auto_retry 运行构成一条链,链内条数
+  = 已耗预算):重启不丢、多实例一致、订阅+轮询双通道投递看到同一份事实;
+  人工/cron/webhook 任意一次运行自然开启新链(预算归零)。链事实查不出来
+  时 fail-closed 拒绝重试(宁可少重试,不可超预算)。新增
+  `dao.SyncRunDAO.AutoRetryChainStats` 与触发源常量
+  `model.TriggerAutoRetry`(触发源字符串是链的界定符)。
+- **完成事件在执行权释放前投递**:旧 `RunTaskAsync` 在 release 之前
+  emit —— 订阅方(runwatch)收到失败完成事件后立即触发自动重跑,执行权
+  未放 ⇒ 重跑撞 `ErrTaskRunning` 被拒且预算已记账(预算白烧、重试未发生)。
+  现 `finishRun` 严格「先 release → 再 emit → 再消费待补跑」,并有反向
+  验证用例钉住顺序。
+- **待补跑 webhook 触发落库**(新表 `pending_triggers`):旧进程内 map 有
+  三个洞——① `RunTaskAsync` 路径(手动/重试/auto_retry)收尾不消费,手动
+  执行期间积压的 webhook 永远补不上;② 多实例下 A 实例记的 B 实例看不到;
+  ③ 重启即丢。现:合并语义不变(同任务积压多次只补跑一次,`generation`
+  留痕),`Claim`=原子 DELETE 跨实例单消费者,双执行路径收尾都消费,启动时
+  `ClaimAll` 扫描补跑;补跑撞忙依 `ErrTaskRunning` 分支重新记账,最终收敛
+  不丢触发。
+- **镜像跨实例锁 fail-closed 开关**:旧实现 Redis 非竞争类错误一律降级为
+  进程内互斥 ⇒ 多实例下两个实例可同时进入本应互斥的镜像发布流程。新增
+  `sync.mirror_lock_fail_closed`(`GIT_SYNC_MIRROR_LOCK_FAIL_CLOSED`):
+  true=Redis 异常直接拒绝执行(无法证明互斥成立则不进入互斥区,多实例推荐);
+  false(默认)=保持单实例友好的降级语义。locker 抽成 `remoteLocker` 接口
+  以便 fake 注入,竞争失败(`ErrLockNotAcquired`)与策略无关恒为忙碌。
+
 ## [v0.35.1] - 2026-11-10
 
 ### Fixed

@@ -33,8 +33,8 @@ type Service struct {
 	templates     TemplateStore
 	approvals     *ForcePushStore
 	retryTracker  *RetryTracker
-	// pendingWebhook 记「任务在跑、没能立即触发」的待补跑 webhook 触发。
-	pendingWebhook  *pendingTriggerSet
+	// pending 待补跑 webhook 触发的持久化存储(pending_triggers 表,见 pending.go)。
+	pending         *dao.PendingTriggerDAO
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
@@ -105,11 +105,11 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		platforms:     platformService,
 		opLogs:        opLogService,
 		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
-		cron:           cron.New(),
-		cronEntryIDs:   make(map[string]cron.EntryID),
-		bgCtx:          bgCtx,
-		bgCancel:       bgCancel,
-		pendingWebhook: newPendingTriggerSet(),
+		cron:         cron.New(),
+		cronEntryIDs: make(map[string]cron.EntryID),
+		bgCtx:        bgCtx,
+		bgCancel:     bgCancel,
+		pending:      daos.pending,
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -134,6 +134,8 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	// force-push 审批：表存储（force_push_approvals）。
 	svc.approvals = NewForcePushStore(daos.approv)
 	svc.retryTracker = NewRetryTracker(0)
+	// 重试预算按「连续 auto_retry 链」从 DB 派生:重启不丢、多实例一致。
+	svc.retryTracker.SetChainStats(daos.run.AutoRetryChainStats)
 
 	exec, err := executor.NewExecutor(svc)
 	if err != nil {
@@ -168,6 +170,14 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	} else if n > 0 {
 		slog.Info("已回收卡住的 webhook 事件", "count", n)
 	}
+
+	// **启动扫描待补跑触发**:上次进程退出(SIGKILL/崩溃)前没补跑的 webhook
+	// 触发落库存活,启动即认领补跑 —— 不扫描就要等下一次任意执行结束才补上。
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.sweepPendingTriggersOnStartup()
+	})
 
 	svc.wg.Add(1)
 	async.GoSafe(func() {

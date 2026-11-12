@@ -50,10 +50,19 @@ type MirrorService struct {
 	reservations *syncx.KeyedMutex[uint]
 	// locker 配 redis 时提供跨实例互斥：抢不到 = 另一实例正在执行同一通道，
 	// 直接返回忙碌错误而不是两边同时克隆（TTL 见 mirrorLockTTL，覆盖整次操作）。
-	locker  *distlock.RedisLocker
-	lockTTL time.Duration
+	locker remoteLocker
+	// lockFailClosed Redis 异常策略(true=拒绝执行,fail-closed;见 model.SyncConfig)。
+	lockFailClosed bool
+	lockTTL        time.Duration
 	// lockClient 是 locker 底层的 redis 连接,由 Service.Stop 统一关闭。
 	lockClient *redis.Client
+}
+
+// remoteLocker 跨实例锁的最小抽象(*distlock.RedisLocker 的天然实现),
+// 让 Redis 异常分支可以被单测注入 fake 覆盖。
+type remoteLocker interface {
+	TryLock(ctx context.Context, key string, ttl time.Duration) (string, error)
+	Unlock(ctx context.Context, key, ownerID string) error
 }
 
 // mirrorLockTTL 通道锁 TTL：覆盖一次克隆+推送的最长耗时。
@@ -69,24 +78,30 @@ func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "init crypto manager failed")
 	}
-	// 配 redis 时追加跨实例互斥；未配或 redis 抖动只降级为进程内互斥（有告警）。
-	var locker *distlock.RedisLocker
+	// 配 redis 时追加跨实例互斥；未配 redis 只有进程内互斥。
+	// Redis 异常时的降级/拒绝策略由 sync.mirror_lock_fail_closed 决定。
+	var locker remoteLocker
 	var lockClient *redis.Client
-	if cfg := svc.GetConfig(); cfg != nil && cfg.Redis.Addr != "" {
-		lockClient = lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
-		locker = lock.NewLocker(lockClient)
+	failClosed := false
+	if cfg := svc.GetConfig(); cfg != nil {
+		failClosed = cfg.Sync.MirrorLockFailClosed
+		if cfg.Redis.Addr != "" {
+			lockClient = lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+			locker = lock.NewLocker(lockClient)
+		}
 	}
 	return &MirrorService{
-		svc:          svc,
-		channels:     dao.NewMirrorChannelDAO(db),
-		runs:         dao.NewMirrorRunDAO(db),
-		backend:      backend,
-		cm:           cm,
-		locks:        syncx.NewKeyedGate(1),
-		reservations: syncx.NewKeyedMutex[uint](),
-		locker:       locker,
-		lockTTL:      mirrorLockTTL,
-		lockClient:   lockClient,
+		svc:            svc,
+		channels:       dao.NewMirrorChannelDAO(db),
+		runs:           dao.NewMirrorRunDAO(db),
+		backend:        backend,
+		cm:             cm,
+		locks:          syncx.NewKeyedGate(1),
+		reservations:   syncx.NewKeyedMutex[uint](),
+		locker:         locker,
+		lockFailClosed: failClosed,
+		lockTTL:        mirrorLockTTL,
+		lockClient:     lockClient,
 	}, nil
 }
 
@@ -118,7 +133,8 @@ func (m *MirrorService) lockChannelLocal(ctx context.Context, chID uint) (func()
 // 返回 (release, acquired, err):
 //   - acquired=true  :拿到锁,调用方**必须**在结束时 release;
 //   - acquired=false :被别的实例占用 ⇒ 忙碌(不排队);
-//   - redis 抖动     :降级为"仅进程内互斥",不阻断镜像任务(同 lockChannel 原语义)。
+//   - redis 异常     :mirror_lock_fail_closed=true ⇒ 忙碌拒绝(fail-closed);
+//     false(默认) ⇒ 降级为"仅进程内互斥",不阻断镜像任务(单实例可用性)。
 func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release func(), acquired bool, err error) {
 	if m.locker == nil {
 		return func() {}, true, nil
@@ -137,7 +153,14 @@ func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release f
 	case oekiterrors.Is(lerr, distlock.ErrLockNotAcquired):
 		return func() {}, false, oekiterrors.Errorf("通道 %d 正在其它实例执行,请稍后重试", chID)
 	default:
-		// redis 抖动：降级为进程内互斥，不阻断镜像任务
+		// Redis 非竞争类错误(连接抖动/超时):互斥事实无法证实。
+		if m.lockFailClosed {
+			// fail-closed:无法证明互斥成立 ⇒ 不许进入互斥区。
+			// 多实例发布必须配置此项——降级会让两个实例同时进入发布流程。
+			return func() {}, false, oekiterrors.Errorf(
+				"通道 %d 跨实例锁不可用(Redis 异常),已按 mirror_lock_fail_closed 拒绝执行", chID)
+		}
+		// 默认可用性优先(单实例场景):降级为进程内互斥,不阻断镜像任务。
 		slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
 		return func() {}, true, nil
 	}

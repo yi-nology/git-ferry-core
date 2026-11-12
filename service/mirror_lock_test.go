@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/oekit/redisx/distlock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -83,4 +85,44 @@ func TestMirrorLockChannel_Degraded(t *testing.T) {
 	release, err := m.lockChannel(ctx, 3)
 	require.NoError(t, err, "redis 抖动应降级而非失败")
 	release()
+}
+
+// fakeRemoteLocker 可控的跨实例锁 fake:err 非 nil 时 TryLock 恒定返回它。
+type fakeRemoteLocker struct{ err error }
+
+func (f fakeRemoteLocker) TryLock(_ context.Context, _ string, _ time.Duration) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return "owner", nil
+}
+
+func (f fakeRemoteLocker) Unlock(_ context.Context, _, _ string) error { return nil }
+
+// TestMirrorLockChannel_FailClosed mirror_lock_fail_closed=true 时,
+// Redis 非竞争类错误必须拒绝执行(不进入互斥区),而不是静默降级。
+//
+// 回归背景(P0):旧实现 Redis 异常一律降级为进程内互斥 ⇒ 多实例下两个实例
+// 可同时进入本应互斥的镜像发布流程。
+func TestMirrorLockChannel_FailClosed(t *testing.T) {
+	down := errors.New("redis connection refused")
+
+	// fail-closed=true:Redis 异常 ⇒ 忙碌拒绝,**不许**进入互斥区
+	m := &MirrorService{locker: fakeRemoteLocker{err: down}, lockFailClosed: true, lockTTL: time.Second}
+	release, err := m.lockChannel(context.Background(), 5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fail_closed")
+	release() // 未获取时也返回 noop release,不得 panic
+
+	// 竞争失败(ErrLockNotAcquired)与策略无关,恒为忙碌
+	busy := &MirrorService{locker: fakeRemoteLocker{err: distlock.ErrLockNotAcquired}, lockTTL: time.Second}
+	_, err = busy.lockChannel(context.Background(), 5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "其它实例")
+
+	// fail-closed=false(默认):Redis 异常降级进程内互斥,可获取(旧语义不变)
+	m3 := &MirrorService{locker: fakeRemoteLocker{err: down}, lockTTL: time.Second}
+	release3, err := m3.lockChannel(context.Background(), 5)
+	require.NoError(t, err)
+	release3()
 }

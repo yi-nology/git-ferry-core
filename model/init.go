@@ -57,6 +57,7 @@ func InitDB(driver, dsn string) (*gorm.DB, error) {
 		&HistoryOverride{},
 		&tpl.Template{},
 		&ForcePushApproval{},
+		&PendingTrigger{},
 	)
 	if err != nil {
 		return nil, err

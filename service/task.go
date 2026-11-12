@@ -129,9 +129,9 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 	s.wg.Add(1)
 	async.GoSafe(func() {
 		defer s.wg.Done()
-		defer release()
 		// rebuild 语义:拿到执行权之后再清工作目录(见 service/rebuild.go)。
 		if err := s.runWithRebuildPrep(taskKey, trigger); err != nil {
+			release()
 			slog.Error("rebuild: 清空工作目录失败,本次执行中止", "task", taskKey, "error", err)
 			return
 		}
@@ -140,9 +140,23 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 			// 结果已落 run 记录,这里仅留痕
 			slog.Warn("async task run failed", "task", taskKey, "error", err)
 		}
-		s.emitRunCompleted(taskKey, trigger, run, err)
+		s.finishRun(taskKey, trigger, run, err, release)
 	})
 	return nil
+}
+
+// finishRun 执行收尾:先释放执行权,再广播完成事件,最后消费待补跑触发。
+//
+// **顺序不能反**:此前 emit 在 release 之前 —— 订阅方(runwatch)收到失败
+// 完成事件后立即触发自动重跑,而执行权还没放 ⇒ 重跑撞上 ErrTaskRunning
+// 被拒绝,且 RetryTracker 已记账 ⇒ 预算白白烧掉、重试未发生(P0)。
+// 先放行执行权,补偿/重跑才能立刻接上。
+func (s *Service) finishRun(taskKey, trigger string, run *model.SyncRun, err error, release func()) {
+	release()
+	s.emitRunCompleted(taskKey, trigger, run, err)
+	// RunTaskAsync 路径(手动/重试/auto_retry)在这里消费待补跑 —— 旧实现
+	// 只有 RunTaskWithTrigger 消费,手动执行期间积压的 webhook 永远补不上(P0)。
+	s.runPendingWebhook(taskKey)
 }
 
 // CountTasksByStatus returns task counts grouped by last_status (key "total" = overall).
@@ -168,11 +182,11 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 	// 非阻塞快速失败:全局满返回 ErrTooManyConcurrent,taskKey 已在跑返回 ErrTaskRunning。
 	release, err := s.guard.Acquire(ctx, taskKey)
 	if err != nil {
-		// 任务正在跑 ⇒ 这次 webhook 触发的提交**不能丢**:记一笔待补跑,
-		// 等当前运行结束、释放执行权后补跑一次(合并:积压多次只补一次)。
-		// 不记的话这次推送的提交要等下一次推送或 cron 才补上。
+		// 任务正在跑 ⇒ 这次 webhook 触发的提交**不能丢**:记一笔待补跑(落库,
+		// 双路径/跨实例/重启都可消费),等当前运行结束、释放执行权后补跑一次
+		// (合并:积压多次只补一次)。不记的话这次推送的提交要等下一次推送或 cron 才补上。
 		if errors.Is(err, ErrTaskRunning) && trigger == model.TriggerWebhook {
-			s.pendingWebhook.Mark(taskKey)
+			s.markPendingWebhook(taskKey)
 		}
 		return err
 	}
@@ -189,25 +203,6 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 	// **释放执行权之后**再补跑:否则补跑会立刻又撞上同一个执行权。
 	s.runPendingWebhook(taskKey)
 	return execErr
-}
-
-// runPendingWebhook 补跑被合并掉的 webhook 触发。
-//
-// 合并语义:同一任务积压多次只补跑一次 —— 补跑是"再同步一次",
-// 会把期间到达的所有提交一起带上。
-func (s *Service) runPendingWebhook(taskKey string) {
-	if !s.pendingWebhook.Take(taskKey) {
-		return
-	}
-	ctx := s.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	async.GoSafe(func() {
-		if err := s.RunTaskWithTrigger(ctx, taskKey, model.TriggerWebhook, nil); err != nil {
-			slog.Error("补跑被合并的 webhook 触发失败", "taskKey", taskKey, "error", err)
-		}
-	})
 }
 
 // PreviewSync previews a sync operation.

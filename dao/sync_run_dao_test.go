@@ -229,3 +229,53 @@ func TestSyncRunDAO_Fields(t *testing.T) {
 	assert.Equal(t, 0, run.RetryTotal, "expected retry total 0")
 	assert.Nil(t, run.WebhookEventID, "expected webhook event ID to be nil")
 }
+
+// TestSyncRunDAO_AutoRetryChainStats 连续 auto_retry 链的计数与边界。
+//
+// 语义(P0 重试预算):相邻两个非 auto_retry 运行之间的 auto_retry 运行
+// 构成一条链;链内条数 = 已消耗预算。任何非 auto_retry 运行开启新链。
+func TestSyncRunDAO_AutoRetryChainStats(t *testing.T) {
+	db := setupSyncRunTestDB(t)
+	d := NewSyncRunDAO(db)
+
+	mk := func(trigger string) *model.SyncRun {
+		r := &model.SyncRun{
+			TaskKey: "chain-task", TriggerSource: trigger,
+			Status: model.StatusFailed, StartTime: time.Now(),
+			EndTime: ptrTime(time.Now()),
+		}
+		require.NoError(t, d.Create(r))
+		return r
+	}
+
+	// 链头失败(manual) → 2 次自动重试
+	root := mk(model.TriggerManual)
+	_ = mk(model.TriggerAutoRetry)
+	r2 := mk(model.TriggerAutoRetry)
+
+	// 从链尾(retry 运行)看:含自身,预算已耗 2
+	n, lastEnd, err := d.AutoRetryChainStats("chain-task", r2.ID, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.False(t, lastEnd.IsZero(), "链非空时必须给出最近结束时间(冷却起算点)")
+
+	// 从链头(原始失败)看:统计其后的重试,同为 2(防双通道重复判定超限后仍误判)
+	n, _, err = d.AutoRetryChainStats("chain-task", root.ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+
+	// 人工运行开启新链:新链预算归零
+	mk(model.TriggerManual)
+	root2 := mk(model.TriggerManual)
+	n, _, err = d.AutoRetryChainStats("chain-task", root2.ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n, "新链不含旧链的重试,预算必须归零")
+
+	// 空链:lastEnd 为零值(不触发冷却)
+	n, lastEnd, err = d.AutoRetryChainStats("chain-task", root2.ID, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	assert.True(t, lastEnd.IsZero())
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }
