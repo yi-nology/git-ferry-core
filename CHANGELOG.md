@@ -2,6 +2,25 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（P2 Distributed GitFerry——大仓库资源限制,切片 2）
+
+- **工作目录磁盘配额** `sync.max_workdir_mb`(env `GIT_SYNC_MAX_WORKDIR_MB`,
+  0=不限制,默认):clone/fetch/LFS 之后检查单任务工作区体积(磁盘增长点),
+  超限即中止本次执行并**清理工作区 reclaim 磁盘**(留着超限工作区只会让
+  下次在同一颗雷上再踩一遍),下次执行全量重克隆。配额已配置但体积测不出
+  也中止(fail-closed——测不准等于没保护)。纯 Go WalkDir 统计,零 exec。
+
+### Added（P3 Repository Governance——跨平台对账,切片 2）
+
+- **`Service.ReconcileTask` 跨平台一致性对账**:不克隆不推送,纯平台 API
+  只读(ListCommits 取分支 HEAD SHA + CompareCommits 量化漂移),
+  返回 in_sync / drift(含 SourceAhead=目标缺的提交数、TargetAhead=目标
+  多出提交数=旁路写入信号)/ source_missing / target_missing。
+  对账核心抽成 `reconcileBranches` 依赖最小接口(branchHeadQuerier),
+  全分支语义单测覆盖(一致/漂移/两端缺失/查询失败≠分支不存在/Compare 失败)。
+
 ## [v0.37.0] - 2026-11-12
 
 ### Fixed

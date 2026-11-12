@@ -132,6 +132,10 @@ type SyncConfig struct {
 	// 任务可被其它实例接管,重复触发自动合并不重复发布;
 	// false(默认)=直接执行(旧行为,零变化)。
 	DurableQueue bool `yaml:"durable_queue" env:"GIT_SYNC_DURABLE_QUEUE"`
+	// MaxWorkdirMB 单任务工作目录(克隆+LFS 对象)磁盘配额,0=不限制。
+	// 超限即中止本次执行并清理工作区(reclaim 磁盘),下次执行全量重克隆。
+	// 大仓库/多任务共享 temp 目录时的宿主机保护(P2 资源限制)。
+	MaxWorkdirMB int `yaml:"max_workdir_mb" env:"GIT_SYNC_MAX_WORKDIR_MB"`
 	// ExecuteJobs 本实例是否执行队列任务:nil/true=入队+派发执行(API/Worker 合一);
 	// false=只入队不执行(纯 API/调度实例,配合独立 Worker 进程)。
 	// 仅 DurableQueue=true 时有意义。

@@ -40,7 +40,8 @@ func (cloneFetchStage) Run(ctx context.Context, rc *RunContext) error {
 		}
 		rc.logf("  LFS objects fetched\n")
 	}
-	return nil
+	// 磁盘配额检查:clone/fetch/LFS 之后(体积增长点),超限中止+reclaim。
+	return rc.Exec.enforceWorkdirQuota(rc)
 }
 
 // ensureRemoteStage 保证目标 remote 存在。
