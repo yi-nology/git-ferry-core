@@ -123,6 +123,7 @@ const (
 	TableWebhookEvents    = "webhook_events"
 	TableOperationLogs    = "operation_logs"
 	TablePendingTriggers  = "pending_triggers"
+	TableOutboxEvents     = "outbox_events"
 )
 
 // Model default value constants

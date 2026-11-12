@@ -58,6 +58,7 @@ func InitDB(driver, dsn string) (*gorm.DB, error) {
 		&tpl.Template{},
 		&ForcePushApproval{},
 		&PendingTrigger{},
+		&OutboxEvent{},
 	)
 	if err != nil {
 		return nil, err

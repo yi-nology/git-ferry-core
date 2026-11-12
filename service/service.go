@@ -34,7 +34,10 @@ type Service struct {
 	approvals     *ForcePushStore
 	retryTracker  *RetryTracker
 	// pending 待补跑 webhook 触发的持久化存储(pending_triggers 表,见 pending.go)。
-	pending         *dao.PendingTriggerDAO
+	pending *dao.PendingTriggerDAO
+	// outbox 事务外发盒(outbox_events 表,见 events.go):运行完成事件
+	// 与 run 落库同事务写入,派发器保证通知至少送达一次。
+	outbox          *dao.OutboxEventDAO
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
@@ -137,6 +140,9 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	// 重试预算按「连续 auto_retry 链」从 DB 派生:重启不丢、多实例一致。
 	svc.retryTracker.SetChainStats(daos.run.AutoRetryChainStats)
 
+	// outbox 接线:运行完成与 outbox 事件同事务落库(见 TaskService.CompleteRun*)。
+	taskService.outbox = daos.outbox
+
 	exec, err := executor.NewExecutor(svc)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "init executor failed")
@@ -177,6 +183,15 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	async.GoSafe(func() {
 		defer svc.wg.Done()
 		svc.sweepPendingTriggersOnStartup()
+	})
+
+	// **启动扫描 outbox**:上次进程崩溃在「run 落库后、事件投递前」的事件
+	// 未标记已发布,启动即零宽限重投 —— 通知与自动补偿最终送达(at-least-once)。
+	svc.publishDueOutbox(0)
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.dispatchOutboxLoop()
 	})
 
 	svc.wg.Add(1)

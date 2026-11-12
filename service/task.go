@@ -154,6 +154,11 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 func (s *Service) finishRun(taskKey, trigger string, run *model.SyncRun, err error, release func()) {
 	release()
 	s.emitRunCompleted(taskKey, trigger, run, err)
+	// 快速路径已投递 ⇒ 闭环 outbox 行(派发器宽限后不会重投)。
+	// 崩溃在标记之前 ⇒ 派发器/启动扫描按 at-least-once 重投,订阅方幂等吸收。
+	if run != nil {
+		s.markOutboxPublishedByRun(run.ID)
+	}
 	// RunTaskAsync 路径(手动/重试/auto_retry)在这里消费待补跑 —— 旧实现
 	// 只有 RunTaskWithTrigger 消费,手动执行期间积压的 webhook 永远补不上(P0)。
 	s.runPendingWebhook(taskKey)
@@ -200,6 +205,10 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 		return s.executor.Execute(ctx, task, trigger, webhookEventID)
 	}()
 	s.emitRunCompleted(taskKey, trigger, run, execErr)
+	if run != nil {
+		// 快速路径已投递 ⇒ 闭环 outbox 行(与 finishRun 同语义)。
+		s.markOutboxPublishedByRun(run.ID)
+	}
 	// **释放执行权之后**再补跑:否则补跑会立刻又撞上同一个执行权。
 	s.runPendingWebhook(taskKey)
 	return execErr

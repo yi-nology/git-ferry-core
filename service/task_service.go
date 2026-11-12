@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"time"
 
@@ -36,6 +37,9 @@ type TaskService struct {
 	runDAO     *dao.SyncRunDAO
 	runStepDAO *dao.SyncRunStepDAO
 	repoDAO    *dao.RepoDAO
+	// outbox 可选:接好后,运行完成会**同事务**写 outbox 事件
+	// (transactional outbox,见 model.OutboxEvent);nil = 不写(裸构造的测试路径)。
+	outbox *dao.OutboxEventDAO
 }
 
 // NewTaskService creates a new TaskService instance.
@@ -289,8 +293,32 @@ func (ts *TaskService) UpdateRunStep(step *model.SyncRunStep) error {
 }
 
 // CompleteRun updates a sync run with final status and details.
+// runCompletedOutbox 由完成的 run 构造「运行完成」outbox 事件。
+// 冗余 trigger/status 供重投过滤;payload 带 error_message 便于排查。
+func runCompletedOutbox(run *model.SyncRun) *model.OutboxEvent {
+	payload, _ := json.Marshal(map[string]any{"error_message": run.ErrorMessage})
+	return &model.OutboxEvent{
+		Topic:   model.OutboxTopicRunCompleted,
+		TaskKey: run.TaskKey,
+		RunID:   run.ID,
+		Trigger: run.TriggerSource,
+		Status:  run.Status,
+		Payload: string(payload),
+	}
+}
+
 func (ts *TaskService) CompleteRun(run *model.SyncRun) error {
-	return ts.runDAO.Update(run)
+	if ts.outbox == nil {
+		return ts.runDAO.Update(run)
+	}
+	// run 更新 + outbox 事件同一事务:要么都成立,要么都回滚 ——
+	// 否则「run 已完成但事件丢了」的崩溃窗口原样存在(outbox 就白做了)。
+	return ts.runDAO.DB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(run).Error; err != nil {
+			return err
+		}
+		return ts.outbox.CreateInTx(tx, runCompletedOutbox(run))
+	})
 }
 
 // UpdateTaskLastRun updates the task's last run time and status.
@@ -301,7 +329,8 @@ func (ts *TaskService) UpdateTaskLastRun(task *model.SyncTask, run *model.SyncRu
 	return ts.taskDAO.UpdateLastRun(task.Key, run.EndTime, run.Status)
 }
 
-// CompleteRunWithTaskUpdate 在同一事务中完成 run 更新 + task 状态更新,保证原子性。
+// CompleteRunWithTaskUpdate 在同一事务中完成 run 更新 + task 状态更新 + outbox 事件,
+// 保证原子性。
 //
 // task 状态**只更新 last_run_at / last_status 两列**:整行 Save 会把
 // 执行开始时的旧快照写回,抹掉执行期间的并发修改(实测:一次 cron 执行
@@ -311,11 +340,18 @@ func (ts *TaskService) CompleteRunWithTaskUpdate(run *model.SyncRun, task *model
 		if err := tx.Save(run).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.SyncTask{}).
+		if err := tx.Model(&model.SyncTask{}).
 			Where("`key` = ?", task.Key).
 			Updates(map[string]any{
 				"last_run_at": run.EndTime,
 				"last_status": run.Status,
-			}).Error
+			}).Error; err != nil {
+			return err
+		}
+		// outbox 与完成状态同事务落库:派发器/重启扫描保证通知至少送达一次。
+		if ts.outbox != nil {
+			return ts.outbox.CreateInTx(tx, runCompletedOutbox(run))
+		}
+		return nil
 	})
 }

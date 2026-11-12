@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed（P1 Durable Execution,技术评审 2026-11-12 落地）
+
+- **运行完成通知持久化投递保障(transactional outbox)**:旧 `SubscribeRuns`
+  是纯进程内回调 —— 进程在「运行记录落库之后、通知回调执行之前」崩溃,
+  通知与自动补偿动作静默丢失(评审验收:「运行结果落库后立即 SIGKILL ⇒
+  恢复后通知与补偿最终完成」)。现:新表 `outbox_events`,运行完成事件与
+  run 落库**同一事务**写入(`TaskService.CompleteRun*` 内部,
+  接口签名不变);快速路径(进程内订阅)投递后即标记已发布;派发器周期
+  扫描「未发布且已过 30s 宽限」的事件重投,启动时零宽限扫描兜底崩溃恢复。
+  投递语义 = at-least-once(崩溃在「投递后、标记前」重复一次,订阅方幂等:
+  runwatch 有 decided 去重 + DB 链计数);run 记录被保留期清理的事件
+  gracefully 跳过并闭环。已发布事件保留 24h 后清理。
+
 ## [v0.36.0] - 2026-11-12
 
 ### Fixed（P0 Correctness,技术评审 2026-11-12 落地）
