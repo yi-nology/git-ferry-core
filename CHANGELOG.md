@@ -16,7 +16,7 @@
   退避(约 2.5 分钟)后作业被误判 failed 丢弃。现在 `Reschedule` 把作业
   放回 pending(attempt 不增),`lease_until` 在 pending 态复用作
   not-before(退避窗口内不得提前认领,防派发器忙旋),退避次数另立
-  `defer_count` 列记账(AutoMigrate 自动补列,零数据迁移);毒丸预算
+  `defer_count` 列记账(显式迁移 v6 补列,模型+迁移缺一不可);毒丸预算
   只留给「lease 过期被接管」的崩溃场景。
 - **durable_queue/失锁哨兵**（#14）:`RenewLease`/`Complete` 此前丢弃
   RowsAffected,0 行命中返回 nil —— 旧属主失锁后无感继续推送(脑裂)且
