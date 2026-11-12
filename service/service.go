@@ -113,6 +113,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		bgCtx:        bgCtx,
 		bgCancel:     bgCancel,
 		pending:      daos.pending,
+		outbox:       daos.outbox,
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
