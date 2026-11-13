@@ -46,7 +46,10 @@ func TestEvaluateDimensions_AllGreen(t *testing.T) {
 	require.NotEmpty(t, res.Dimensions)
 	assert.GreaterOrEqual(t, res.Score, 90)
 	assert.Equal(t, "gold", res.Level)
-	assert.Empty(t, res.Actions)
+	// 全绿时任何维度都不该带建议动作（原 res.Actions 为空的等价判读）。
+	for _, d := range res.Dimensions {
+		assert.Empty(t, d.Action, "维度 %s 全绿时不应带动作", d.Name)
+	}
 
 	names := map[string]Dimension{}
 	for _, d := range res.Dimensions {
@@ -68,8 +71,18 @@ func TestEvaluateDimensions_FailureDragsScore(t *testing.T) {
 	res := EvaluateDimensions(nil, f)
 	assert.Less(t, res.Score, 50)
 	assert.Equal(t, "basic", res.Level)
-	assert.NotEmpty(t, res.Issues)
-	assert.NotEmpty(t, res.Actions)
+	// 原 res.Issues/res.Actions 非空的等价判读：存在低分维度，且存在带动作的维度。
+	lowScore, hasAction := false, false
+	for _, d := range res.Dimensions {
+		if d.Score < 60 {
+			lowScore = true
+		}
+		if d.Action != "" {
+			hasAction = true
+		}
+	}
+	assert.True(t, lowScore, "应有 score<60 的维度（issue 归因面）")
+	assert.True(t, hasAction, "应有带建议动作的维度（action 归因面）")
 
 	var reliability, safety *Dimension
 	for i := range res.Dimensions {
