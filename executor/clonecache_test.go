@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -364,4 +366,143 @@ func TestCloneCache_SeedFailureFailsFast(t *testing.T) {
 	require.Empty(t, entries, "no partial cache entry may remain, got %v", entries)
 	_, serr := os.Stat(wd)
 	require.True(t, os.IsNotExist(serr), "dest must not be created on seed failure")
+}
+
+// initFixtureRepo 在 dir 造一棵 main 单提交的普通仓(夹具复用)。
+func initFixtureRepo(t *testing.T, dir string) {
+	t.Helper()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	git("-C", dir, "init", "-q")
+	git("-C", dir, "symbolic-ref", "HEAD", "refs/heads/main")
+	git("-C", dir, "config", "user.email", "fixture@example.com")
+	git("-C", dir, "config", "user.name", "fixture")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "readme.md"), []byte("wiki\n"), 0o644))
+	git("-C", dir, "add", ".")
+	git("-C", dir, "commit", "-qm", "c1")
+}
+
+// TestCloneCache_WikiCloneBorrows:syncWiki 的 wiki 克隆同样走共享缓存——
+// wiki URL 与主仓不同 ⇒ 独立缓存条目;wiki workdir 走 alternates 借对象,
+// 且端到端(对齐+逐分支推送 bare 目标)不被接线破坏。
+func TestCloneCache_WikiCloneBorrows(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err, "NewExecutor failed")
+
+	base := t.TempDir()
+	srcWiki := filepath.Join(base, "src.wiki.git") // 源 wiki:普通仓
+	initFixtureRepo(t, srcWiki)
+	dstWiki := filepath.Join(base, "dst.wiki.git") // 目标 wiki:bare(推送落点)
+	out, err := exec.Command("git", "init", "-q", "--bare", dstWiki).CombinedOutput()
+	require.NoError(t, err, "init bare: %s", out)
+
+	srcRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "src")}
+	dstRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "dst")}
+	workDir := t.TempDir()
+	details := &strings.Builder{}
+
+	require.NoError(t, e.syncWiki(context.Background(), workDir,
+		&model.SyncTask{}, srcRepo, dstRepo, nil, nil, details),
+		"syncWiki failed: %s", details.String())
+
+	// wiki workdir 借用共享缓存(独立条目)。
+	alt, err := os.ReadFile(filepath.Join(workDir, "wiki", ".git", "objects", "info", "alternates"))
+	require.NoError(t, err, "wiki workdir must borrow via alternates: %s", details.String())
+	require.Contains(t, string(alt), cacheDir)
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "exactly one wiki cache entry, got %v", entries)
+
+	// 端到端未破坏:推送到达 bare 目标。
+	rev, err := exec.Command("git", "-C", dstWiki,
+		"rev-parse", "--verify", "refs/heads/main").CombinedOutput()
+	require.NoError(t, err, "bare target must receive main: %s / %s", rev, details.String())
+	require.NotEmpty(t, strings.TrimSpace(string(rev)))
+}
+
+// TestCloneCache_SecondRunFetchesWithAlternates:热路径护栏——workdir 建成后
+// 每轮执行走的是 fetch 分支(不是 clone):fetch 必须在 alternates 借用形态下
+// 正常增量,且源端新提交能到达 workdir。
+func TestCloneCache_SecondRunFetchesWithAlternates(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err, "NewExecutor failed")
+
+	srcURL := newCloneCacheSource(t)
+	repo := &model.Repo{CloneURL: srcURL}
+	task := &model.SyncTask{SourceBranch: "main"}
+	wd := filepath.Join(t.TempDir(), "wd")
+
+	mkRC := func() *RunContext {
+		return &RunContext{
+			Task:       task,
+			SourceRepo: repo,
+			Platforms:  map[uint]*model.Platform{},
+			WorkDir:    filepath.Dir(wd),
+			RepoDir:    wd,
+			Details:    &strings.Builder{},
+			Run:        &model.SyncRun{},
+			Exec:       e,
+		}
+	}
+
+	// 第一轮:clone(种缓存+借用)。
+	rc1 := mkRC()
+	require.NoError(t, (cloneFetchStage{}).Run(context.Background(), rc1))
+
+	// 源端前进 → 第二轮:fetch 分支(带 alternates)。
+	wantSHA := commitToCloneCacheSource(t, srcURL, "fetch.txt", "f\n")
+	rc2 := mkRC()
+	require.NoError(t, (cloneFetchStage{}).Run(context.Background(), rc2),
+		"second run fetch must work with borrowed objects: %s", rc2.Details.String())
+	require.FileExists(t, filepath.Join(wd, "fetch.txt"),
+		"fetch path must deliver the new commit into borrowed workdir")
+	out, err := exec.Command("git", "-C", wd, "rev-parse", "HEAD").CombinedOutput()
+	require.NoError(t, err)
+	require.Equal(t, wantSHA, strings.TrimSpace(string(out)))
+	// alternates 仍在(没有被 fetch 路径破坏)。
+	_, err = os.Stat(filepath.Join(wd, ".git", "objects", "info", "alternates"))
+	require.NoError(t, err, "alternates must survive the fetch path")
+}
+
+// TestCloneCache_WikiNotFoundClassification:wiki 不存在的分类语义不被缓存
+// 接线改变——①file:// 缺失 wiki 在有/无缓存两侧报同一形态(平价);
+// ②HTTPS 形态关键词穿过 seed 包装仍可分类(Wrap 保留 cause 文本)。
+func TestCloneCache_WikiNotFoundClassification(t *testing.T) {
+	base := t.TempDir()
+	srcRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "missing")}
+	dstRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "dst")}
+
+	run := func(cacheDir string) error {
+		svc := newMockService()
+		svc.config.Sync.CloneCacheDir = cacheDir
+		e, err := NewExecutor(svc)
+		require.NoError(t, err)
+		return e.syncWiki(context.Background(), t.TempDir(),
+			&model.SyncTask{}, srcRepo, dstRepo, nil, nil, &strings.Builder{})
+	}
+
+	errNoCache := run("")
+	require.Error(t, errNoCache, "precondition: missing wiki errors without cache")
+	errCache := run(filepath.Join(t.TempDir(), "clones"))
+	require.Error(t, errCache, "missing wiki must still error with cache (file:// shape is not a not-found keyword)")
+	require.Contains(t, errCache.Error(), "clone wiki failed",
+		"cache path must keep the same failure shape as no-cache, got: %v", errCache)
+
+	// HTTPS 形态关键词:分类器必须穿透 seed 包装。
+	wrapped := oekiterrors.Wrap(
+		fmt.Errorf("fatal: remote: Repository not found.\\nfatal: Could not read from remote repository."),
+		"seed clone cache failed")
+	require.True(t, isWikiNotFound(wrapped),
+		"not-found keyword must survive the seed wrap, got: %v", wrapped)
 }

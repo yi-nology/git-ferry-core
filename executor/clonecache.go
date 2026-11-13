@@ -86,6 +86,8 @@ func (c *cloneCache) ensure(ctx context.Context, backend gitbackend.GitBackend, 
 	entry := cacheEntryPath(c.dir, cloneURL)
 	release, ok := c.mu.Acquire(entry)
 	if !ok {
+		// 同源克隆正在种/刷:这次降级普通克隆(正确性不变),留痕便于运维识别。
+		slog.Info("clone cache contended, cloning without reference", "entry", entry)
 		return "", false, nil
 	}
 	defer release()
@@ -99,6 +101,7 @@ func (c *cloneCache) ensure(ctx context.Context, backend gitbackend.GitBackend, 
 			slog.Warn("clone cache refresh failed, using stale cache",
 				"entry", entry, "error", ferr)
 		}
+		slog.Info("clone cache reused", "entry", entry)
 		return entry, true, nil
 	}
 
@@ -123,6 +126,7 @@ func (c *cloneCache) ensure(ctx context.Context, backend gitbackend.GitBackend, 
 			return "", false, oekiterrors.Wrap(err, "commit clone cache entry failed")
 		}
 	}
+	slog.Info("clone cache seeded", "entry", entry)
 	return entry, true, nil
 }
 

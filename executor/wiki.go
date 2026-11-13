@@ -53,11 +53,28 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	// clone or fetch
 	if _, err := os.Stat(filepath.Join(wikiDir, ".git")); os.IsNotExist(err) {
 		details.WriteString("  wiki: clone " + srcURL + "\n")
-		if err := e.backend.Clone(ctx, gitbackend.CloneOptions{
+		cloneOpts := gitbackend.CloneOptions{
 			URL:  srcURL,
 			Path: wikiDir,
 			Auth: srcAuth,
-		}); err != nil {
+		}
+		// Clone Cache:wiki 仓与主仓同为同源共享面(wiki URL 不同 ⇒ 独立缓存条目)。
+		// 种入失败必须同样过 wiki 不存在分类——关键词在 cause 文本里,Wrap 保留,
+		// 不能因为多了一层缓存包装就把「wiki 不存在 → 跳过」变成任务失败。
+		if e.cache != nil {
+			ref, usable, cerr := e.cache.ensure(ctx, e.backend, srcURL, "", srcAuth)
+			if cerr != nil {
+				if isWikiNotFound(cerr) {
+					details.WriteString("  wiki: not found on source, skip\n")
+					return nil
+				}
+				return oekiterrors.Wrap(cerr, "clone wiki failed")
+			}
+			if usable {
+				cloneOpts.Reference = ref
+			}
+		}
+		if err := e.backend.Clone(ctx, cloneOpts); err != nil {
 			if isWikiNotFound(err) {
 				details.WriteString("  wiki: not found on source, skip\n")
 				return nil

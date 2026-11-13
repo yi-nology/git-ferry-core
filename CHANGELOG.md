@@ -2,6 +2,28 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（Clone Cache 演进轮——wiki 接线 + 可观测性）
+
+- **wiki 仓接入共享缓存**（`executor/wiki.go` `syncWiki`）：wiki 克隆与主仓
+  同为同源共享面——wiki URL 不同 ⇒ 自动落独立缓存条目；`wiki not found →
+  跳过` 分类语义原样保留（关键词在 cause 文本里、`Wrap` 保留，种入失败同样
+  过分类，不会因多一层缓存包装把「wiki 不存在」变成任务失败）。端到端测试
+  钉住：源 wiki 普通仓 + 目标 bare、alternates 生效、逐分支推送不被破坏。
+- **缓存事件日志**（Info 级，克隆是低频事件）：`clone cache seeded` /
+  `reused` / `contended, cloning without reference`——运维能直接从日志看到
+  种入、复用与同源争用降级。
+
+### Fixed（Clone Cache 深挖轮——探针实证的两个坑）
+
+- **`sync.clone_cache_dir` 强制绝对路径**（`Config.Validate` fail-fast）：
+  实测相对路径随进程 cwd 漂移（重启后缓存「凭空消失」重新种一遍）、`~/`
+  波浪号不被展开（字面量建出 `~` 目录）——`IsAbs` 一并挡住，空=关闭放行。
+- **热路径护栏测试**：workdir 建成后每轮执行走 fetch 分支——补
+  alternates 借用形态下第二轮 fetch 增量到达的集成测试（v0.43.0 未覆盖的
+  最高频路径）。
+
 ## [v0.43.0] - 2026-11-13
 
 ### Added（P2 Clone Cache——同源共享克隆，`sync.clone_cache_dir`）

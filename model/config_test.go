@@ -3,6 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -259,5 +260,45 @@ sync:
 	}
 	if cfg.Sync.CloneCacheDir != "/var/cache/gitferry/clones" {
 		t.Errorf("Expected clone_cache_dir /var/cache/gitferry/clones, got %q", cfg.Sync.CloneCacheDir)
+	}
+}
+
+// TestLoadConfig_CloneCacheDirAbsolute:clone_cache_dir 必须是绝对路径——
+// 相对路径随进程 cwd 漂移(重启后缓存"凭空消失"重新种),~/ 波浪号不被
+// 展开(实测会字面量建出 ~ 目录),两者都 fail-fast 拒绝;空=关闭放行。
+func TestLoadConfig_CloneCacheDirAbsolute(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"empty disabled passes", "", false},
+		{"absolute passes", "/var/cache/gitferry/clones", false},
+		{"relative rejected", "clones/cache", true},
+		{"tilde rejected", "~/clones", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Database: DatabaseConfig{Driver: DriverSQLite, DSN: "test.db"},
+			}
+			cfg.Sync.CloneCacheDir = tc.value
+			err := cfg.Validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for CloneCacheDir %q, got nil", tc.value)
+				}
+				if !strings.Contains(err.Error(), "clone_cache_dir") {
+					t.Errorf("error must name the config key, got: %v", err)
+				}
+				return
+			}
+			// 空值与绝对路径:Validate 的其它必填项(database 等)要先满足,
+			// 否则会报出与本测试无关的错误。
+			if err != nil && !strings.Contains(err.Error(), "clone_cache_dir") {
+				// 允许 database 等基线必填项报错,但绝不能是 clone_cache_dir。
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

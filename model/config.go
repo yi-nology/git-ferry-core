@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/sethvargo/go-envconfig"
 	"gopkg.in/yaml.v3"
@@ -260,6 +261,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Sync.RetryCount <= 0 {
 		c.Sync.RetryCount = DefaultRetryCount
+	}
+	// clone_cache_dir 必须绝对路径:相对路径随进程 cwd 漂移(重启后缓存
+	// "凭空消失"重新种一遍),~/ 波浪号不被展开(实测会字面量建出 ~ 目录)。
+	// IsAbs 同时挡住这两种形态;空=关闭放行。
+	if c.Sync.CloneCacheDir != "" && !filepath.IsAbs(c.Sync.CloneCacheDir) {
+		return fmt.Errorf("sync.clone_cache_dir must be an absolute path (got %q; ~ is not expanded)", c.Sync.CloneCacheDir)
 	}
 	if c.Webhook.RateLimit <= 0 {
 		c.Webhook.RateLimit = DefaultWebhookRateLimit
