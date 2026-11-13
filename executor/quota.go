@@ -80,6 +80,6 @@ func (e *Executor) enforceWorkdirQuota(rc *RunContext) error {
 	if rerr := os.RemoveAll(rc.WorkDir); rerr != nil {
 		rc.logf("workdir cleanup after quota breach failed: %v\n", rerr)
 	}
-	return oekiterrors.Errorf("工作目录超出磁盘配额: %d MB > 上限 %d MB(工作区已清理,下次执行将全量克隆)",
+	return fmt.Errorf("工作目录超出磁盘配额: %d MB > 上限 %d MB(工作区已清理,下次执行将全量克隆)",
 		size>>20, cfg.Sync.MaxWorkdirMB)
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -76,7 +77,7 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 		return nil, oekiterrors.Wrap(err, "query platform failed")
 	}
 	if platform == nil {
-		return nil, oekiterrors.Errorf("platform not found: %s", key)
+		return nil, fmt.Errorf("platform not found: %s", key)
 	}
 
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
@@ -100,7 +101,7 @@ func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perP
 		return nil, oekiterrors.Wrap(err, "query platform failed")
 	}
 	if platform == nil {
-		return nil, oekiterrors.Errorf("platform not found: %s", key)
+		return nil, fmt.Errorf("platform not found: %s", key)
 	}
 
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
@@ -131,7 +132,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 		return 0, oekiterrors.Wrap(err, "query platform failed")
 	}
 	if platform == nil {
-		return 0, oekiterrors.Errorf("platform not found: %s", key)
+		return 0, fmt.Errorf("platform not found: %s", key)
 	}
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
 	if err != nil {
@@ -202,7 +203,7 @@ func (s *PlatformService) ListReposByPlatform(ctx context.Context, platformKey s
 		return nil, err
 	}
 	if platform == nil {
-		return nil, oekiterrors.Errorf("platform not found: %s", platformKey)
+		return nil, fmt.Errorf("platform not found: %s", platformKey)
 	}
 	return s.repoDAO.FindByPlatformID(platform.ID)
 }
@@ -214,7 +215,7 @@ func (s *PlatformService) CountReposByPlatform(ctx context.Context, platformKey 
 		return 0, err
 	}
 	if platform == nil {
-		return 0, oekiterrors.Errorf("platform not found: %s", platformKey)
+		return 0, fmt.Errorf("platform not found: %s", platformKey)
 	}
 	return s.repoDAO.CountByPlatformID(platform.ID)
 }

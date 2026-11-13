@@ -3,12 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
-	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // cleanupTasks 列出并行清理的三张表及其执行体。
@@ -46,7 +46,7 @@ func (s *Service) CleanupOldData(ctx context.Context, maxAge time.Duration) (eve
 	var errs []error
 	for i, slot := range slots {
 		if slot.Err != nil {
-			errs = append(errs, oekiterrors.Errorf("cleanup %s: %w", cleanupTasks[i].name, slot.Err))
+			errs = append(errs, fmt.Errorf("cleanup %s: %w", cleanupTasks[i].name, slot.Err))
 		}
 	}
 	slog.Info("data cleanup completed", "events_deleted", events, "runs_deleted", runs, "steps_deleted", steps)

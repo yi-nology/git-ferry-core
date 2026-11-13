@@ -168,7 +168,7 @@ func acquireSchemaLock(db *gorm.DB, driver string) (unlock func(), err error) {
 		return nil, oekiterrors.Wrap(err, "acquire schema migrate lock")
 	}
 	if !result.Valid || result.Int64 != 1 {
-		return nil, oekiterrors.Errorf(
+		return nil, fmt.Errorf(
 			"schema migrate lock %s not acquired within %ds (另一实例正在迁移?)", schemaMigrateLockName, schemaMigrateLockTimeoutSec)
 	}
 	var once bool

@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	oekiterrors "github.com/oekit/pkg/errors"
@@ -91,7 +92,7 @@ func ParseTaskPolicies(data []byte) ([]TaskPolicy, error) {
 		return nil, oekiterrors.Wrap(err, "parse policy doc")
 	}
 	if doc.Version != PolicyDocVersion {
-		return nil, oekiterrors.Errorf("unsupported policy doc version %d (want %d)", doc.Version, PolicyDocVersion)
+		return nil, fmt.Errorf("unsupported policy doc version %d (want %d)", doc.Version, PolicyDocVersion)
 	}
 	return doc.Tasks, nil
 }

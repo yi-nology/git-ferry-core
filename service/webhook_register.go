@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
-	oekiterrors "github.com/oekit/pkg/errors"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -29,7 +29,7 @@ func (s *Service) RegisterPlatformWebhook(ctx context.Context, repoKey, callback
 		Events: events,
 	})
 	if err != nil {
-		return nil, oekiterrors.Errorf("create platform webhook failed: %w", err)
+		return nil, fmt.Errorf("create platform webhook failed: %w", err)
 	}
 
 	if secret != "" {

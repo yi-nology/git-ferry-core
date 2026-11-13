@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"fmt"
 	"go/format"
 	"os"
 	"path"
@@ -10,8 +11,6 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5"
-
-	oekiterrors "github.com/oekit/pkg/errors"
 
 	"github.com/yi-nology/git-ferry-core/mirror"
 )
@@ -49,29 +48,29 @@ type MaterializeReport struct {
 //   - `exclude`:命中排除规则。
 func Materialize(ctx context.Context, opts Options, plan *Plan, dir string) (*MaterializeReport, error) {
 	if plan == nil {
-		return nil, oekiterrors.Errorf("plan 不能为空")
+		return nil, fmt.Errorf("plan 不能为空")
 	}
 	tgtRepo, err := git.PlainOpen(opts.TargetDir)
 	if err != nil {
-		return nil, oekiterrors.Errorf("打开目标仓失败: %w", err)
+		return nil, fmt.Errorf("打开目标仓失败: %w", err)
 	}
 	tgtCommit, err := resolveCommit(tgtRepo, opts.TargetRef)
 	if err != nil {
-		return nil, oekiterrors.Errorf("解析目标仓 ref %q 失败: %w", opts.TargetRef, err)
+		return nil, fmt.Errorf("解析目标仓 ref %q 失败: %w", opts.TargetRef, err)
 	}
 
 	// 先把目标树原样铺开:受保护文件、待确认文件都保持目标侧现状。
 	if err := mirror.MaterializeTree(tgtRepo.Storer, tgtCommit.TreeHash, dir); err != nil {
-		return nil, oekiterrors.Errorf("物化目标树失败: %w", err)
+		return nil, fmt.Errorf("物化目标树失败: %w", err)
 	}
 
 	srcRepo, err := git.PlainOpen(opts.SourceDir)
 	if err != nil {
-		return nil, oekiterrors.Errorf("打开源仓失败: %w", err)
+		return nil, fmt.Errorf("打开源仓失败: %w", err)
 	}
 	replayer, err := mirror.NewRewriter(opts.Rules)
 	if err != nil {
-		return nil, oekiterrors.Errorf("编译身份规则失败: %w", err)
+		return nil, fmt.Errorf("编译身份规则失败: %w", err)
 	}
 
 	srcFiles, err := sourceFileIndex(srcRepo, opts.SourceRef)
@@ -95,7 +94,7 @@ func Materialize(ctx context.Context, opts Options, plan *Plan, dir string) (*Ma
 				return nil, err
 			}
 			if err := os.WriteFile(target, content, 0o644); err != nil {
-				return nil, oekiterrors.Errorf("写入 %s 失败: %w", f.Path, err)
+				return nil, fmt.Errorf("写入 %s 失败: %w", f.Path, err)
 			}
 			rep.AppliedFiles = append(rep.AppliedFiles, f.Path)
 		case DispositionPortWithScrub:
@@ -128,7 +127,7 @@ func Materialize(ctx context.Context, opts Options, plan *Plan, dir string) (*Ma
 				return nil, err
 			}
 			if err := os.WriteFile(target, []byte(res.Content), 0o644); err != nil {
-				return nil, oekiterrors.Errorf("写入 %s 失败: %w", f.Path, err)
+				return nil, fmt.Errorf("写入 %s 失败: %w", f.Path, err)
 			}
 			rep.ResolvedFiles = append(rep.ResolvedFiles, f.Path)
 		case DispositionPreserve:
@@ -152,7 +151,7 @@ func portContent(srcRepo *git.Repository, srcFiles map[string]treeFile,
 
 	entry, ok := srcFiles[f.SourcePath]
 	if !ok {
-		return nil, oekiterrors.Errorf("源仓找不到 %s(计划与仓库不一致)", f.SourcePath)
+		return nil, fmt.Errorf("源仓找不到 %s(计划与仓库不一致)", f.SourcePath)
 	}
 	content, err := readBlob(srcRepo, entry.hash)
 	if err != nil {
@@ -165,11 +164,11 @@ func portContent(srcRepo *git.Repository, srcFiles map[string]treeFile,
 func sourceFileIndex(repo *git.Repository, ref string) (map[string]treeFile, error) {
 	commit, err := resolveCommit(repo, ref)
 	if err != nil {
-		return nil, oekiterrors.Errorf("解析源仓 ref %q 失败: %w", ref, err)
+		return nil, fmt.Errorf("解析源仓 ref %q 失败: %w", ref, err)
 	}
 	tree, err := commit.Tree()
 	if err != nil {
-		return nil, oekiterrors.Errorf("读取源仓 tree 失败: %w", err)
+		return nil, fmt.Errorf("读取源仓 tree 失败: %w", err)
 	}
 	return flattenTree(tree)
 }
@@ -279,22 +278,22 @@ func countFiles(dir string) int {
 //  2. 拼完之后再确认它仍在目标目录内(防符号链接与编码差异)。
 func safeJoin(dir, rel string) (string, error) {
 	if rel == "" {
-		return "", oekiterrors.Errorf("仓库内路径不能为空")
+		return "", fmt.Errorf("仓库内路径不能为空")
 	}
 	slashed := filepath.ToSlash(rel)
 	if strings.HasPrefix(slashed, "/") {
-		return "", oekiterrors.Errorf("仓库内路径必须是相对路径: %s", rel)
+		return "", fmt.Errorf("仓库内路径必须是相对路径: %s", rel)
 	}
 	// **先按原文检查 `..`**:规范化会把 `..` 消掉,那样虽然不越界,
 	// 却是**静默改了路径语义**(用户以为写到 A,实际写到 B)—— 直接拒绝更诚实。
 	for _, seg := range strings.Split(slashed, "/") {
 		if seg == ".." {
-			return "", oekiterrors.Errorf("仓库内路径不能含 ..: %s", rel)
+			return "", fmt.Errorf("仓库内路径不能含 ..: %s", rel)
 		}
 	}
 	clean := path.Clean("/" + slashed)
 	if clean == "/" {
-		return "", oekiterrors.Errorf("非法的仓库内路径: %s", rel)
+		return "", fmt.Errorf("非法的仓库内路径: %s", rel)
 	}
 	target := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(clean, "/")))
 	// 再确认一次:拼完仍在目标目录内。
@@ -307,7 +306,7 @@ func safeJoin(dir, rel string) (string, error) {
 		return "", err
 	}
 	if absTarget != absDir && !strings.HasPrefix(absTarget, absDir+string(os.PathSeparator)) {
-		return "", oekiterrors.Errorf("路径越界: %s", rel)
+		return "", fmt.Errorf("路径越界: %s", rel)
 	}
 	return target, nil
 }

@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"time"
 
 	"github.com/google/uuid"
-	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
@@ -23,10 +23,10 @@ func validateBranchName(branch string) error {
 		return nil // 空分支名由调用方处理(通常表示使用默认分支)
 	}
 	if !validBranchName.MatchString(branch) {
-		return oekiterrors.Errorf("invalid branch name %q: only alphanumeric, '.', '_', '/', '-' are allowed", branch)
+		return fmt.Errorf("invalid branch name %q: only alphanumeric, '.', '_', '/', '-' are allowed", branch)
 	}
 	if branch == "." || branch == ".." {
-		return oekiterrors.Errorf("invalid branch name %q", branch)
+		return fmt.Errorf("invalid branch name %q", branch)
 	}
 	return nil
 }
@@ -95,7 +95,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 	if key == "" {
 		key = uuid.New().String()
 	} else if !validTaskKey(key) {
-		return nil, oekiterrors.Errorf("invalid task key %q: only [a-zA-Z0-9-]{1,64}", key)
+		return nil, fmt.Errorf("invalid task key %q: only [a-zA-Z0-9-]{1,64}", key)
 	}
 	task := &model.SyncTask{
 		Key:                key,

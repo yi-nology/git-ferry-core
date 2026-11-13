@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/oekit/pkg/convert"
@@ -36,13 +37,13 @@ func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride 
 	if token == "" {
 		resolved, err := ResolvePlatformToken(p)
 		if err != nil {
-			return nil, oekiterrors.Errorf("resolve platform token: %w", err)
+			return nil, fmt.Errorf("resolve platform token: %w", err)
 		}
 		token = resolved
 	}
 	prov, err := mgr.Get(providerConfig(p, token, hooks))
 	if err != nil {
-		return nil, oekiterrors.Errorf("create provider failed: %w", err)
+		return nil, fmt.Errorf("create provider failed: %w", err)
 	}
 	return prov, nil
 }

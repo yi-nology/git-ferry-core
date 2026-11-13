@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // ConflictRuleKind 是冲突自动判据的种类。
@@ -85,7 +83,7 @@ func compilePatterns(custom, defaults []string) ([]*regexp.Regexp, error) {
 	for _, p := range src {
 		re, err := regexp.Compile(p)
 		if err != nil {
-			return nil, oekiterrors.Errorf("判据正则非法 %q: %w", p, err)
+			return nil, fmt.Errorf("判据正则非法 %q: %w", p, err)
 		}
 		out = append(out, re)
 	}

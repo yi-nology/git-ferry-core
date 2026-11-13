@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
-	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/tpl"
@@ -91,7 +91,7 @@ func (s *Service) ApplyTemplate(ctx context.Context, templateID string, dryRun b
 	eff, chain, err := s.templates.Resolve(templateID)
 	if err != nil {
 		if errors.Is(err, tpl.ErrCycle) {
-			return nil, oekiterrors.Errorf("%w: %s", ErrTemplateCycle, strings.Join(chain, " → "))
+			return nil, fmt.Errorf("%w: %s", ErrTemplateCycle, strings.Join(chain, " → "))
 		}
 		return nil, ErrTemplateNotFound
 	}

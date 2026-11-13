@@ -232,14 +232,14 @@ func (e *Executor) prepareRunContext(ctx context.Context, task *model.SyncTask, 
 		return nil, oekiterrors.Wrap(err, "query source repo failed")
 	}
 	if sourceRepo == nil {
-		return nil, oekiterrors.Errorf("source repo not found: %s", task.SourceRepoKey)
+		return nil, fmt.Errorf("source repo not found: %s", task.SourceRepoKey)
 	}
 	targetRepo, err := e.service.GetRepoByKey(task.TargetRepoKey)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query target repo failed")
 	}
 	if targetRepo == nil {
-		return nil, oekiterrors.Errorf("target repo not found: %s", task.TargetRepoKey)
+		return nil, fmt.Errorf("target repo not found: %s", task.TargetRepoKey)
 	}
 
 	// 空分支回退默认分支:避免坏 refspec 静默零推送
@@ -767,14 +767,14 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 			}
 		}
 		if len(branches) == 0 {
-			return false, "", "", oekiterrors.Errorf("no local branches match %q", task.SourceBranch)
+			return false, "", "", fmt.Errorf("no local branches match %q", task.SourceBranch)
 		}
 		for _, b := range branches {
 			refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 		}
 	} else {
 		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
-			return false, "", "", oekiterrors.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+			return false, "", "", fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
 		}
 		// **源端还有这个分支吗?**
 		//
@@ -934,7 +934,7 @@ func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, ta
 		}
 	}
 	if len(failures) > 0 {
-		return oekiterrors.Errorf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+		return fmt.Errorf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
 	}
 	slog.Info("已删除目标上源端已不存在的分支",
 		"task", task.Key, "count", len(victims), "branches", strings.Join(victims, ","))

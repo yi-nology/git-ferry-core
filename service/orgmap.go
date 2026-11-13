@@ -1,9 +1,8 @@
 package service
 
 import (
+	"fmt"
 	"strings"
-
-	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // OrgMapStrategy 批量镜像时目标仓落点策略（对标 gitea-mirror）。
@@ -32,7 +31,7 @@ func ParseStrategy(s string) (OrgMapStrategy, error) {
 	case OrgMapMixed:
 		return OrgMapMixed, nil
 	default:
-		return "", oekiterrors.Errorf("unknown org_mapping %q (preserve|single|flat|mixed)", s)
+		return "", fmt.Errorf("unknown org_mapping %q (preserve|single|flat|mixed)", s)
 	}
 }
 
@@ -91,7 +90,7 @@ func ResolveOrgTarget(sourceOwner, sourceRepo string, o OrgMapOptions) (OrgMapRe
 		}
 	}
 	if repo == "" {
-		return OrgMapResult{}, oekiterrors.Errorf("source repo is empty")
+		return OrgMapResult{}, fmt.Errorf("source repo is empty")
 	}
 
 	strategy := o.Strategy
@@ -114,26 +113,26 @@ func ResolveOrgTarget(sourceOwner, sourceRepo string, o OrgMapOptions) (OrgMapRe
 		if o.TargetOrg != "" {
 			owner = o.TargetOrg
 		} else if o.RequireTarget {
-			return OrgMapResult{}, oekiterrors.Errorf("org_mapping=single requires target_org")
+			return OrgMapResult{}, fmt.Errorf("org_mapping=single requires target_org")
 		}
 	case OrgMapFlat:
 		if o.TargetUser != "" {
 			owner = o.TargetUser
 		} else if o.RequireTarget {
-			return OrgMapResult{}, oekiterrors.Errorf("org_mapping=flat requires target_user")
+			return OrgMapResult{}, fmt.Errorf("org_mapping=flat requires target_user")
 		}
 	case OrgMapMixed:
 		if o.SourceIsPersonal {
 			if o.TargetUser != "" {
 				owner = o.TargetUser
 			} else if o.RequireTarget {
-				return OrgMapResult{}, oekiterrors.Errorf("org_mapping=mixed (personal) requires target_user")
+				return OrgMapResult{}, fmt.Errorf("org_mapping=mixed (personal) requires target_user")
 			}
 		} else if o.MixedOrgToTarget && o.TargetOrg != "" {
 			owner = o.TargetOrg
 		}
 	default:
-		return OrgMapResult{}, oekiterrors.Errorf("unknown org_mapping %q (preserve|single|flat|mixed)", strategy)
+		return OrgMapResult{}, fmt.Errorf("unknown org_mapping %q (preserve|single|flat|mixed)", strategy)
 	}
 
 	out := OrgMapResult{Owner: owner, Repo: repo}
@@ -153,7 +152,7 @@ func splitOwnerRepo(key string) (string, string, error) {
 	case 2:
 		return parts[0], parts[1], nil
 	default:
-		return "", "", oekiterrors.Errorf("cannot parse owner/repo from %q", key)
+		return "", "", fmt.Errorf("cannot parse owner/repo from %q", key)
 	}
 }
 

@@ -125,7 +125,7 @@ func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *m
 		refs = append(refs, "refs/heads/"+b)
 	}
 	if len(refs) == 0 {
-		return nil, oekiterrors.Errorf("no local branches match %q", task.SourceBranch)
+		return nil, fmt.Errorf("no local branches match %q", task.SourceBranch)
 	}
 	return refs, nil
 }
@@ -169,7 +169,7 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error)
 		removed++
 	}
 	if len(failures) > 0 {
-		return removed, oekiterrors.Errorf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+		return removed, fmt.Errorf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
 	}
 	return removed, nil
 }

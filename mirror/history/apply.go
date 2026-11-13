@@ -15,8 +15,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 
-	oekiterrors "github.com/oekit/pkg/errors"
-
 	"github.com/yi-nology/git-ferry-core/mirror"
 )
 
@@ -121,10 +119,10 @@ func (r *ApplyResult) AppliedFileList() []string {
 // 保证「这批改动来自哪个源提交」在目标侧一目了然,回滚也能按提交回滚。
 func Apply(ctx context.Context, opts ApplyOptions) (retRes *ApplyResult, retErr error) {
 	if opts.Plan == nil {
-		return nil, oekiterrors.Errorf("plan 不能为空")
+		return nil, fmt.Errorf("plan 不能为空")
 	}
 	if opts.TargetDir == "" || opts.SourceDir == "" {
-		return nil, oekiterrors.Errorf("SourceDir 与 TargetDir 都不能为空")
+		return nil, fmt.Errorf("SourceDir 与 TargetDir 都不能为空")
 	}
 	branch := opts.TargetRef
 	if branch == "" {
@@ -132,12 +130,12 @@ func Apply(ctx context.Context, opts ApplyOptions) (retRes *ApplyResult, retErr 
 	}
 	replayer, err := mirror.NewRewriter(opts.Rules)
 	if err != nil {
-		return nil, oekiterrors.Errorf("编译身份规则失败: %w", err)
+		return nil, fmt.Errorf("编译身份规则失败: %w", err)
 	}
 
 	srcRepo, err := git.PlainOpen(opts.SourceDir)
 	if err != nil {
-		return nil, oekiterrors.Errorf("打开源仓失败: %w", err)
+		return nil, fmt.Errorf("打开源仓失败: %w", err)
 	}
 
 	// 清掉过期的移植产物:产物只在「apply 之后紧跟着的那次 push」里有用,
@@ -183,20 +181,20 @@ func Apply(ctx context.Context, opts ApplyOptions) (retRes *ApplyResult, retErr 
 		Tags:          git.AllTags,
 	})
 	if err != nil {
-		return nil, oekiterrors.Errorf("克隆目标仓失败: %w", err)
+		return nil, fmt.Errorf("克隆目标仓失败: %w", err)
 	}
 
 	headRef, err := workRepo.Reference(plumbing.NewBranchReferenceName(branch), true)
 	if err != nil {
-		return nil, oekiterrors.Errorf("解析目标分支 %s 失败: %w", branch, err)
+		return nil, fmt.Errorf("解析目标分支 %s 失败: %w", branch, err)
 	}
 	baseCommit, err := workRepo.CommitObject(headRef.Hash())
 	if err != nil {
-		return nil, oekiterrors.Errorf("读取目标 HEAD 失败: %w", err)
+		return nil, fmt.Errorf("读取目标 HEAD 失败: %w", err)
 	}
 	baseTree, err := baseCommit.Tree()
 	if err != nil {
-		return nil, oekiterrors.Errorf("读取目标 tree 失败: %w", err)
+		return nil, fmt.Errorf("读取目标 tree 失败: %w", err)
 	}
 
 	// 当前文件表(路径 → 条目),随提交推进更新。
@@ -280,22 +278,22 @@ func Apply(ctx context.Context, opts ApplyOptions) (retRes *ApplyResult, retErr 
 	if len(res.Commits) > 0 {
 		if err := workRepo.Storer.SetReference(plumbing.NewHashReference(
 			plumbing.NewBranchReferenceName(branch), parentHash)); err != nil {
-			return nil, oekiterrors.Errorf("更新分支引用失败: %w", err)
+			return nil, fmt.Errorf("更新分支引用失败: %w", err)
 		}
 		// 工作区的 HEAD 也要指过去,否则 checkout 状态与 ref 不一致。
 		if err := workRepo.Storer.SetReference(plumbing.NewSymbolicReference(
 			plumbing.HEAD, plumbing.NewBranchReferenceName(branch))); err != nil {
-			return nil, oekiterrors.Errorf("更新 HEAD 失败: %w", err)
+			return nil, fmt.Errorf("更新 HEAD 失败: %w", err)
 		}
 		// **把新 tree 检出到工作区**:工作区目录就是「按计划应用后的目标树」。
 		// 门禁(gofmt / 类型检查)必须验这份产物,而不是目标树的旧内容。
 		// 不检出的话,工作区里还是旧 HEAD 的文件,门禁会验错对象。
 		wt, err := workRepo.Worktree()
 		if err != nil {
-			return nil, oekiterrors.Errorf("获取工作区失败: %w", err)
+			return nil, fmt.Errorf("获取工作区失败: %w", err)
 		}
 		if err := wt.Checkout(&git.CheckoutOptions{Hash: parentHash, Force: true}); err != nil {
-			return nil, oekiterrors.Errorf("检出新 tree 失败: %w", err)
+			return nil, fmt.Errorf("检出新 tree 失败: %w", err)
 		}
 		// **HEAD 必须是指向分支的符号引用**。
 		//
@@ -308,7 +306,7 @@ func Apply(ctx context.Context, opts ApplyOptions) (retRes *ApplyResult, retErr 
 		//   - 门禁/核对脚本按 HEAD 取树时,取到的是游离态而不是分支。
 		if err := workRepo.Storer.SetReference(plumbing.NewSymbolicReference(
 			plumbing.HEAD, plumbing.NewBranchReferenceName(branch))); err != nil {
-			return nil, oekiterrors.Errorf("恢复 HEAD 符号引用失败: %w", err)
+			return nil, fmt.Errorf("恢复 HEAD 符号引用失败: %w", err)
 		}
 	}
 	return res, nil
@@ -426,11 +424,11 @@ func applyFileContent(opts ApplyOptions, replayer *mirror.Rewriter,
 
 	fp, ok := findPlanFile(opts.Plan, path)
 	if !ok {
-		return ScrubResult{}, oekiterrors.Errorf("计划里找不到 %s", path)
+		return ScrubResult{}, fmt.Errorf("计划里找不到 %s", path)
 	}
 	entry, ok := srcFiles[fp.SourcePath]
 	if !ok {
-		return ScrubResult{}, oekiterrors.Errorf("源仓找不到 %s", fp.SourcePath)
+		return ScrubResult{}, fmt.Errorf("源仓找不到 %s", fp.SourcePath)
 	}
 	content, err := readBlob(srcRepo, entry.hash)
 	if err != nil {

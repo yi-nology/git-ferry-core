@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
@@ -279,7 +278,7 @@ func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event 
 		}
 	}
 	if len(failures) > 0 {
-		return oekiterrors.Errorf("%d 个任务触发失败:%s", len(failures), strings.Join(failures, "; "))
+		return fmt.Errorf("%d 个任务触发失败:%s", len(failures), strings.Join(failures, "; "))
 	}
 	return nil
 }

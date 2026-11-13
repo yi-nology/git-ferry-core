@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -132,7 +131,7 @@ func (s *Service) RestoreMetadata(ctx context.Context, req RestoreRequest) (*Res
 	}
 	prov, err := s.ProviderForPlatform(plat, "")
 	if err != nil {
-		return nil, oekiterrors.Errorf("create provider: %w", err)
+		return nil, fmt.Errorf("create provider: %w", err)
 	}
 	return s.runRestore(ctx, req, snapDir, snap, plat, owner, repoName, prov), nil
 }
@@ -236,7 +235,7 @@ func latestMetadataSnapshot(backupDir, repoKey string) (string, error) {
 	root := filepath.Join(backupDir, "metadata", strutil.SanitizePathToken(repoKey))
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", oekiterrors.Errorf("no snapshot for %s: %w", repoKey, err)
+		return "", fmt.Errorf("no snapshot for %s: %w", repoKey, err)
 	}
 	var dirs []string
 	for _, e := range entries {
@@ -245,7 +244,7 @@ func latestMetadataSnapshot(backupDir, repoKey string) (string, error) {
 		}
 	}
 	if len(dirs) == 0 {
-		return "", oekiterrors.Errorf("no snapshot for %s", repoKey)
+		return "", fmt.Errorf("no snapshot for %s", repoKey)
 	}
 	sort.Strings(dirs)
 	return filepath.Join(root, dirs[len(dirs)-1]), nil

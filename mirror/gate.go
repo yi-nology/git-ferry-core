@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"fmt"
 	"go/build"
 	"os"
 	"path/filepath"
@@ -9,8 +10,6 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/packages"
-
-	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // TypeCheckGate 对 dir 下的 Go 模块做全量类型检查,作为推送前的编译门禁。
@@ -34,17 +33,17 @@ func TypeCheckGate(ctx context.Context, dir string) error {
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		return oekiterrors.Errorf("加载包失败: %w", err)
+		return fmt.Errorf("加载包失败: %w", err)
 	}
 	if len(pkgs) == 0 {
-		return oekiterrors.Errorf("模块内未发现任何 Go 包")
+		return fmt.Errorf("模块内未发现任何 Go 包")
 	}
 
 	var firstErr error
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		for _, e := range p.Errors {
 			if firstErr == nil {
-				firstErr = oekiterrors.Errorf("%s: %s", e.Pos, e.Msg)
+				firstErr = fmt.Errorf("%s: %s", e.Pos, e.Msg)
 			}
 		}
 	})
@@ -57,7 +56,7 @@ func TypeCheckGate(ctx context.Context, dir string) error {
 		// 却会一路流进模型上下文与日志(门禁错误是 agent 工具的返回内容)。
 		//
 		// 只动路径:报错里的 file:line:col 位置保持原样 —— 那是诊断的关键。
-		return oekiterrors.Errorf("类型检查失败: %s", sanitizeLocalPaths(firstErr.Error()))
+		return fmt.Errorf("类型检查失败: %s", sanitizeLocalPaths(firstErr.Error()))
 	}
 	return nil
 }

@@ -1,13 +1,13 @@
 package mirror
 
 import (
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
-	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // NormalizeGitURL 把 git 位置串归一化成可比较形态:
@@ -87,7 +87,7 @@ func guardSelfPublish(repo *git.Repository, repoDir, mirrorURL, targetModule, re
 	if strings.HasPrefix(norm, "local:") {
 		p := strings.TrimPrefix(norm, "local:")
 		if p == filepath.Clean(repoDir) {
-			return oekiterrors.Errorf(
+			return fmt.Errorf(
 				"自毁保护:镜像目标 %s 就是源仓库工作区本身,拒绝发布", repoDir)
 		}
 	}
@@ -104,7 +104,7 @@ func guardSelfPublish(repo *git.Repository, repoDir, mirrorURL, targetModule, re
 			}
 			for _, u := range cfg.Remotes[name].URLs {
 				if SameGitLocation(u, mirrorURL) {
-					return oekiterrors.Errorf(
+					return fmt.Errorf(
 						"自毁保护:镜像目标与源仓库的远端 %s(%s)同址,拒绝发布 —— "+
 							"镜像目标必须是与源仓库不同的仓库", name, u)
 				}
@@ -115,7 +115,7 @@ func guardSelfPublish(repo *git.Repository, repoDir, mirrorURL, targetModule, re
 	if isNetworkURL(mirrorURL) && hostLikeModule(targetModule) {
 		expected := strings.ToLower(firstSegment(targetModule)) + "/" + restOfModulePath(targetModule)
 		if NormalizeGitURL(mirrorURL) != expected {
-			return oekiterrors.Errorf(
+			return fmt.Errorf(
 				"自毁保护:目标 module 身份 %s 与镜像目标 URL 不一致(归一化后为 %s),"+
 					"拒绝发布 —— 检查通道目标的 targetModule 与 repoUrl 是否指向同一仓库", targetModule, NormalizeGitURL(mirrorURL))
 		}
@@ -154,7 +154,7 @@ func CheckTargetAgainstSource(sourceURL, targetURL string) error {
 		return nil
 	}
 	if SameGitLocation(sourceURL, targetURL) {
-		return oekiterrors.Errorf(
+		return fmt.Errorf(
 			"自毁保护:目标仓库(%s)与源仓库同址,拒绝 —— 镜像目标必须是与源仓库不同的仓库", targetURL)
 	}
 	return nil

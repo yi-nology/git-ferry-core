@@ -2,10 +2,9 @@ package mirror
 
 import (
 	"bytes"
+	"fmt"
 	"go/format"
 	"strings"
-
-	oekiterrors "github.com/oekit/pkg/errors"
 )
 
 // IdentityKind 身份规则的匹配语义,决定边界如何判定。
@@ -77,18 +76,18 @@ func NewRewriter(rules []IdentityRule) (*Rewriter, error) {
 	compiled := make([]compiledRule, 0, len(rules))
 	for i, r := range rules {
 		if r.Source == "" {
-			return nil, oekiterrors.Errorf("第 %d 条身份规则的 Source 不能为空", i+1)
+			return nil, fmt.Errorf("第 %d 条身份规则的 Source 不能为空", i+1)
 		}
 		if r.Target == r.Source {
-			return nil, oekiterrors.Errorf("第 %d 条身份规则的 Source 与 Target 相同(%s),无改写意义", i+1, r.Source)
+			return nil, fmt.Errorf("第 %d 条身份规则的 Source 与 Target 相同(%s),无改写意义", i+1, r.Source)
 		}
 		if r.Target == "" && r.Kind == KindModule {
 			// 剥离模块路径会留下 import "" 这类语法残骸,
 			// 正确做法是让整条 import 走类型门禁报错,而不是产出坏代码。
-			return nil, oekiterrors.Errorf("第 %d 条身份规则(Kind=module)不支持剥离:Target 不能为空", i+1)
+			return nil, fmt.Errorf("第 %d 条身份规则(Kind=module)不支持剥离:Target 不能为空", i+1)
 		}
 		if r.Kind != KindModule && r.Kind != KindHost && r.Kind != KindLiteral {
-			return nil, oekiterrors.Errorf("第 %d 条身份规则的 Kind 非法: %d", i+1, int(r.Kind))
+			return nil, fmt.Errorf("第 %d 条身份规则的 Kind 非法: %d", i+1, int(r.Kind))
 		}
 		compiled = append(compiled, compiledRule{
 			IdentityRule: r,

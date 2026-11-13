@@ -45,7 +45,7 @@ func expandBranchSpec(sourceSpec string, listRefs func() ([]string, error)) (bra
 		}
 	}
 	if len(out) == 0 {
-		return nil, true, oekiterrors.Errorf("branch glob %q matched nothing", spec)
+		return nil, true, fmt.Errorf("branch glob %q matched nothing", spec)
 	}
 	return out, true, nil
 }

@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Changed（三方依赖全量升级 + oekit Errorf 收敛）
+
+- **依赖地板全量升级**:oekit/pkg v0.39→**v0.47.1**(含 Errorf 兼容层
+  回归,#378 删除→#401/#405 恢复——恢复理由正是跨 org 存量消费方
+  编译断裂)、go-git-platform v0.121→**v0.131.0**(清零战役 Y4 六单
+  #141-#146)、oekit/concurrency v0.34、modernc/sqlite 等全套 `go get -u`。
+  吃到的 issue 红利:SDK Y4 六单、guardx/concurrency/pkg 前期收编项
+  随版本生效;go.work 恢复 use 本地 SDK。
+- **oekiterrors.Errorf → fmt.Errorf 全量收敛(48 文件 286 处)**:
+  上游注释明示兼容层「不是回退收敛方向」,按建议迁 stdlib——
+  这三样特殊语义(nil-safe %w/空格式串返 nil/非 error %w 按 %v)
+  在本仓调用点均不依赖(纯格式化与非 nil %w),逐点等价。
+  staticcheck SA1019 归零。
+
 ### Added（P3 Repository Governance——Issue/PR 元数据迁移,切片 6）
 
 - **`Service.MigrateRepoMetadata` Issue/PR 元数据高保真迁移**(评审 P3

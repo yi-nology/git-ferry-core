@@ -2,9 +2,9 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"os"
 
-	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/sethvargo/go-envconfig"
 	"gopkg.in/yaml.v3"
 )
@@ -198,7 +198,7 @@ func LoadConfig(path string) (*Config, error) {
 		Lookuper:         envconfig.OsLookuper(),
 		DefaultOverwrite: true,
 	}); err != nil {
-		return nil, oekiterrors.Errorf("processing environment variables: %w", err)
+		return nil, fmt.Errorf("processing environment variables: %w", err)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -219,13 +219,13 @@ func (c *Config) Validate() error {
 		c.Server.Port = DefaultPort
 	}
 	if c.Database.Driver == "" {
-		return oekiterrors.Errorf("database driver is required")
+		return fmt.Errorf("database driver is required")
 	}
 	if c.Database.DSN == "" {
-		return oekiterrors.Errorf("database dsn is required")
+		return fmt.Errorf("database dsn is required")
 	}
 	if c.Database.Driver != DriverMySQL && c.Database.Driver != DriverSQLite {
-		return oekiterrors.Errorf("unsupported database driver: %s", c.Database.Driver)
+		return fmt.Errorf("unsupported database driver: %s", c.Database.Driver)
 	}
 	if c.Database.MaxIdleConns <= 0 {
 		c.Database.MaxIdleConns = DefaultMaxIdleConns

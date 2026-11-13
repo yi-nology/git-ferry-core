@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
-	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
@@ -91,7 +91,7 @@ func (s *Service) ImportPublicOrg(ctx context.Context, req PublicOrgImportReques
 func listPublicOrgRepos(ctx context.Context, s *Service, plat *model.Platform, org string, max int) ([]OrgRepoItem, []string, error) {
 	prov, err := s.ProviderForPlatform(plat, "")
 	if err != nil {
-		return nil, nil, oekiterrors.Errorf("create provider: %w", err)
+		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
 	perPage := sdkprov.MaxPerPage
 	maxPages := maxPublicOrgPages
@@ -338,7 +338,7 @@ func (s *Service) ListStarredRepos(ctx context.Context, platformKey string, max 
 	}
 	prov, perr := s.ProviderForPlatform(plat, "")
 	if perr != nil {
-		return nil, oekiterrors.Errorf("create provider: %w", perr)
+		return nil, fmt.Errorf("create provider: %w", perr)
 	}
 	if !prov.Capabilities().Starred {
 		return nil, ErrStarredUnsupported
