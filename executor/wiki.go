@@ -50,6 +50,20 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	srcAuth := e.authConfig(ctx, srcRepo, srcPlat)
 	dstAuth := e.authConfig(ctx, dstRepo, dstPlat)
 
+	// Clone Cache 自愈(与 cloneFetchStage 决策点同款):共享仓被淘汰/被运维
+	// 手动删除后,存量 wiki workdir 的 objects/info/alternates 悬空——git fetch
+	// 对此**不报错**(exit 0 只告警并把整段历史重下一遍),fetch 分支永远不会
+	// 触发修复,而 ensure() 只在 clone 分支跑 ⇒ wiki 缓存条目删后永不重建(#25)。
+	// 主动检出:清掉 wikiDir,下面的 Stat 自然走 clone 分支,ensure 重新种入
+	// 共享仓——model.SyncConfig.CloneCacheDir 字段文档对 wiki 的承诺才成立。
+	healed, herr := healBrokenAlternates(wikiDir)
+	if herr != nil {
+		return oekiterrors.Wrap(herr, "heal broken wiki alternates failed", "wiki_dir", wikiDir)
+	}
+	if healed {
+		details.WriteString("  wiki: shared clone cache missing, rebuilt with full clone\n")
+	}
+
 	// clone or fetch
 	if _, err := os.Stat(filepath.Join(wikiDir, ".git")); os.IsNotExist(err) {
 		details.WriteString("  wiki: clone " + srcURL + "\n")

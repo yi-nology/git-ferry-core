@@ -475,6 +475,246 @@ func TestCloneCache_SecondRunFetchesWithAlternates(t *testing.T) {
 	require.NoError(t, err, "alternates must survive the fetch path")
 }
 
+// TestCloneCache_DamagedEntrySelfHeals(#21):半删损坏的缓存条目(HEAD/refs 没了、
+// objects 还在)必须被检出——键锁内清除并重种,此后每次执行照常成功;
+// 只查 .git 目录存在的旧判据会把坏仓交给 --reference,该源永久 fail-closed。
+func TestCloneCache_DamagedEntrySelfHeals(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	srcURL := newCloneCacheSource(t)
+	ctx := context.Background()
+	repo := &model.Repo{CloneURL: srcURL}
+	task := &model.SyncTask{SourceBranch: "main"}
+
+	// 首轮:正常种入。
+	wd1 := filepath.Join(t.TempDir(), "wd1")
+	require.NoError(t, e.cloneRepo(ctx, wd1, repo, task, nil))
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "expected one seeded entry, got %v", entries)
+	entry := entries[0]
+
+	// 半删损坏(磁盘压力淘汰中断的 RemoveAll 形态):HEAD/refs 没了、objects 还在。
+	require.NoError(t, os.Remove(filepath.Join(entry, ".git", "HEAD")))
+	require.NoError(t, os.RemoveAll(filepath.Join(entry, ".git", "refs")))
+	_, err = os.Stat(filepath.Join(entry, ".git", "objects"))
+	require.NoError(t, err, "precondition: objects dir still present")
+	require.False(t, cacheEntryHealthy(entry), "precondition: entry structurally damaged")
+
+	// 损坏后第一次执行:必须自愈重种(旧实现:每轮都以
+	// "reference path is not a git repository" 永久失败)。
+	wd2 := filepath.Join(t.TempDir(), "wd2")
+	require.NoError(t, e.cloneRepo(ctx, wd2, repo, task, nil),
+		"damaged entry must self-heal and re-seed, not fail forever")
+	require.True(t, cacheEntryHealthy(entry), "entry must be structurally restored")
+	alt, err := os.ReadFile(filepath.Join(wd2, ".git", "objects", "info", "alternates"))
+	require.NoError(t, err, "healed run must borrow via alternates")
+	require.Contains(t, string(alt), cacheDir, "workdir must reference the rebuilt entry")
+
+	// 第三次:健康 hit 照常,且自愈不产生重复条目。
+	wd3 := filepath.Join(t.TempDir(), "wd3")
+	require.NoError(t, e.cloneRepo(ctx, wd3, repo, task, nil), "healthy hit must keep working")
+	entries, err = filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "self-heal must not duplicate entries, got %v", entries)
+}
+
+// TestCloneCache_JunkEntryReplaced(#21 的 Rename 半分支):条目路径被非 git 残留
+// 目录占住时——旧实现 Clone→Rename 永远撞非空目录,该源每轮都报
+// "commit clone cache entry failed" 永久 fail-closed;新实现清掉残留重种。
+func TestCloneCache_JunkEntryReplaced(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	srcURL := newCloneCacheSource(t)
+	entry := cacheEntryPath(cacheDir, srcURL)
+	require.NoError(t, os.MkdirAll(filepath.Join(entry, "leftover"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(entry, "leftover", "junk.txt"), []byte("x"), 0o644))
+
+	wd := filepath.Join(t.TempDir(), "wd")
+	require.NoError(t, e.cloneRepo(context.Background(), wd,
+		&model.Repo{CloneURL: srcURL}, &model.SyncTask{SourceBranch: "main"}, nil),
+		"non-git junk entry must be replaced, not fail forever")
+	require.True(t, cacheEntryHealthy(entry), "junk must be replaced by a healthy entry")
+	_, err = os.Stat(filepath.Join(entry, "leftover"))
+	require.True(t, os.IsNotExist(err), "junk residue must be gone")
+}
+
+// TestCommitCacheEntry:tmp→entry 落位的两条防御路径——
+// ①目标非空残留:清掉重试一次(不重试则该条目永久 fail-closed);
+// ②目标已是健康仓:沿用目标、丢弃 tmp(不许把健康仓清掉)。
+func TestCommitCacheEntry(t *testing.T) {
+	newTmp := func(t *testing.T, tmp string) {
+		t.Helper()
+		require.NoError(t, os.MkdirAll(tmp, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, "marker.txt"), []byte("seeded"), 0o644))
+	}
+
+	t.Run("cleans non-empty junk target and retries", func(t *testing.T) {
+		dir := t.TempDir()
+		entry := filepath.Join(dir, "repo.git")
+		tmp := entry + ".tmp"
+		require.NoError(t, os.MkdirAll(filepath.Join(entry, "junk"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(entry, "junk", "x.txt"), []byte("x"), 0o644))
+		newTmp(t, tmp)
+
+		require.NoError(t, commitCacheEntry(tmp, entry))
+		require.FileExists(t, filepath.Join(entry, "marker.txt"), "tmp must land after cleanup")
+		_, err := os.Stat(filepath.Join(entry, "junk"))
+		require.True(t, os.IsNotExist(err), "junk target must be gone")
+		_, err = os.Stat(tmp)
+		require.True(t, os.IsNotExist(err), "tmp must be consumed")
+	})
+
+	t.Run("keeps healthy target and discards tmp", func(t *testing.T) {
+		dir := t.TempDir()
+		entry := filepath.Join(dir, "repo.git")
+		tmp := entry + ".tmp"
+		// 造一棵结构健康的条目(HEAD 指针 + objects/ + refs/)。
+		gitDir := filepath.Join(entry, ".git")
+		require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "objects"), 0o750))
+		require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "refs"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"),
+			[]byte("ref: refs/heads/main\n"), 0o644))
+		require.True(t, cacheEntryHealthy(entry))
+		newTmp(t, tmp)
+
+		require.NoError(t, commitCacheEntry(tmp, entry))
+		require.FileExists(t, filepath.Join(gitDir, "HEAD"), "healthy target must be preserved")
+		_, err := os.Stat(filepath.Join(entry, "marker.txt"))
+		require.True(t, os.IsNotExist(err), "healthy target must not be overwritten by tmp")
+		_, err = os.Stat(tmp)
+		require.True(t, os.IsNotExist(err), "tmp must be discarded")
+	})
+}
+
+// TestCacheEntryHealthy:结构校验的判定面——半删形态(HEAD 缺/refs 缺/垃圾 HEAD/
+// .git 缺)必须判不健康(交给 --reference 会永久失败),完整仓判健康。
+func TestCacheEntryHealthy(t *testing.T) {
+	newEntry := func(t *testing.T) (entry, gitDir string) {
+		t.Helper()
+		entry = filepath.Join(t.TempDir(), "repo.git")
+		gitDir = filepath.Join(entry, ".git")
+		require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "objects"), 0o750))
+		require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "refs"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"),
+			[]byte("ref: refs/heads/main\n"), 0o644))
+		return entry, gitDir
+	}
+
+	t.Run("complete entry is healthy", func(t *testing.T) {
+		entry, _ := newEntry(t)
+		require.True(t, cacheEntryHealthy(entry))
+	})
+
+	t.Run("detached hex HEAD is healthy", func(t *testing.T) {
+		entry, gitDir := newEntry(t)
+		sha := strings.Repeat("ab", 20)
+		require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte(sha+"\n"), 0o644))
+		require.True(t, cacheEntryHealthy(entry))
+	})
+
+	t.Run("missing HEAD is unhealthy", func(t *testing.T) {
+		entry, gitDir := newEntry(t)
+		require.NoError(t, os.Remove(filepath.Join(gitDir, "HEAD")))
+		require.False(t, cacheEntryHealthy(entry))
+	})
+
+	t.Run("garbage HEAD content is unhealthy", func(t *testing.T) {
+		entry, gitDir := newEntry(t)
+		require.NoError(t, os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("garbage"), 0o644))
+		require.False(t, cacheEntryHealthy(entry))
+	})
+
+	t.Run("missing refs dir is unhealthy", func(t *testing.T) {
+		entry, gitDir := newEntry(t)
+		require.NoError(t, os.RemoveAll(filepath.Join(gitDir, "refs")))
+		require.False(t, cacheEntryHealthy(entry))
+	})
+
+	t.Run("missing objects dir is unhealthy", func(t *testing.T) {
+		entry, gitDir := newEntry(t)
+		require.NoError(t, os.RemoveAll(filepath.Join(gitDir, "objects")))
+		require.False(t, cacheEntryHealthy(entry))
+	})
+
+	t.Run("missing .git is unhealthy", func(t *testing.T) {
+		entry, gitDir := newEntry(t)
+		require.NoError(t, os.RemoveAll(gitDir))
+		require.False(t, cacheEntryHealthy(entry))
+	})
+}
+
+// TestCloneCache_WikiHealsBrokenAlternates(#25):共享仓被淘汰/删除后,fetch 分支
+// 的 wiki workdir alternates 悬空(git fetch 不报错,只把历史重下一遍)——
+// syncWiki 决策点必须与 cloneFetchStage 同款自愈:清 wikiDir → clone 分支 →
+// ensure 重新种入,配置字段文档对 wiki 的承诺才成立。
+func TestCloneCache_WikiHealsBrokenAlternates(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	base := t.TempDir()
+	srcWiki := filepath.Join(base, "src.wiki.git")
+	initFixtureRepo(t, srcWiki)
+	dstWiki := filepath.Join(base, "dst.wiki.git")
+	out, err := exec.Command("git", "init", "-q", "--bare", dstWiki).CombinedOutput()
+	require.NoError(t, err, "init bare: %s", out)
+
+	srcRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "src")}
+	dstRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "dst")}
+	workDir := t.TempDir()
+
+	// 第一轮:种入共享仓,wiki workdir 经 alternates 借用。
+	details1 := &strings.Builder{}
+	require.NoError(t, e.syncWiki(context.Background(), workDir,
+		&model.SyncTask{}, srcRepo, dstRepo, nil, nil, details1),
+		"first syncWiki failed: %s", details1.String())
+	alt1, err := os.ReadFile(filepath.Join(workDir, "wiki", ".git", "objects", "info", "alternates"))
+	require.NoError(t, err, "first run must borrow: %s", details1.String())
+	require.Contains(t, string(alt1), cacheDir)
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "one wiki cache entry expected, got %v", entries)
+
+	// 模拟淘汰/运维清缓存:共享仓整目录消失(不碰 wiki workdir)。
+	require.NoError(t, os.RemoveAll(cacheDir))
+
+	// 第二轮:决策点检出悬空 → 清 wikiDir → clone 分支 → ensure 重新种入。
+	details2 := &strings.Builder{}
+	require.NoError(t, e.syncWiki(context.Background(), workDir,
+		&model.SyncTask{}, srcRepo, dstRepo, nil, nil, details2),
+		"wiki must self-heal after cache loss instead of fetching forever with dangling alternates: %s",
+		details2.String())
+	require.Contains(t, details2.String(), "rebuilt with full clone",
+		"heal must be visible in run details: %s", details2.String())
+
+	entries, err = filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "wiki cache entry must be re-seeded, got %v", entries)
+	alt2, err := os.ReadFile(filepath.Join(workDir, "wiki", ".git", "objects", "info", "alternates"))
+	require.NoError(t, err, "healed wiki must borrow again: %s", details2.String())
+	target := strings.TrimSpace(string(alt2))
+	st, err := os.Stat(target)
+	require.NoError(t, err, "alternates target %q must exist", target)
+	require.True(t, st.IsDir())
+
+	// 端到端未破坏:推送仍达 bare 目标。
+	rev, err := exec.Command("git", "-C", dstWiki,
+		"rev-parse", "--verify", "refs/heads/main").CombinedOutput()
+	require.NoError(t, err, "bare target must receive main: %s / %s", rev, details2.String())
+	require.NotEmpty(t, strings.TrimSpace(string(rev)))
+}
+
 // TestCloneCache_WikiNotFoundClassification:wiki 不存在的分类语义不被缓存
 // 接线改变——①file:// 缺失 wiki 在有/无缓存两侧报同一形态(平价);
 // ②HTTPS 形态关键词穿过 seed 包装仍可分类(Wrap 保留 cause 文本)。
