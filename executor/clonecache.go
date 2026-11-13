@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/oekit/concurrency/syncx"
 	oekiterrors "github.com/oekit/pkg/errors"
@@ -63,6 +64,8 @@ func repoNameForCache(cloneURL string) string {
 // cloneCache 同源共享克隆缓存(per-instance 本地目录,不支持多实例共享同一路径)。
 type cloneCache struct {
 	dir string
+	// maxMB 缓存总量上限(MiB),<=0=不限制。超限按 mtime 淘汰最旧条目。
+	maxMB int
 	// mu 按共享仓路径互斥:同源的种入/刷新/借用准备同刻只跑一个。
 	// KeyedMutex 同键竞争不排队(后来者立即拿不到)——拿不到时调用方
 	// 本次克隆**降级为不带 reference 的普通克隆**(正确性不变,只是不省流量),
@@ -70,8 +73,8 @@ type cloneCache struct {
 	mu *syncx.KeyedMutex[string]
 }
 
-func newCloneCache(dir string) *cloneCache {
-	return &cloneCache{dir: dir, mu: syncx.NewKeyedMutex[string]()}
+func newCloneCache(dir string, maxMB int) *cloneCache {
+	return &cloneCache{dir: dir, maxMB: maxMB, mu: syncx.NewKeyedMutex[string]()}
 }
 
 // ensure 返回可作 git clone --reference 的共享仓路径。
@@ -102,6 +105,8 @@ func (c *cloneCache) ensure(ctx context.Context, backend gitbackend.GitBackend, 
 				"entry", entry, "error", ferr)
 		}
 		slog.Info("clone cache reused", "entry", entry)
+		// 刷新会往共享仓灌对象,复用后同样受总量上限约束。
+		c.evictOverCap(entry)
 		return entry, true, nil
 	}
 
@@ -127,7 +132,61 @@ func (c *cloneCache) ensure(ctx context.Context, backend gitbackend.GitBackend, 
 		}
 	}
 	slog.Info("clone cache seeded", "entry", entry)
+	c.evictOverCap(entry)
 	return entry, true, nil
+}
+
+// evictOverCap 缓存总量超限时按 mtime 淘汰最旧条目(LRU 近似)。
+// 只删 *.git 条目(不碰在途 *.git.tmp);keep(刚种入/刚复用的)永不删——
+// 单条超限时保留并告警,避免「删了又种」的抖动。被淘汰条目若被存量
+// workdir 引用,下轮执行由 healBrokenAlternates 自愈重建(与手动删
+// 缓存同一轨)。size 复算走 dirSizeBytes(与配额同源)。
+func (c *cloneCache) evictOverCap(keep string) {
+	if c.maxMB <= 0 {
+		return
+	}
+	limit := int64(c.maxMB) << 20
+	size, err := dirSizeBytes(c.dir)
+	if err != nil {
+		slog.Warn("clone cache size check failed", "error", err)
+		return
+	}
+	for size > limit {
+		entries, gerr := filepath.Glob(filepath.Join(c.dir, "*.git"))
+		if gerr != nil || len(entries) == 0 {
+			break
+		}
+		oldest, oldestM := "", time.Time{}
+		for _, p := range entries {
+			if p == keep {
+				continue
+			}
+			st, serr := os.Stat(p)
+			if serr != nil {
+				continue // 已被并发移除
+			}
+			if oldest == "" || st.ModTime().Before(oldestM) {
+				oldest, oldestM = p, st.ModTime()
+			}
+		}
+		if oldest == "" {
+			break // 只剩 keep(单条超限)
+		}
+		if rerr := os.RemoveAll(oldest); rerr != nil {
+			slog.Warn("clone cache evict failed", "entry", oldest, "error", rerr)
+			break
+		}
+		slog.Info("clone cache evicted", "entry", oldest)
+		size, err = dirSizeBytes(c.dir)
+		if err != nil {
+			slog.Warn("clone cache size recheck failed", "error", err)
+			return
+		}
+	}
+	if size > limit {
+		slog.Warn("clone cache single entry exceeds cap, keeping to avoid thrash",
+			"entry", keep, "size_bytes", size, "cap_mb", c.maxMB)
+	}
 }
 
 // isGitRepo 判断 path 是一棵可用的 git 仓(no-checkout 克隆产物带 .git 子目录)。

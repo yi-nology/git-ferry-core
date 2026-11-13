@@ -151,6 +151,11 @@ type SyncConfig struct {
 	// 共享仓不会打死存量 workdir——下轮执行检出 alternates 悬空即清工作区全量
 	// 重克隆(并重建缓存)。不参与 max_workdir_mb 配额(配额只量单任务工作区)。
 	CloneCacheDir string `yaml:"clone_cache_dir" env:"GIT_SYNC_CLONE_CACHE_DIR"`
+	// CloneCacheMaxMB 共享缓存总量上限(MiB),<=0=不限制(默认)。
+	// 超限即按 mtime 淘汰最旧条目(LRU 近似;刚种入/刚复用的永不删,
+	// 单条超限保留并告警防抖)。被淘汰条目被存量 workdir 引用时,
+	// 下轮执行由 alternates 悬空自愈重建(与手动删缓存同轨)。
+	CloneCacheMaxMB int `yaml:"clone_cache_max_mb" env:"GIT_SYNC_CLONE_CACHE_MAX_MB"`
 	// ExecuteJobs 本实例是否执行队列任务:nil/true=入队+派发执行(API/Worker 合一);
 	// false=只入队不执行(纯 API/调度实例,配合独立 Worker 进程)。
 	// 仅 DurableQueue=true 时有意义。

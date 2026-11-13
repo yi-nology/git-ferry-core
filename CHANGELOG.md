@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（Clone Cache 容量治理——`sync.clone_cache_max_mb`）
+
+- **共享缓存总量上限 + mtime LRU 淘汰**：`sync.clone_cache_max_mb`
+  （env `GIT_SYNC_CLONE_CACHE_MAX_MB`，<=0=不限制，默认）；超限即按
+  mtime 淘汰最旧条目（种入与 hit 刷新后各检查一次，`dirSizeBytes` 与
+  配额同源复算）。只删 `*.git` 条目、不碰在途 `.tmp`；**刚种入/刚复用
+  的永不删**——单条超上限时保留并告警，防「删了又种」抖动。被淘汰
+  条目若被存量 workdir 引用，下轮执行走 alternates 悬空自愈重建
+  （与手动删缓存同一轨，v0.43.0 已钉）。测试：超限淘汰（10×160KB
+  夹具压 1MiB 上限）、默认不限制回归、单条超限保留；主循环变异验证
+  （摘 evict 调用 → 断言红）。
+
 ## [v0.44.0] - 2026-11-13
 
 ### Added（Clone Cache 演进轮——wiki 接线 + 可观测性）

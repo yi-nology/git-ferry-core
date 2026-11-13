@@ -89,9 +89,11 @@ func NewExecutor(svc Service) (*Executor, error) {
 	// git.backend 配置接线:空值由 SDK 自动选择(native 优先,回退 gogit)
 	backendType := ""
 	var cacheDir string
+	var cacheMaxMB int
 	if cfg := svc.GetConfig(); cfg != nil {
 		backendType = cfg.Git.Backend
 		cacheDir = cfg.Sync.CloneCacheDir
+		cacheMaxMB = cfg.Sync.CloneCacheMaxMB
 	}
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{Type: backendType})
 	if err != nil {
@@ -109,7 +111,7 @@ func NewExecutor(svc Service) (*Executor, error) {
 				"sync.clone_cache_dir requires the native git backend, resolved %T cannot borrow shared object stores via --reference",
 				backend)
 		}
-		exec.cache = newCloneCache(cacheDir)
+		exec.cache = newCloneCache(cacheDir, cacheMaxMB)
 	}
 	return exec, nil
 }
