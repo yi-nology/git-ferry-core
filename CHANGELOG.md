@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.46.0] - 2026-11-13
+
+### Removed（BREAKING）
+
+- **`health.EvalResult` 删 `Issues` / `Actions` 兼容投影字段**：与
+  `Dimensions[].Reason` / `Action` 信息重复且口径分裂（issue=name:reason、
+  action 需去重保序），构造回填一并删除，归因单源到 `Dimensions`。
+  **CLI JSON 输出 schema 变更**：health 评分输出不再有顶层 `issues` / `actions`
+  键——**下游解析方必须改读 `dimensions[].reason` / `dimensions[].action`**；
+  需要旧口径（score<60 → "name: reason"；score<70 且非空动作去重保序）自行从
+  Dimensions 派生。`HealthScoreItem`（服务层响应面）字段与 JSON 标签不变，
+  其 `issues`/`actions` 改由 `issuesFromDimensions` / `actionsFromDimensions`
+  按原口径从 Dimensions 派生——前端/CLI 消费该响应的无感。
+
 ## [v0.45.0] - 2026-11-13
 
 ### Added（Clone Cache 容量治理——`sync.clone_cache_max_mb`）
