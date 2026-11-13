@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/oekit/concurrency/syncx"
+	"github.com/oekit/pkg/slicex"
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
@@ -161,7 +162,9 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 		}
 
 		dimRes := health.EvaluateDimensions(healthDims, facts)
-		issues := dimRes.Issues
+		// HealthScoreItem 的 issues/actions 是本服务自己的响应面（JSON 标签历史逐字一致，
+		// 前端/CLI 依赖）——EvalResult 删掉兼容投影后，在这里从 Dimensions 原样派生。
+		issues := issuesFromDimensions(dimRes.Dimensions)
 
 		// 最近失败 run_id(动作路由)
 		var failRunID int64
@@ -187,11 +190,35 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 			Level:       dimRes.Level,
 			Issues:      issues,
 			Dimensions:  dimRes.Dimensions,
-			Actions:     dimRes.Actions,
+			Actions:     actionsFromDimensions(dimRes.Dimensions),
 			ActionItems: actionItems,
 		})
 	}
 	return items, nil
+}
+
+// issuesFromDimensions 派生低分维度提示（原 EvalResult.Issues 投影，口径不变）：
+// score<60 的维度给 "name: reason"。
+func issuesFromDimensions(dims []health.Dimension) []string {
+	var issues []string
+	for _, d := range dims {
+		if d.Score < 60 {
+			issues = append(issues, fmt.Sprintf("%s: %s", d.Name, d.Reason))
+		}
+	}
+	return issues
+}
+
+// actionsFromDimensions 派生建议动作（原 EvalResult.Actions 投影，口径不变）：
+// score<70 的维度带出的动作，丢弃空串 + 保序去重。
+func actionsFromDimensions(dims []health.Dimension) []string {
+	var actions []string
+	for _, d := range dims {
+		if d.Action != "" && d.Score < 70 {
+			actions = append(actions, d.Action)
+		}
+	}
+	return slicex.Unique(slicex.Filter(actions, func(s string) bool { return s != "" }))
 }
 
 // applyRPOFacts 覆写 RPO 事实键:以「全历史最近一次备份成功」为准

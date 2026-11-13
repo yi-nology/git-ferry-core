@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/convert"
-	"github.com/oekit/pkg/slicex"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -28,13 +27,11 @@ type Dimension struct {
 	Action string   `json:"action,omitempty"` // 建议动作（CLI/人工）
 }
 
-// EvalResult 聚合结果：总分 + 维度 + 兼容字段。
+// EvalResult 聚合结果：总分 + 维度（issue/action 归因读 Dimensions[].Reason/Action）。
 type EvalResult struct {
 	Score      int         `json:"score"`
 	Level      string      `json:"level"`
-	Issues     []string    `json:"issues,omitempty"`
 	Dimensions []Dimension `json:"dimensions,omitempty"`
-	Actions    []string    `json:"actions,omitempty"`
 }
 
 // DimensionSpec 维度定义：从 Facts 取子集打分。
@@ -262,7 +259,6 @@ func EvaluateDimensions(specs []DimensionSpec, f Facts) EvalResult {
 	}
 	dims := make([]Dimension, 0, len(specs))
 	totalW, weighted := 0, 0
-	var issues, actions []string
 
 	for _, s := range specs {
 		w := max(s.Weight, 0)
@@ -280,26 +276,16 @@ func EvaluateDimensions(specs []DimensionSpec, f Facts) EvalResult {
 			Reason: reason, Detail: detail, Action: action,
 		}
 		dims = append(dims, d)
-		if score < 60 {
-			issues = append(issues, fmt.Sprintf("%s: %s", s.Name, reason))
-		}
-		if action != "" && score < 70 {
-			actions = append(actions, action)
-		}
 	}
 
 	overall := 0
 	if totalW > 0 {
 		overall = weighted / totalW
 	}
-	// 动作去重保序（原 uniqueKeepOrder：丢弃空串 + 保序去重）
-	actions = slicex.Unique(slicex.Filter(actions, func(s string) bool { return s != "" }))
 	return EvalResult{
 		Score:      clampScore(overall),
 		Level:      levelFromScore(overall),
-		Issues:     issues,
 		Dimensions: dims,
-		Actions:    actions,
 	}
 }
 
