@@ -516,6 +516,7 @@ func TestNewExecutor_InvalidBackend(t *testing.T) {
 type mockServiceWithConfig struct {
 	*mockService
 	backendType string
+	cacheDir    string
 }
 
 func (m *mockServiceWithConfig) GetConfig() *model.Config {
@@ -526,6 +527,7 @@ func (m *mockServiceWithConfig) GetConfig() *model.Config {
 		Sync: model.SyncConfig{
 			DefaultTimeout: 300,
 			RetryCount:     3,
+			CloneCacheDir:  m.cacheDir,
 		},
 	}
 }

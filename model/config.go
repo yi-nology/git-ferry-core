@@ -140,6 +140,16 @@ type SyncConfig struct {
 	// 超限即中止本次执行并清理工作区(reclaim 磁盘),下次执行全量重克隆。
 	// 大仓库/多任务共享 temp 目录时的宿主机保护(P2 资源限制)。
 	MaxWorkdirMB int `yaml:"max_workdir_mb" env:"GIT_SYNC_MAX_WORKDIR_MB"`
+	// CloneCacheDir 同源共享克隆缓存目录(P2 Clone Cache):空=关闭(默认,零行为变化)。
+	// 配置后,指向同一源仓库的首次克隆会先种一棵共享仓(no-checkout 全量),
+	// 之后每个 workdir 经 objects/info/alternates 借用其对象库——同源 N 任务
+	// 网络从 N×全量降到 1×全量+N×增量,磁盘从 N×仓库体降到 1×共享+N×元数据;
+	// 每次克隆前对共享仓做一次增量 fetch 保鲜。**仅 native 后端**(gogit 不支持
+	// reference clone,配置了会在 NewExecutor fail-fast)。
+	// 生命周期:共享仓是 per-instance 本地目录(勿多实例共享同一路径);手动删除
+	// 共享仓不会打死存量 workdir——下轮执行检出 alternates 悬空即清工作区全量
+	// 重克隆(并重建缓存)。不参与 max_workdir_mb 配额(配额只量单任务工作区)。
+	CloneCacheDir string `yaml:"clone_cache_dir" env:"GIT_SYNC_CLONE_CACHE_DIR"`
 	// ExecuteJobs 本实例是否执行队列任务:nil/true=入队+派发执行(API/Worker 合一);
 	// false=只入队不执行(纯 API/调度实例,配合独立 Worker 进程)。
 	// 仅 DurableQueue=true 时有意义。

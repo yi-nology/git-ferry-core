@@ -2,6 +2,40 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（P2 Clone Cache——同源共享克隆，`sync.clone_cache_dir`）
+
+- **共享克隆缓存**：配置 `sync.clone_cache_dir`（env `GIT_SYNC_CLONE_CACHE_DIR`），
+  空=关闭（默认，零行为变化）。同源多任务的首次克隆先种一棵共享仓
+  （no-checkout 全量，`.tmp`→`os.Rename` 原子落位），此后 workdir 经
+  `git clone --reference` 借用其对象库（`objects/info/alternates`）——
+  同源 N 任务网络从 N×全量降到 1×全量+N×增量，磁盘从 N×仓库体降到
+  1×共享+N×元数据（评审 P2「大仓库资源限制」的省流半边，与
+  `max_workdir_mb` 配额半边合璧；配额只量单任务工作区，共享仓不计入，
+  也不参与轮转）。
+- **hit 保鲜**：每次复用共享仓前 best-effort 增量 fetch——把 delta 灌进
+  共享仓，之后的新克隆都省；失败仅告警（陈旧共享仓仍可用，正确性由
+  workdir 自己的 fetch 兜底）。同源克隆按仓内先例收编
+  `syncx.KeyedMutex` 互斥，拿不到锁的那次降级为普通克隆（正确性不变，
+  不排队等一次全量做完）。
+- **fail-fast 边界**：种入失败（源不可达等）错误上抛、不留半成品条目、
+  dest 不创建，绝不静默退化成普通克隆；`git.backend=gogit` +
+  `clone_cache_dir` 在 `NewExecutor` 启动即报错——gogit（go-git）没有
+  跨仓借对象库能力（SDK 侧对应 `ErrReferenceUnsupported`），静默不生效
+  等于配置撒谎。
+- **悬空自愈**：手动删除共享仓后，`cloneFetchStage` 决策点检出存量
+  workdir 的 alternates 悬空（实测 git fetch 对此**不报错**、exit 0 只打
+  unable-to-normalize 告警并把整段历史重下一遍——失败驱动的自愈等不到
+  触发点）⇒ 清 workdir 全量重克隆并重建缓存，任务不被打死；无
+  `clone_cache_dir` 的普通克隆不受影响（无 alternates 即 no-op）。
+- 落点 `executor/clonecache.go` + `cloneFetchStage` 决策点一行接线；
+  回归测试 10 例（路径推导 4 子项/同源借用/hit 保鲜/并发单种/未配置
+  零变化/后端门禁/自愈单元+stage 集成/种入 fail-fast/model 配载）。
+  依赖地板同轮抬升 go-git-platform **v0.131.0→v0.132.0**
+  （`CloneOptions.Reference/Dissociate` reference clone 能力，上游
+  #148/#149）。
+
 ## [v0.42.0] - 2026-11-13
 
 ### Changed（三方依赖全量升级 + oekit Errorf 收敛）

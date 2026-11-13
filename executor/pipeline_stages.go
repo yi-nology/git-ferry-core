@@ -23,6 +23,16 @@ func (cloneFetchStage) IsOptional() bool { return false }
 
 func (cloneFetchStage) Run(ctx context.Context, rc *RunContext) error {
 	repoDir := rc.RepoDir
+	// Clone Cache 自愈:共享仓被手动删除后,存量 workdir 的 alternates 悬空——
+	// git fetch 对此不报错(探针实测,exit 0 只告警),必须在决策点主动检出:
+	// 清掉 workdir,下面的 Stat 自然走全量重克隆(缓存顺带重新种入)。
+	healed, herr := healBrokenAlternates(repoDir)
+	if herr != nil {
+		return oekiterrors.Wrap(herr, "heal broken alternates failed")
+	}
+	if healed {
+		rc.logf("shared clone cache missing, workdir rebuilt with full clone...\n")
+	}
 	if _, err := os.Stat(filepath.Join(repoDir, ".git")); os.IsNotExist(err) {
 		rc.logf("initial clone of source repo...\n")
 		if err := rc.Exec.cloneRepo(ctx, repoDir, rc.SourceRepo, rc.Task, rc.Platforms[rc.SourceRepo.PlatformID]); err != nil {

@@ -234,3 +234,30 @@ func TestInitDB_Memory(t *testing.T) {
 		t.Fatal("expected non-nil db")
 	}
 }
+
+// TestLoadConfig_CloneCacheDir:sync.clone_cache_dir 从 yaml 载入——
+// Clone Cache(P2 同源共享缓存)的开关字段,空=关闭。
+func TestLoadConfig_CloneCacheDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+database:
+  driver: sqlite
+  dsn: test.db
+
+sync:
+  clone_cache_dir: /var/cache/gitferry/clones
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.Sync.CloneCacheDir != "/var/cache/gitferry/clones" {
+		t.Errorf("Expected clone_cache_dir /var/cache/gitferry/clones, got %q", cfg.Sync.CloneCacheDir)
+	}
+}

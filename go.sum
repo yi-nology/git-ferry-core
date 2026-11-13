@@ -187,8 +187,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
-github.com/yi-nology/go-git-platform v0.131.0 h1:YWJ4d3HHeFti+pQH3Uvh8AKlf0d551fEt/Cw5QP+tSs=
-github.com/yi-nology/go-git-platform v0.131.0/go.mod h1:8whX6Algy5B7vVb4ni3xB5VIkSLRXfV0XujqS0Jzbiw=
+github.com/yi-nology/go-git-platform v0.132.0 h1:5qLTibAknMR1JIlvPapW9PRDsWrQbMeB/PXyRov0aXk=
+github.com/yi-nology/go-git-platform v0.132.0/go.mod h1:8whX6Algy5B7vVb4ni3xB5VIkSLRXfV0XujqS0Jzbiw=
 github.com/yi-nology/go-gitcode v0.16.0 h1:+YLwbUGj07BBqr8rVLrXri1KFOL2bq1rB/E89hTFJv8=
 github.com/yi-nology/go-gitcode v0.16.0/go.mod h1:7WUskajsH/fvcIA9wqoQVLeOL+E7pL/8SbBOhDgxFkc=
 github.com/yi-nology/go-gongfeng v0.4.0 h1:/8poTAASG7mx5kRPYsepbN+OaXQ/uvDKcenEYeNMlCg=

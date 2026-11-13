@@ -57,11 +57,13 @@ type RecoveryRecorder interface {
 type Executor struct {
 	service Service
 	backend gitbackend.GitBackend
+	// cache 同源共享克隆缓存(P2 Clone Cache);nil=未配置 clone_cache_dir(零行为变化)。
+	cache *cloneCache
 	// Approver 可选：force_push_policy=block 时查询是否已获人工放行。
 	// 由壳层注入（如 force-push-approvals 审批表）；nil=始终未放行。
 	Approver ForcePushApprover
 	// Recovery 可选:冷备成功后记录恢复点(P3 可恢复性索引);
-	// nil=不记录。与 Approver 同为可选注入,不动 Service 接口。
+	// 由壳层注入;nil=不记录。与 Approver 同为可选注入,不动 Service 接口。
 	Recovery RecoveryRecorder
 }
 
@@ -86,17 +88,30 @@ type ForcePushApprover interface {
 func NewExecutor(svc Service) (*Executor, error) {
 	// git.backend 配置接线:空值由 SDK 自动选择(native 优先,回退 gogit)
 	backendType := ""
+	var cacheDir string
 	if cfg := svc.GetConfig(); cfg != nil {
 		backendType = cfg.Git.Backend
+		cacheDir = cfg.Sync.CloneCacheDir
 	}
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{Type: backendType})
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "init git backend failed")
 	}
-	return &Executor{
+	exec := &Executor{
 		service: svc,
 		backend: backend,
-	}, nil
+	}
+	if cacheDir != "" {
+		// fail-fast:gogit(go-git)没有跨仓借对象库(--reference)能力,
+		// 缓存配置静默不生效等于配置撒谎——启动就炸,指向 native。
+		if _, ok := backend.(*gitbackend.NativeGitBackend); !ok {
+			return nil, fmt.Errorf(
+				"sync.clone_cache_dir requires the native git backend, resolved %T cannot borrow shared object stores via --reference",
+				backend)
+		}
+		exec.cache = newCloneCache(cacheDir)
+	}
+	return exec, nil
 }
 
 func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger string, webhookEventID *uint) (*model.SyncRun, error) {
@@ -352,7 +367,7 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	if cfg := e.service.GetConfig(); cfg != nil {
 		partial = cfg.Sync.PartialClone
 	}
-	err := e.backend.Clone(ctx, gitbackend.CloneOptions{
+	cloneOpts := gitbackend.CloneOptions{
 		URL:  repo.CloneURL,
 		Path: dir,
 		// glob 多分支:--branch 只接受具体分支名,给 glob 会让 git clone 直接失败
@@ -363,7 +378,20 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 		Filter:       partial,
 		Submodules:   task.Submodules,
 		Auth:         e.authConfig(ctx, repo, platform),
-	})
+	}
+	// Clone Cache(P2):配置了 clone_cache_dir 就先走共享仓——种入/保鲜由
+	// cloneCache.ensure 收口(同源互斥,拿不到锁本次降级普通克隆);
+	// 种入失败 fail-fast(显式配置的缓存坏了必须炸,不静默退化)。
+	if e.cache != nil {
+		ref, usable, cerr := e.cache.ensure(ctx, e.backend, repo.CloneURL, partial, cloneOpts.Auth)
+		if cerr != nil {
+			return cerr
+		}
+		if usable {
+			cloneOpts.Reference = ref
+		}
+	}
+	err := e.backend.Clone(ctx, cloneOpts)
 	if err != nil {
 		return err
 	}
