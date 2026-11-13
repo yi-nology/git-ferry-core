@@ -16,6 +16,45 @@
   夹具压 1MiB 上限）、默认不限制回归、单条超限保留；主循环变异验证
   （摘 evict 调用 → 断言红）。
 
+### Fixed（Clone Cache 深挖清零——三路审计 13 单 #21-#33，全部探针亲验）
+
+- **#21（P1）半删条目永久 fail-closed**：`isGitRepo`（只查 `.git` 目录）
+  → `isUsableEntry`（`.git/HEAD+objects+refs` 三件齐）；损坏条目持锁清除
+  后 fallthrough 重种，rename 撞残骸清后重试一次——缓存是可再生资产，
+  损坏 fail-open，该源不再永久失败（探针：半删态连续两次克隆皆败 → 已修）。
+- **#22 mtime LRU 实为种入序 FIFO**：命中刷新后 `touchEntry` 拨条目目录
+  mtime（实测 fetch 只写 `.git` 内部、不改 entry 目录 mtime）——热条目
+  不再被系统性淘汰（探针：hit 后 mtime 仍停在 72h 前 → 已修）。
+- **#23 在途条目被并发淘汰**：`ensure` 的键锁生命周期交给调用方持有到
+  clone 结束（path 返回→clone 完成的窗口纳入保护）；`evictOverCap` 逐
+  候选 try-Acquire、持锁删除——在途借用中的条目不可删（探针：持锁条目
+  被删 → 已修）。
+- **#24 孤儿 `*.git.tmp` 永不回收且计入总量**：`sweepOrphanTmp`
+  （宽限 1h + 对应键锁判定）先于容量检查清扫崩溃残留——堵死「配置上限
+  后塌缩成只剩 keep + 误导告警」与无上限纯泄漏（探针：幸存=1、
+  孤儿永驻 → 已修）。
+- **#25 wiki 无悬空自愈**：`syncWiki` 决策点接 `healBrokenAlternates`
+  与主仓同轨——共享仓被删后 wiki 重建条目，不再永久空转（探针：
+  entries_after=0 → 已修）。
+- **#26 Glob 元字符逃逸**：候选枚举改 `os.ReadDir` + `.git` 后缀判断，
+  配置路径含 `*?[` 不再匹配/删除目录外路径（探针：`cc[x]` 吃到兄弟
+  `ccx/victim.git` → 已修）。
+- **#27（P1）竞态误分类成静默 skip**：共享仓在 ensure 后消失时，
+  `ErrNotAGitRepo` 文案含 "does not exist"，会被 `isWikiNotFound` 吞成
+  「wiki 不存在 → 跳过」——新增 `isCacheRaceNotRepo` 守卫 + 降级无
+  reference 重试一次（cloneRepo/syncWiki 双侧）；前提单测钉住双分类
+  冲突（同一错误 `Is(ErrNotAGitRepo)` 与 `isWikiNotFound` 皆真）。
+- **#28 wiki skip 契约首次端到端**：httptest 404（git 报文
+  "repository ... not found" 探针实测）驱动 skip 分支真实执行，
+  cache 开/关双侧断言 nil + skip 文案。
+- **#29/#30 测试自证缺陷**：`CloneCacheDirAbsolute` 通过用例守卫反写
+  （变异实证：反转校验原先恒绿、现在会红）；`EvictsOldestOverCap` 拆
+  重言式 `DirExists(newestEntry)`+Logf 对冲，硬断言最旧淘汰/最新幸存
+  （变异：挑最新淘汰 → 红）。
+- **#31/#32/#33 补测**：`CloneCacheMaxMB` yaml/env 覆盖/负值三态配置
+  面；主仓+wiki 同 cacheDir 双条目共存（wiki 键名 `src.wiki-*`）；
+  hit 刷新 vs 删了重种用标记文件区分（省流语义回归不再漏网）。
+
 ## [v0.44.0] - 2026-11-13
 
 ### Added（Clone Cache 演进轮——wiki 接线 + 可观测性）

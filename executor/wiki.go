@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,18 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	srcAuth := e.authConfig(ctx, srcRepo, srcPlat)
 	dstAuth := e.authConfig(ctx, dstRepo, dstPlat)
 
+	// Clone Cache 自愈与主仓同轨(#25):共享仓被逐出/手删后,存量 wiki
+	// workdir 的 alternates 悬空——git fetch 对此不报错(exit 0 + 整段历史
+	// 重下),必须在决策点主动检出:清掉 wikiDir,下面的 Stat 自然走 clone
+	// 分支 → ensure 重种条目。无缓存/无 alternates 时 no-op。
+	healed, herr := healBrokenAlternates(wikiDir)
+	if herr != nil {
+		return oekiterrors.Wrap(herr, "heal wiki alternates failed")
+	}
+	if healed {
+		details.WriteString("  wiki: shared cache missing, rebuilding wiki clone\n")
+	}
+
 	// clone or fetch
 	if _, err := os.Stat(filepath.Join(wikiDir, ".git")); os.IsNotExist(err) {
 		details.WriteString("  wiki: clone " + srcURL + "\n")
@@ -62,7 +75,7 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 		// 种入失败必须同样过 wiki 不存在分类——关键词在 cause 文本里,Wrap 保留,
 		// 不能因为多了一层缓存包装就把「wiki 不存在 → 跳过」变成任务失败。
 		if e.cache != nil {
-			ref, usable, cerr := e.cache.ensure(ctx, e.backend, srcURL, "", srcAuth)
+			ref, usable, release, cerr := e.cache.ensure(ctx, e.backend, srcURL, "", srcAuth)
 			if cerr != nil {
 				if isWikiNotFound(cerr) {
 					details.WriteString("  wiki: not found on source, skip\n")
@@ -71,15 +84,28 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 				return oekiterrors.Wrap(cerr, "clone wiki failed")
 			}
 			if usable {
+				// 锁持有到 wiki clone 结束(#23 在途保护);release 幂等。
+				defer release()
 				cloneOpts.Reference = ref
 			}
 		}
 		if err := e.backend.Clone(ctx, cloneOpts); err != nil {
-			if isWikiNotFound(err) {
-				details.WriteString("  wiki: not found on source, skip\n")
-				return nil
+			// #27:共享仓 ensure 后消失的竞态——ErrNotAGitRepo 不是 wiki 不存在,
+			// 降级无 reference 重试一次(与同源争用降级同形),绝不让
+			// "does not exist" 关键词把竞态吞成静默 skip。
+			if isCacheRaceNotRepo(err, cloneOpts.Reference) {
+				slog.Info("clone cache vanished mid-clone, retrying wiki clone without reference",
+					"error", err)
+				cloneOpts.Reference = ""
+				err = e.backend.Clone(ctx, cloneOpts)
 			}
-			return oekiterrors.Wrap(err, "clone wiki failed")
+			if err != nil {
+				if isWikiNotFound(err) {
+					details.WriteString("  wiki: not found on source, skip\n")
+					return nil
+				}
+				return oekiterrors.Wrap(err, "clone wiki failed")
+			}
 		}
 	} else {
 		details.WriteString("  wiki: fetch\n")

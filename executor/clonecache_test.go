@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
 // TestCacheEntryPath:共享缓存仓的路径推导——同 URL 确定性、异 URL 不同仓、
@@ -166,9 +169,18 @@ func TestCloneCache_HitRefreshesCache(t *testing.T) {
 	// 源仓新增 c3。
 	wantSHA := commitToCloneCacheSource(t, srcURL, "c.txt", "c\n")
 
+	// #33:在共享仓里放标记文件——hit 若退化成「删了重种」,标记必消失。
+	entries0, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries0, 1)
+	marker := filepath.Join(entries0[0], "HIT-MARKER")
+	require.NoError(t, os.WriteFile(marker, []byte("1"), 0o644))
+
 	// 同源第二次克隆(hit):共享仓须先保鲜再借用。
 	wd2 := filepath.Join(t.TempDir(), "wd2")
 	require.NoError(t, e.cloneRepo(ctx, wd2, repo, task, nil))
+	require.FileExists(t, marker,
+		"hit must be incremental refresh, not delete-and-reseed (marker vanished)")
 
 	// 共享仓的 remote-tracking main 已刷到源仓新 HEAD(没刷新则停在 c2)。
 	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
@@ -554,7 +566,10 @@ func TestCloneCache_EvictsOldestOverCap(t *testing.T) {
 	task := &model.SyncTask{SourceBranch: "main"}
 	const payload = 160_000 // 单仓约 160KB+元数据,10 个 ≫ 1MiB
 
-	var firstEntry string
+	// 逐轮记录「本轮新种入」的条目(glob 集合差),结束时硬断言
+	// 最旧被淘汰、最新幸存——重言式 DirExists 与 Logf 对冲在 #30 拆除。
+	var firstEntry, lastEntry string
+	prev := map[string]bool{}
 	for i := 0; i < 10; i++ {
 		srcURL := newCloneCacheSourceWithPayload(t, payload)
 		wd := filepath.Join(t.TempDir(), "wd")
@@ -563,10 +578,18 @@ func TestCloneCache_EvictsOldestOverCap(t *testing.T) {
 		entries, gerr := filepath.Glob(filepath.Join(cacheDir, "*.git"))
 		require.NoError(t, gerr)
 		require.NotEmpty(t, entries)
-		if i == 0 {
-			firstEntry = entries[0]
+		for _, p := range entries {
+			if !prev[p] {
+				if i == 0 {
+					firstEntry = p
+				}
+				lastEntry = p
+				prev[p] = true
+			}
 		}
 	}
+	require.NotEmpty(t, firstEntry)
+	require.NotEmpty(t, lastEntry)
 
 	size, err := dirSizeBytes(cacheDir)
 	require.NoError(t, err)
@@ -576,28 +599,11 @@ func TestCloneCache_EvictsOldestOverCap(t *testing.T) {
 	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
 	require.NoError(t, err)
 	require.Less(t, len(entries), 10, "some oldest entries must be evicted, got %v", entries)
-	require.DirExists(t, newestEntry(t, entries), "newest entry must survive")
-	// 首个(最旧)应被淘汰。
+	// 名字里的断言:最旧(首个种入)必须真被淘汰,最新必须幸存。
 	if _, err := os.Stat(firstEntry); err == nil {
-		// firstEntry 取的是首轮 glob[0],确认它不再是幸存者中最旧的即可;
-		// 硬断言存在性在并发 mtime 抖动下不可靠,这里只要它不在(或已被换出)。
-		t.Logf("note: first entry still present (mtime granularity), survivors=%v", entries)
+		t.Fatalf("oldest entry %s must be evicted first, survivors=%v", firstEntry, entries)
 	}
-}
-
-// newestEntry 返回 mtime 最新的条目。
-func newestEntry(t *testing.T, entries []string) string {
-	t.Helper()
-	var newest string
-	var newestM time.Time
-	for _, p := range entries {
-		st, err := os.Stat(p)
-		require.NoError(t, err)
-		if newest == "" || st.ModTime().After(newestM) {
-			newest, newestM = p, st.ModTime()
-		}
-	}
-	return newest
+	require.DirExists(t, lastEntry, "newest entry must survive eviction")
 }
 
 // TestCloneCache_EvictionDisabledByDefault:clone_cache_max_mb 未配置(<=0)
@@ -643,4 +649,345 @@ func TestCloneCache_SingleOversizedEntryKept(t *testing.T) {
 	size, err := dirSizeBytes(cacheDir)
 	require.NoError(t, err)
 	require.Greater(t, size, int64(1)<<20, "precondition: entry really exceeds cap")
+}
+
+// TestCloneCache_DamagedEntryReSeeds(#21):半删损坏的缓存条目(HEAD/refs
+// 没了、objects 还在)必须被检出并重建——缓存是可再生资产,损坏要 fail-open
+// 重种,不能让该源永久 fail-closed。
+func TestCloneCache_DamagedEntryReSeeds(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	srcURL := newCloneCacheSource(t)
+	repo := &model.Repo{CloneURL: srcURL}
+	task := &model.SyncTask{SourceBranch: "main"}
+	ctx := context.Background()
+
+	wd1 := filepath.Join(t.TempDir(), "wd1")
+	require.NoError(t, e.cloneRepo(ctx, wd1, repo, task, nil))
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// 制造半删态:HEAD+refs 没了,objects 还在(中断 RemoveAll 的形态)。
+	require.NoError(t, os.Remove(filepath.Join(entries[0], ".git", "HEAD")))
+	require.NoError(t, os.RemoveAll(filepath.Join(entries[0], ".git", "refs")))
+
+	// 第二次克隆:检出损坏 → 清掉重种 → 成功借用。
+	wd2 := filepath.Join(t.TempDir(), "wd2")
+	require.NoError(t, e.cloneRepo(ctx, wd2, repo, task, nil),
+		"damaged entry must be rebuilt, not fail-closed")
+
+	// 条目已重建为完整形状。
+	require.FileExists(t, filepath.Join(entries[0], ".git", "HEAD"))
+	require.DirExists(t, filepath.Join(entries[0], ".git", "refs"))
+	alt, err := os.ReadFile(filepath.Join(wd2, ".git", "objects", "info", "alternates"))
+	require.NoError(t, err)
+	require.Contains(t, string(alt), cacheDir)
+}
+
+// TestCloneCache_RefreshedEntrySurvivesEviction(#22):命中刷新必须把条目
+// 标记为最近使用——否则「mtime LRU」实为种入序 FIFO,热条目被系统性淘汰。
+func TestCloneCache_RefreshedEntrySurvivesEviction(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	svc.config.Sync.CloneCacheMaxMB = 1
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+	ctx := context.Background()
+	task := &model.SyncTask{SourceBranch: "main"}
+
+	// 条目 A:种入。
+	srcA := newCloneCacheSource(t)
+	require.NoError(t, e.cloneRepo(ctx, filepath.Join(t.TempDir(), "w1"), &model.Repo{CloneURL: srcA}, task, nil))
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	entryA := entries[0]
+
+	// 条目 B:种入后拨老 48h——最旧且此后无人使用。
+	srcB := newCloneCacheSource(t)
+	require.NoError(t, e.cloneRepo(ctx, filepath.Join(t.TempDir(), "w3"), &model.Repo{CloneURL: srcB}, task, nil))
+	entries, err = filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	var entryB string
+	for _, p := range entries {
+		if p != entryA {
+			entryB = p
+		}
+	}
+	require.NotEmpty(t, entryB)
+	stale := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(entryB, stale, stale))
+
+	// 压力铺底:4 个 160KB 载荷源(实测单条 ~190KB,4 发约 820KB < 1MiB,
+	// 不触发淘汰)。
+	for i := 0; i < 4; i++ {
+		src := newCloneCacheSourceWithPayload(t, 160_000)
+		require.NoError(t, e.cloneRepo(ctx, filepath.Join(t.TempDir(), "wp"), &model.Repo{CloneURL: src}, task, nil))
+	}
+
+	// hit A:修复后必须把 A 的 mtime 拨到现在(否则 A 比 P1..P4 更老,下一步
+	// 超限时会先于未使用的 P1 被淘汰——那正是 FIFO 病)。
+	require.NoError(t, e.cloneRepo(ctx, filepath.Join(t.TempDir(), "w2"), &model.Repo{CloneURL: srcA}, task, nil))
+
+	// 两发超限(820+190×2 ≈ 1.20MB > 1MiB):淘汰循环先删最旧的 B(-48h),
+	// 再删次旧的 P1(种于 hit 之前);A 因刚被 hit 标记为最近使用而幸存。
+	for i := 0; i < 2; i++ {
+		src := newCloneCacheSourceWithPayload(t, 160_000)
+		require.NoError(t, e.cloneRepo(ctx, filepath.Join(t.TempDir(), "wp"), &model.Repo{CloneURL: src}, task, nil))
+	}
+
+	// 断言:刷新过的 A 活着;48h 前种入且没再用过的 B 被淘汰。
+	require.DirExists(t, entryA, "recently-refreshed hot entry must survive eviction (LRU, not FIFO)")
+	if _, err := os.Stat(entryB); err == nil {
+		t.Fatalf("stale unused entry %s must be evicted first", entryB)
+	}
+}
+
+// TestCloneCache_EvictSkipsInFlightEntry(#23):淘汰不得删除「键锁被在途
+// 克隆持有」的条目——path 已返回、clone 还在锁外跑,删了就是无谓失败。
+func TestCloneCache_EvictSkipsInFlightEntry(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	svc.config.Sync.CloneCacheMaxMB = 1
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	// 造一个「在途」条目:持有其键锁(与 ensure 借用生命周期同形)。
+	entryInflight := cacheEntryPath(cacheDir, "https://x/inflight.git")
+	require.NoError(t, os.MkdirAll(filepath.Join(entryInflight, ".git"), 0o750))
+	release, ok := e.cache.mu.Acquire(entryInflight)
+	require.True(t, ok)
+	defer release()
+
+	// 造超限压力:一个 2MiB 条目(不持锁)+ cap=1MiB,必然触发淘汰。
+	entryBig := cacheEntryPath(cacheDir, "https://x/big.git")
+	require.NoError(t, os.MkdirAll(filepath.Join(entryBig, ".git"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(entryBig, ".git", "junk"),
+		incompressibleBytes(2<<20), 0o644))
+
+	e.cache.evictOverCap(entryBig)
+
+	_, err = os.Stat(entryInflight)
+	require.NoError(t, err,
+		"in-flight (key-locked) entry must be skipped by eviction")
+}
+
+// TestCloneCache_EvictWithMetaCharPathStaysInside(#26):配置路径含 glob
+// 元字符时,淘汰枚举不得逃到目录外(Glob 会把 cc[x] 当字符类匹配到兄弟目录)。
+func TestCloneCache_EvictWithMetaCharPathStaysInside(t *testing.T) {
+	base := t.TempDir()
+	metaDir := filepath.Join(base, "cc[x]", "clones") // 字面量含 [
+	victim := filepath.Join(base, "ccx", "clones", "victim.git")
+	require.NoError(t, os.MkdirAll(metaDir, 0o750))
+	require.NoError(t, os.MkdirAll(victim, 0o750))
+
+	svc := newMockService()
+	svc.config.Sync.CloneCacheDir = metaDir
+	svc.config.Sync.CloneCacheMaxMB = 1
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	// cacheDir 内放 2MiB 垃圾条目触发淘汰,keep 用它自己。
+	garbage := filepath.Join(metaDir, "garbage.git")
+	require.NoError(t, os.MkdirAll(garbage, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(garbage, "junk"),
+		incompressibleBytes(2<<20), 0o644))
+
+	e.cache.evictOverCap(garbage)
+
+	_, err = os.Stat(victim)
+	require.NoError(t, err,
+		"eviction must never touch paths outside cacheDir (glob metachar escape)")
+}
+
+// TestCloneCache_SweepsOrphanTmp(#24):崩溃残留的 <entry>.git.tmp 必须按
+// 年龄清扫——它计入总量却永不可淘汰,不清的话配置上限后缓存会塌缩到只剩
+// keep(探针实证 survivors=1 + 垃圾永驻)。
+func TestCloneCache_SweepsOrphanTmp(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	svc.config.Sync.CloneCacheMaxMB = 1
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+	ctx := context.Background()
+	task := &model.SyncTask{SourceBranch: "main"}
+
+	// 孤儿 tmp:2MiB 垃圾,2 小时前的(超过清扫宽限),对应 entry 不存在。
+	orphan := filepath.Join(cacheDir, "orphan.git.tmp")
+	require.NoError(t, os.MkdirAll(filepath.Join(orphan, "x"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(orphan, "x", "big"),
+		incompressibleBytes(2<<20), 0o644))
+	old := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(orphan, old, old))
+
+	// 连种 3 个小源触发容量检查。
+	for i := 0; i < 3; i++ {
+		src := newCloneCacheSourceWithPayload(t, 160_000)
+		require.NoError(t, e.cloneRepo(ctx, filepath.Join(t.TempDir(), "wd"),
+			&model.Repo{CloneURL: src}, task, nil))
+	}
+
+	// 断言:孤儿被清;健康条目没有被「计了孤儿的总量」逼到塌缩。
+	_, err = os.Stat(orphan)
+	require.True(t, os.IsNotExist(err),
+		"aged orphan tmp must be swept, still present: %v", err)
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Greater(t, len(entries), 1,
+		"cache must not collapse to a single entry under cap (got %v)", entries)
+}
+
+// TestCloneCache_WikiHealsAfterEntryDeleted(#25):共享仓被删后,存量 wiki
+// workdir 下一轮必须走自愈(清 workdir → clone 分支 → 重种条目)——
+// 与主仓同轨,配置字段文档的自愈承诺对 wiki 同样成立。
+func TestCloneCache_WikiHealsAfterEntryDeleted(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	base := t.TempDir()
+	initFixtureRepo(t, filepath.Join(base, "src.wiki.git"))
+	cmd := exec.Command("git", "init", "-q", "--bare", filepath.Join(base, "dst.wiki.git"))
+	outb, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", outb)
+	srcRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "src")}
+	dstRepo := &model.Repo{CloneURL: "file://" + filepath.Join(base, "dst")}
+	workDir := t.TempDir()
+
+	// 第一轮:种入 + wiki 借用。
+	require.NoError(t, e.syncWiki(context.Background(), workDir, &model.SyncTask{},
+		srcRepo, dstRepo, nil, nil, &strings.Builder{}))
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// 删共享仓(等价被逐出/手删)。
+	require.NoError(t, os.RemoveAll(cacheDir))
+
+	// 第二轮:必须自愈重建,而不是带着悬空 alternates 空转。
+	require.NoError(t, e.syncWiki(context.Background(), workDir, &model.SyncTask{},
+		srcRepo, dstRepo, nil, nil, &strings.Builder{}))
+	entries2, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries2, 1,
+		"wiki cache entry must be rebuilt after deletion (self-heal), got %v", entries2)
+	alt, err := os.ReadFile(filepath.Join(workDir, "wiki", ".git", "objects", "info", "alternates"))
+	require.NoError(t, err, "healed wiki workdir must borrow again")
+	require.Contains(t, string(alt), cacheDir)
+}
+
+// TestCloneCache_WikiAndMainSeparateEntries(#32):同一 cacheDir 下主仓与
+// wiki 各自成条目(键是完整 URL 的哈希)——防止「裁掉 .wiki.git 再哈希」
+// 一类回归让两者共用一个条目。
+func TestCloneCache_WikiAndMainSeparateEntries(t *testing.T) {
+	svc := newMockService()
+	cacheDir := filepath.Join(t.TempDir(), "clones")
+	svc.config.Sync.CloneCacheDir = cacheDir
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	base := t.TempDir()
+	initFixtureRepo(t, filepath.Join(base, "src"))          // 主仓
+	initFixtureRepo(t, filepath.Join(base, "src.wiki.git")) // wiki
+	outb, err := exec.Command("git", "init", "-q", "--bare",
+		filepath.Join(base, "dst.wiki.git")).CombinedOutput()
+	require.NoError(t, err, "%s", outb)
+
+	// 主仓先种一个条目。
+	require.NoError(t, e.cloneRepo(context.Background(), filepath.Join(t.TempDir(), "wd"),
+		&model.Repo{CloneURL: "file://" + filepath.Join(base, "src")},
+		&model.SyncTask{SourceBranch: "main"}, nil))
+
+	// wiki 再种一个:必须是第二棵,且键名带 src.wiki 前缀。
+	require.NoError(t, e.syncWiki(context.Background(), t.TempDir(), &model.SyncTask{},
+		&model.Repo{CloneURL: "file://" + filepath.Join(base, "src")},
+		&model.Repo{CloneURL: "file://" + filepath.Join(base, "dst")},
+		nil, nil, &strings.Builder{}))
+
+	entries, err := filepath.Glob(filepath.Join(cacheDir, "*.git"))
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "main and wiki must be separate entries, got %v", entries)
+	var wikiEntry string
+	for _, p := range entries {
+		if strings.Contains(filepath.Base(p), "src.wiki-") {
+			wikiEntry = p
+		}
+	}
+	require.NotEmpty(t, wikiEntry,
+		"wiki entry must be keyed by the wiki URL (basename src.wiki-*), got %v", entries)
+}
+
+// TestWikiCacheRaceClassification(#27):竞态错误的分类冲突前提 + 守卫判定。
+// 前提:共享仓消失导致的 ErrNotAGitRepo 文案含 "does not exist",同时命中
+// wiki 的 not-found 分类器——若无守卫,竞态会被吞成静默 skip。
+func TestWikiCacheRaceClassification(t *testing.T) {
+	svc := newMockService()
+	svc.config.Sync.CloneCacheDir = filepath.Join(t.TempDir(), "clones")
+	e, err := NewExecutor(svc)
+	require.NoError(t, err)
+
+	// 真实造一个「Reference 指向不存在路径」的克隆错误。
+	dest := filepath.Join(t.TempDir(), "wd")
+	err = e.backend.Clone(context.Background(), gitbackend.CloneOptions{
+		URL:       newCloneCacheSource(t),
+		Path:      dest,
+		Reference: filepath.Join(t.TempDir(), "vanished"),
+	})
+	require.Error(t, err)
+	require.True(t, oekiterrors.Is(err, gitbackend.ErrNotAGitRepo),
+		"premise: dangling reference must carry ErrNotAGitRepo, got: %v", err)
+	require.True(t, isWikiNotFound(err),
+		"premise: the same error also matches wiki not-found (conflict), got: %v", err)
+
+	// 守卫:带哨兵 + 已设 Reference → 竞态,必须走降级重试而非 wiki 分类。
+	require.True(t, isCacheRaceNotRepo(err, "/some/reference"))
+	// 无 Reference(非缓存路径)或无哨兵(真 wiki 404)→ 不是竞态。
+	require.False(t, isCacheRaceNotRepo(err, ""))
+	require.False(t, isCacheRaceNotRepo(
+		fmt.Errorf("fatal: repository 'http://x/y.wiki.git/' not found"), "/some/reference"))
+}
+
+// TestCloneCache_WikiNotFoundSkipsEndToEnd(#28):wiki 不存在 → skip 的核心
+// 契约端到端覆盖——httptest 404 的 git 报文含 "not found"(探针实测),
+// cache 开/关两侧都必须 nil + skip 文案,skip 分支第一次被真实执行。
+func TestCloneCache_WikiNotFoundSkipsEndToEnd(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer srv.Close()
+
+	for _, cacheOn := range []bool{false, true} {
+		name := "no-cache"
+		if cacheOn {
+			name = "with-cache"
+		}
+		t.Run(name, func(t *testing.T) {
+			svc := newMockService()
+			if cacheOn {
+				svc.config.Sync.CloneCacheDir = filepath.Join(t.TempDir(), "clones")
+			}
+			e, err := NewExecutor(svc)
+			require.NoError(t, err)
+
+			details := &strings.Builder{}
+			err = e.syncWiki(context.Background(), t.TempDir(), &model.SyncTask{},
+				&model.Repo{CloneURL: srv.URL + "/src"},
+				&model.Repo{CloneURL: srv.URL + "/dst"},
+				nil, nil, details)
+			require.NoError(t, err,
+				"missing wiki must skip, not fail (cache=%v): %s\n%s", cacheOn, err, details.String())
+			require.Contains(t, details.String(), "wiki: not found on source, skip",
+				"skip branch must execute, details: %s", details.String())
+		})
+	}
 }

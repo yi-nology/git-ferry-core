@@ -293,12 +293,54 @@ func TestLoadConfig_CloneCacheDirAbsolute(t *testing.T) {
 				}
 				return
 			}
-			// 空值与绝对路径:Validate 的其它必填项(database 等)要先满足,
-			// 否则会报出与本测试无关的错误。
-			if err != nil && !strings.Contains(err.Error(), "clone_cache_dir") {
-				// 允许 database 等基线必填项报错,但绝不能是 clone_cache_dir。
-				t.Fatalf("unexpected error: %v", err)
+			// 空值与绝对路径必须零错误(基线 database 已填)——守卫不能只拦
+			// 「不含 key 的错误」:那会放过「错误地拒绝绝对路径」这一目标回归
+			// (真实错误路径总带 key,恒不触发)。(#29)
+			if err != nil {
+				t.Fatalf("expected no error for CloneCacheDir %q, got: %v", tc.value, err)
 			}
 		})
+	}
+}
+
+// TestLoadConfig_CloneCacheMaxMB:容量上限的 yaml/env 标签与 <=0=不限制语义
+// ——标签拼错若无此测会静默变成无上限(#31)。
+func TestLoadConfig_CloneCacheMaxMB(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+database:
+  driver: sqlite
+  dsn: test.db
+
+sync:
+  clone_cache_max_mb: 512
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.Sync.CloneCacheMaxMB != 512 {
+		t.Errorf("yaml clone_cache_max_mb: got %d, want 512", cfg.Sync.CloneCacheMaxMB)
+	}
+
+	// env 覆盖(DefaultOverwrite=true)。
+	t.Setenv("GIT_SYNC_CLONE_CACHE_MAX_MB", "256")
+	cfg, err = LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig with env failed: %v", err)
+	}
+	if cfg.Sync.CloneCacheMaxMB != 256 {
+		t.Errorf("env overwrite: got %d, want 256", cfg.Sync.CloneCacheMaxMB)
+	}
+
+	// <=0 = 不限制造文档语义:Validate 放行。
+	neg := &Config{Database: DatabaseConfig{Driver: DriverSQLite, DSN: "test.db"}}
+	neg.Sync.CloneCacheMaxMB = -1
+	if err := neg.Validate(); err != nil {
+		t.Errorf("negative max must pass as unlimited, got: %v", err)
 	}
 }

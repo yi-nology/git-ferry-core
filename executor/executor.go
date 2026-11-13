@@ -385,15 +385,24 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	// cloneCache.ensure 收口(同源互斥,拿不到锁本次降级普通克隆);
 	// 种入失败 fail-fast(显式配置的缓存坏了必须炸,不静默退化)。
 	if e.cache != nil {
-		ref, usable, cerr := e.cache.ensure(ctx, e.backend, repo.CloneURL, partial, cloneOpts.Auth)
+		ref, usable, release, cerr := e.cache.ensure(ctx, e.backend, repo.CloneURL, partial, cloneOpts.Auth)
 		if cerr != nil {
 			return cerr
 		}
 		if usable {
+			// 锁持有到 clone 结束(#23 在途保护);release 幂等。
+			defer release()
 			cloneOpts.Reference = ref
 		}
 	}
 	err := e.backend.Clone(ctx, cloneOpts)
+	// #27:共享仓 ensure 后消失的竞态——降级无 reference 重试一次,
+	// 不让一次缓存竞态把整跑打成失败(下轮自愈本可兜底,这里连轮都省了)。
+	if isCacheRaceNotRepo(err, cloneOpts.Reference) {
+		slog.Info("clone cache vanished mid-clone, retrying without reference", "error", err)
+		cloneOpts.Reference = ""
+		err = e.backend.Clone(ctx, cloneOpts)
+	}
 	if err != nil {
 		return err
 	}
