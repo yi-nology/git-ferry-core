@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.44.0] - 2026-11-13
 
 ### Added（Clone Cache 演进轮——wiki 接线 + 可观测性）
 
