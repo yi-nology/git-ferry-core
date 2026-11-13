@@ -2,6 +2,24 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added（P3 Repository Governance——Issue/PR 元数据迁移,切片 6）
+
+- **`Service.MigrateRepoMetadata` Issue/PR 元数据高保真迁移**(评审 P3
+  收尾:「区分 Git 对象恢复和 Issue/PR 元数据的高保真迁移」)——
+  git 对象由同步任务搬,Issue/PR 是平台侧数据,走平台 API 抽取+写入。
+  报告式 + dry-run(先盘点再执行,不做静默去重):Issue 标题/正文/labels
+  搬运 + 源 closed 同步关闭 + 评论逐条搬运;PR/MR 搬运(分支映射)+
+  源 closed 同步关闭。分页取尽(Page=0 首页语义,短页结束),单类别
+  limit 默认 500 防预算爆炸;单条失败记 Errors 不中断其余。
+  **保真边界随报告固定携带(诚实声明)**:作者/时间由平台按调用身份
+  重置非原值;assignee/milestone 不跨平台;merged 状态不重放;
+  GitHub issue 列表混入的 PR(IsPullRequest)过滤后由 PR 通道搬。
+  依赖最小接口 metadataMigrator(源读/目标写,同接口两侧各传一个
+  provider 实例),全分支语义单测覆盖。
+- 治理透出配套:`ListReconcileDrift`/`ListReconcileAll` service 方法。
+
 ## [v0.41.0] — 2026-11-13
 
 ### Fixed（清零战役 Y3——7 个真缺陷，#12-#18）
