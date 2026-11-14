@@ -1,10 +1,11 @@
 package mirror
 
 import (
-	"errors"
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // matchGlob 判断 p 是否命中 pattern(glob,允许 ** 跨层)。
@@ -68,13 +69,13 @@ func ValidateGlob(pattern string) error {
 	}
 	for _, seg := range strings.Split(pattern, "/") {
 		if seg == "" {
-			return fmt.Errorf("glob 模式含空段: %q", pattern)
+			return errors.New(fmt.Sprintf("glob 模式含空段: %q", pattern))
 		}
 		if strings.ContainsRune(seg, 92) {
-			return fmt.Errorf("glob 模式含反斜杠: %q", pattern)
+			return errors.New(fmt.Sprintf("glob 模式含反斜杠: %q", pattern))
 		}
 		if _, err := path.Match(seg, ""); err != nil {
-			return fmt.Errorf("glob 模式非法: %q: %w", pattern, err)
+			return errors.Wrap(err, fmt.Sprintf("glob 模式非法: %q", pattern))
 		}
 	}
 	return nil

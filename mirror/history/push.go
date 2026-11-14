@@ -7,6 +7,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/oekit/pkg/errors"
 
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -62,10 +63,10 @@ type PushReport struct {
 // 推送走 gitbackend,不执行动态参数子进程(与镜像中心的安全约束一致)。
 func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 	if opts.RepoPath == "" {
-		return nil, fmt.Errorf("RepoPath 不能为空")
+		return nil, errors.New("RepoPath 不能为空")
 	}
 	if len(opts.Targets) == 0 {
-		return nil, fmt.Errorf("至少需要一个推送目标")
+		return nil, errors.New("至少需要一个推送目标")
 	}
 	branch := opts.Branch
 	if branch == "" {
@@ -74,22 +75,22 @@ func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 
 	repo, err := git.PlainOpen(opts.RepoPath)
 	if err != nil {
-		return nil, fmt.Errorf("打开工作仓库失败: %w", err)
+		return nil, errors.Wrap(err, "打开工作仓库失败")
 	}
 	head, err := repo.Reference(plumbing.NewBranchReferenceName(branch), true)
 	if err != nil {
-		return nil, fmt.Errorf("读取分支 %s 失败: %w", branch, err)
+		return nil, errors.Wrap(err, fmt.Sprintf("读取分支 %s 失败", branch))
 	}
 
 	backend, err := gitbackend.NewGitBackend(gitbackend.Options{Type: opts.BackendType})
 	if err != nil {
-		return nil, fmt.Errorf("初始化 git backend 失败: %w", err)
+		return nil, errors.Wrap(err, "初始化 git backend 失败")
 	}
 
 	report := &PushReport{Heads: map[string]string{}, Branch: branch}
 	for _, target := range opts.Targets {
 		if target.Name == "" || target.URL == "" {
-			return nil, fmt.Errorf("推送目标的 Name 与 URL 都不能为空")
+			return nil, errors.New("推送目标的 Name 与 URL 都不能为空")
 		}
 		if err := EnsureRemote(repo, target.Name, target.URL); err != nil {
 			return nil, err
@@ -104,8 +105,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 			Auth:  opts.Auth,
 		}); err != nil {
 			// 立即中止:不推送其余远端,避免半发布状态。
-			return nil, fmt.Errorf("推送到远端 %s 失败(已推送:%v,其余远端未推送): %w",
-				target.Name, report.Pushed, err)
+			return nil, errors.Wrap(err, fmt.Sprintf("推送到远端 %s 失败(已推送:%v,其余远端未推送)", target.Name, report.Pushed))
 		}
 		report.Pushed = append(report.Pushed, target.Name)
 		report.Heads[target.Name] = head.Hash().String()
@@ -122,7 +122,7 @@ func Push(ctx context.Context, opts PushOptions) (*PushReport, error) {
 func EnsureRemote(repo *git.Repository, name, url string) error {
 	remotes, err := repo.Remotes()
 	if err != nil {
-		return fmt.Errorf("读取远端列表失败: %w", err)
+		return errors.Wrap(err, "读取远端列表失败")
 	}
 	for _, r := range remotes {
 		if r.Config().Name != name {
@@ -133,7 +133,7 @@ func EnsureRemote(repo *git.Repository, name, url string) error {
 		}
 		// URL 变了(或远端没记 URL):更新它。
 		if err := repo.DeleteRemote(name); err != nil {
-			return fmt.Errorf("删除远端 %s 失败: %w", name, err)
+			return errors.Wrap(err, fmt.Sprintf("删除远端 %s 失败", name))
 		}
 		break
 	}
@@ -141,7 +141,7 @@ func EnsureRemote(repo *git.Repository, name, url string) error {
 		Name: name,
 		URLs: []string{url},
 	}); err != nil {
-		return fmt.Errorf("创建远端 %s 失败: %w", name, err)
+		return errors.Wrap(err, fmt.Sprintf("创建远端 %s 失败", name))
 	}
 	return nil
 }

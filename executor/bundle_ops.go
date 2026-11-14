@@ -132,14 +132,14 @@ func RestoreBundle(ctx context.Context, bundlePath, destDir string) error {
 	}
 	if fi, err := os.Stat(destDir); err == nil {
 		if !fi.IsDir() {
-			return fmt.Errorf("dest %s is not a directory", destDir)
+			return oekiterrors.New(fmt.Sprintf("dest %s is not a directory", destDir))
 		}
 		entries, err := os.ReadDir(destDir)
 		if err != nil {
 			return err
 		}
 		if len(entries) > 0 {
-			return fmt.Errorf("dest %s is not empty; refusing to overwrite", destDir)
+			return oekiterrors.New(fmt.Sprintf("dest %s is not empty; refusing to overwrite", destDir))
 		}
 	} else if !os.IsNotExist(err) {
 		return err
@@ -208,7 +208,7 @@ func needsCheckout(destDir string) bool {
 // 白名单之外的回落裸 git(dir="" 即无仓库上下文,RunRaw 原样支持)。
 func runGitRead(ctx context.Context, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
-		return "", fmt.Errorf("empty git args")
+		return "", oekiterrors.New("empty git args")
 	}
 	return runGitThroughBackend(ctx, readGitBackend(), dir, args...)
 }

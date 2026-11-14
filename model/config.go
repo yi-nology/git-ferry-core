@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/sethvargo/go-envconfig"
 	"gopkg.in/yaml.v3"
 )
@@ -214,7 +215,7 @@ func LoadConfig(path string) (*Config, error) {
 		Lookuper:         envconfig.OsLookuper(),
 		DefaultOverwrite: true,
 	}); err != nil {
-		return nil, fmt.Errorf("processing environment variables: %w", err)
+		return nil, errors.Wrap(err, "processing environment variables")
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -235,13 +236,13 @@ func (c *Config) Validate() error {
 		c.Server.Port = DefaultPort
 	}
 	if c.Database.Driver == "" {
-		return fmt.Errorf("database driver is required")
+		return errors.New("database driver is required")
 	}
 	if c.Database.DSN == "" {
-		return fmt.Errorf("database dsn is required")
+		return errors.New("database dsn is required")
 	}
 	if c.Database.Driver != DriverMySQL && c.Database.Driver != DriverSQLite {
-		return fmt.Errorf("unsupported database driver: %s", c.Database.Driver)
+		return errors.New(fmt.Sprintf("unsupported database driver: %s", c.Database.Driver))
 	}
 	if c.Database.MaxIdleConns <= 0 {
 		c.Database.MaxIdleConns = DefaultMaxIdleConns
@@ -271,7 +272,7 @@ func (c *Config) Validate() error {
 	// "凭空消失"重新种一遍),~/ 波浪号不被展开(实测会字面量建出 ~ 目录)。
 	// IsAbs 同时挡住这两种形态;空=关闭放行。
 	if c.Sync.CloneCacheDir != "" && !filepath.IsAbs(c.Sync.CloneCacheDir) {
-		return fmt.Errorf("sync.clone_cache_dir must be an absolute path (got %q; ~ is not expanded)", c.Sync.CloneCacheDir)
+		return errors.New(fmt.Sprintf("sync.clone_cache_dir must be an absolute path (got %q; ~ is not expanded)", c.Sync.CloneCacheDir))
 	}
 	if c.Webhook.RateLimit <= 0 {
 		c.Webhook.RateLimit = DefaultWebhookRateLimit

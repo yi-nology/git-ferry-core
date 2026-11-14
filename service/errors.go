@@ -1,8 +1,7 @@
 package service
 
 import (
-	"errors"
-
+	"github.com/oekit/pkg/errors"
 	"gorm.io/gorm"
 
 	sdkprov "github.com/yi-nology/go-git-platform/provider"

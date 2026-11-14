@@ -62,7 +62,7 @@ func InitDB(driver, dsn string) (*gorm.DB, error) {
 	case DriverSQLite:
 		db, err = gorm.Open(sqlite.Open(dsn), gormCfg)
 	default:
-		return nil, fmt.Errorf("unsupported driver: %s", driver)
+		return nil, oekiterrors.New(fmt.Sprintf("unsupported driver: %s", driver))
 	}
 	if err != nil {
 		return nil, err

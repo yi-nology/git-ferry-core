@@ -140,7 +140,7 @@ func ensureSchema(db *gorm.DB, driver string) error {
 		}
 		if err := db.Transaction(func(tx *gorm.DB) error {
 			if err := m.Apply(tx); err != nil {
-				return fmt.Errorf("migration %d (%s) failed: %w", m.Version, m.Name, err)
+				return oekiterrors.Wrap(err, fmt.Sprintf("migration %d (%s) failed", m.Version, m.Name))
 			}
 			return tx.Create(&SchemaMigration{Version: m.Version, Name: m.Name, AppliedAt: time.Now()}).Error
 		}); err != nil {
@@ -168,8 +168,7 @@ func acquireSchemaLock(db *gorm.DB, driver string) (unlock func(), err error) {
 		return nil, oekiterrors.Wrap(err, "acquire schema migrate lock")
 	}
 	if !result.Valid || result.Int64 != 1 {
-		return nil, fmt.Errorf(
-			"schema migrate lock %s not acquired within %ds (另一实例正在迁移?)", schemaMigrateLockName, schemaMigrateLockTimeoutSec)
+		return nil, oekiterrors.New(fmt.Sprintf("schema migrate lock %s not acquired within %ds (另一实例正在迁移?)", schemaMigrateLockName, schemaMigrateLockTimeoutSec))
 	}
 	var once bool
 	return func() {

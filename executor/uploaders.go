@@ -7,6 +7,8 @@ import (
 	"os"
 	"path"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // Uploader 单目的地上传策略(注册表驱动,新增目的地只需实现此接口)。
@@ -81,7 +83,7 @@ type s3Uploader struct{}
 func (s3Uploader) Type() DestinationType { return DestS3 }
 func (s3Uploader) Upload(ctx context.Context, d Destination, objectKey string, data []byte) (string, error) {
 	if d.Bucket == "" {
-		return "", fmt.Errorf("s3: bucket required")
+		return "", errors.New("s3: bucket required")
 	}
 	cfg := &S3Config{
 		Endpoint:  d.Endpoint,
@@ -105,7 +107,7 @@ type webdavUploader struct{}
 func (webdavUploader) Type() DestinationType { return DestWebDAV }
 func (webdavUploader) Upload(ctx context.Context, d Destination, objectKey string, data []byte) (string, error) {
 	if d.URL == "" {
-		return "", fmt.Errorf("webdav: url required")
+		return "", errors.New("webdav: url required")
 	}
 	url := strings.TrimRight(d.URL, "/") + "/" + path.Base(objectKey)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(string(data)))
@@ -123,7 +125,7 @@ func (webdavUploader) Upload(ctx context.Context, d Destination, objectKey strin
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("webdav put %s: status %d", url, resp.StatusCode)
+		return "", errors.New(fmt.Sprintf("webdav put %s: status %d", url, resp.StatusCode))
 	}
 	return url, nil
 }
@@ -133,7 +135,7 @@ type azureUploader struct{}
 func (azureUploader) Type() DestinationType { return DestAzure }
 func (azureUploader) Upload(ctx context.Context, d Destination, objectKey string, data []byte) (string, error) {
 	if d.AccountName == "" || d.Container == "" {
-		return "", fmt.Errorf("azure: account_name and container required")
+		return "", errors.New("azure: account_name and container required")
 	}
 	if err := azureBlobPut(ctx, d.AccountName, d.AccountKey, d.Container, objectKey, data); err != nil {
 		return "", err
@@ -146,7 +148,7 @@ type localUploader struct{}
 func (localUploader) Type() DestinationType { return DestLocal }
 func (localUploader) Upload(_ context.Context, d Destination, objectKey string, data []byte) (string, error) {
 	if d.URL == "" {
-		return "", fmt.Errorf("local: dir (url field) required")
+		return "", errors.New("local: dir (url field) required")
 	}
 	dst := strings.TrimRight(d.URL, "/") + "/" + path.Base(objectKey)
 	if err := os.WriteFile(dst, data, 0o640); err != nil {

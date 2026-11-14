@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed（错误构造全量收敛 oekit——309 处 fmt.Errorf 清零,用户裁定）
+
+- **fmt.Errorf → oekit 全量迁移(51 文件 309 处)**,与壳层同口径:
+  纯文本→`errors.New`;插值→`errors.New(fmt.Sprintf(...))`(错误对象
+  oekit,fmt 仅字符串格式化);标准 `"前缀: %w"`→`errors.Wrap(err,
+  "前缀")`(126 处,输出逐字等价);复杂 %w 2 处适配 **oekit v0.48
+  Errorf 终局退役**(CHANGELOG:普通格式化→fmt.Errorf/kv→Wrap,
+  跨 org 已同列车):`%w: %s` 链保留改 `Wrap(哨兵, 链详情)`,
+  `%w 中间+运维说明`改 `Wrap(err, 前缀, kv hint)`(说明进结构化
+  上下文,信息无损)。
+- 多行拼接截断 bug 6 处修复(与 git 原版逐字核对)+note 丢参修复
+  ——自动转换的多行 rest 截断,失配检测脚本(动词数 vs 参数数)复核。
+- `errors.Join`(stdlib 独有聚合器,非 error 构造)以 `stderrors`
+  别名保留 5 处;dao 系 errors.Is(stdlib)未动(无构造需求)。
+
 ## [v0.46.0] - 2026-11-13
 
 ### Removed（BREAKING）

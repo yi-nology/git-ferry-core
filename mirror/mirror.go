@@ -18,7 +18,6 @@ package mirror
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -30,6 +29,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
 
@@ -175,7 +175,7 @@ func Publish(ctx context.Context, opts Options) (*Report, error) {
 			report.Tags = append(report.Tags, *r)
 		}
 		if err != nil {
-			return report, fmt.Errorf("发布 tag %s 失败: %w", tag, err)
+			return report, errors.Wrap(err, fmt.Sprintf("发布 tag %s 失败", tag))
 		}
 	}
 	return report, nil
@@ -183,16 +183,16 @@ func Publish(ctx context.Context, opts Options) (*Report, error) {
 
 func validateOptions(opts Options) error {
 	if opts.RepoDir == "" {
-		return fmt.Errorf("RepoDir 不能为空")
+		return errors.New("RepoDir 不能为空")
 	}
 	if len(opts.Tags) == 0 {
-		return fmt.Errorf("tags 至少需要一个")
+		return errors.New("tags 至少需要一个")
 	}
 	if opts.Mapping.Source == "" || opts.Mapping.Target == "" {
-		return fmt.Errorf("Mapping.Source / Mapping.Target 不能为空")
+		return errors.New("Mapping.Source / Mapping.Target 不能为空")
 	}
 	if opts.Mapping.Source == opts.Mapping.Target {
-		return fmt.Errorf("Mapping.Source 与 Target 相同(%s),无改写意义", opts.Mapping.Source)
+		return errors.New(fmt.Sprintf("Mapping.Source 与 Target 相同(%s),无改写意义", opts.Mapping.Source))
 	}
 	if err := validateName("tag", opts.Tags[0]); err != nil {
 		return err
@@ -228,7 +228,7 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 
 	repo, err := git.PlainOpen(opts.RepoDir)
 	if err != nil {
-		return nil, fmt.Errorf("打开 canonical 仓库失败: %w", err)
+		return nil, errors.Wrap(err, "打开 canonical 仓库失败")
 	}
 
 	mirrorURL, err := remoteURL(repo, remote)
@@ -260,7 +260,7 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 	} else {
 		p.backend, err = gitbackend.NewGitBackend(gitbackend.Options{Type: opts.BackendType})
 		if err != nil {
-			return nil, fmt.Errorf("初始化 git backend 失败: %w", err)
+			return nil, errors.Wrap(err, "初始化 git backend 失败")
 		}
 	}
 
@@ -271,7 +271,7 @@ func publishTag(ctx context.Context, opts Options, tag string) (*TagReport, erro
 	defer func() { _ = os.RemoveAll(p.tmpRepo) }()
 	p.workRepo, err = git.PlainInit(p.tmpRepo, false)
 	if err != nil {
-		return nil, fmt.Errorf("初始化临时仓库失败: %w", err)
+		return nil, errors.Wrap(err, "初始化临时仓库失败")
 	}
 	if _, err = p.workRepo.CreateRemote(&config.RemoteConfig{Name: remote, URLs: []string{mirrorURL}}); err != nil {
 		return nil, err
@@ -289,7 +289,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 		return nil, err
 	}
 	if modulePath != p.opts.Mapping.Source {
-		return nil, fmt.Errorf("go.mod module 是 %s,与 Mapping.Source %s 不一致", modulePath, p.opts.Mapping.Source)
+		return nil, errors.New(fmt.Sprintf("go.mod module 是 %s,与 Mapping.Source %s 不一致", modulePath, p.opts.Mapping.Source))
 	}
 
 	srcCommit, err := resolveTagCommit(p.repo, tag)
@@ -301,7 +301,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	// --- 读源树并全量身份改写(只读 canonical,写临时仓库) ---
 	b, err := newBuilder(p.repo, p.workRepo.Storer, p.opts.Mapping, p.opts.ScrubRules)
 	if err != nil {
-		return nil, fmt.Errorf("编译身份规则失败: %w", err)
+		return nil, errors.Wrap(err, "编译身份规则失败")
 	}
 	treeHash, err := b.rewriteTree(srcCommit.TreeHash, "")
 	if err != nil {
@@ -317,9 +317,9 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	// 历史同步侧的处理是「该文件不发布」;镜像发布是整棵树,
 	// 所以只能整棵中止。
 	if len(b.mandatoryHits) > 0 {
-		return report, fmt.Errorf("内容命中强制人工处理的痕迹规则(%d 处),已中止(未推送):%s"+
+		return report, errors.New(fmt.Sprintf("内容命中强制人工处理的痕迹规则(%d 处),已中止(未推送):%s"+
 			" —— 密钥类不做自动替换,请人工清理后再发布",
-			len(b.mandatoryHits), strings.Join(b.mandatoryHits, ", "))
+			len(b.mandatoryHits), strings.Join(b.mandatoryHits, ", ")))
 	}
 	report.Tree = treeHash.String()
 	// 策略快照在门禁通过前就绪:DryRun 预检报告也要能带出
@@ -336,9 +336,9 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	if len(b.residual) > 0 {
 		// **把报告一起返回**:残留清单在 report 里,
 		// 只报错不给清单的话,调用方无从知道该处理哪些文件。
-		return report, fmt.Errorf("身份改写后仍有内网标识残留(%d 个文件),已中止(未推送):%s"+
+		return report, errors.New(fmt.Sprintf("身份改写后仍有内网标识残留(%d 个文件),已中止(未推送):%s"+
 			" —— 这些文件是二进制或超过 %d 字节的大小上限,无法安全改写;请人工处理后再发布",
-			len(b.residual), strings.Join(b.residual, ", "), maxRewriteSize)
+			len(b.residual), strings.Join(b.residual, ", "), maxRewriteSize))
 	}
 
 	// --- 编译门禁:改写后必须可编译才允许推送 ---
@@ -348,10 +348,10 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	}
 	defer func() { _ = os.RemoveAll(buildDir) }()
 	if err = materializeTree(p.workRepo.Storer, treeHash, buildDir); err != nil {
-		return nil, fmt.Errorf("物化改写后源码失败: %w", err)
+		return nil, errors.Wrap(err, "物化改写后源码失败")
 	}
 	if err = TypeCheckGate(ctx, buildDir); err != nil {
-		return nil, fmt.Errorf("编译门禁未通过,已中止(未推送): %w", err)
+		return nil, errors.Wrap(err, "编译门禁未通过,已中止(未推送)")
 	}
 	slog.Info("mirror: 编译门禁通过", "tag", tag)
 
@@ -373,8 +373,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 			// **盲推由 AllowUnverifiedPush 单独授权** —— 原实现里它被
 			// AllowOverwrite 顺带放行(文档没写),等于把「覆盖已发布版本」
 			// 与「查不到远端状态」捆成一个开关。
-			return nil, fmt.Errorf("远端一致性检查失败(拒绝盲推,防覆盖已发布版本;"+
-				"确认要盲推请设置 AllowUnverifiedPush): %w", err)
+			return nil, errors.New("远端一致性检查失败(拒绝盲推,防覆盖已发布版本;")
 		} else {
 			slog.Warn("mirror: 远端一致性检查不可用,AllowUnverifiedPush 已开启,继续推送", "tag", tag, "error", err)
 			report.Warning = "远端一致性检查不可用(远端不可达),本次推送未核对远端已有版本"
@@ -384,8 +383,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	report.TreeMatchedRemote = res == compareMatched
 	report.OverwroteDivergent = overwrote
 	if res == compareMismatched && !overwrote {
-		return nil, fmt.Errorf(
-			"镜像远端已存在同名 tag %s 且内容(tree)与本次合成结果不一致,拒绝覆盖已发布版本;确认要覆盖请设置 AllowOverwrite", tag)
+		return nil, errors.New(fmt.Sprintf("镜像远端已存在同名 tag %s 且内容(tree)与本次合成结果不一致,拒绝覆盖已发布版本;确认要覆盖请设置 AllowOverwrite", tag))
 	}
 	if overwrote {
 		// **覆盖的不可逆后果必须显式带出**:
@@ -443,7 +441,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 		Force:    true,
 		Auth:     p.opts.Auth,
 	}); err != nil {
-		return nil, fmt.Errorf("推送镜像远端 %s 的 tag %s 失败: %w", mirrorURL, tag, err)
+		return nil, errors.Wrap(err, fmt.Sprintf("推送镜像远端 %s 的 tag %s 失败", mirrorURL, tag))
 	}
 	if updateMain {
 		// **推 main 前必须重读远端状态** —— 上面那次判断是在推 tag **之前**做的,
@@ -616,7 +614,7 @@ func resolveTagCommit(repo *git.Repository, tag string) (*object.Commit, error) 
 func resolveRefCommit(repo *git.Repository, ref plumbing.ReferenceName) (*object.Commit, error) {
 	r, err := repo.Reference(ref, false)
 	if err != nil {
-		return nil, fmt.Errorf("引用 %s 不存在: %w", ref.Short(), err)
+		return nil, errors.Wrap(err, fmt.Sprintf("引用 %s 不存在", ref.Short()))
 	}
 	h := r.Hash()
 	if obj, err := repo.TagObject(h); err == nil {
@@ -626,7 +624,7 @@ func resolveRefCommit(repo *git.Repository, ref plumbing.ReferenceName) (*object
 	}
 	commit, err := repo.CommitObject(h)
 	if err != nil {
-		return nil, fmt.Errorf("%s 未指向 commit: %w", ref.Short(), err)
+		return nil, errors.Wrap(err, fmt.Sprintf("%s 未指向 commit", ref.Short()))
 	}
 	return commit, nil
 }
@@ -643,7 +641,7 @@ func remoteURL(repo *git.Repository, name string) (string, error) {
 	}
 	rem, ok := cfg.Remotes[name]
 	if !ok || len(rem.URLs) == 0 {
-		return "", fmt.Errorf("canonical 仓库未配置远端 %s(先 git remote add %s <镜像仓库 URL>)", name, name)
+		return "", errors.New(fmt.Sprintf("canonical 仓库未配置远端 %s(先 git remote add %s <镜像仓库 URL>)", name, name))
 	}
 	return rem.URLs[0], nil
 }
@@ -658,7 +656,7 @@ func ReadModulePath(dir string) (string, error) {
 func readModulePath(dir string) (string, error) {
 	data, err := os.ReadFile(dir + "/go.mod")
 	if err != nil {
-		return "", fmt.Errorf("读取 go.mod 失败: %w", err)
+		return "", errors.Wrap(err, "读取 go.mod 失败")
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -674,5 +672,5 @@ func readModulePath(dir string) (string, error) {
 		}
 		return p, nil
 	}
-	return "", fmt.Errorf("go.mod 中未找到 module 行")
+	return "", errors.New("go.mod 中未找到 module 行")
 }

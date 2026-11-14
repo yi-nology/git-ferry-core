@@ -2,10 +2,11 @@ package executor
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"strings"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -34,7 +35,7 @@ func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *mode
 		_ = e.backend.RemoveRemote(ctx, dir, remoteName)
 		if err := e.backend.AddRemote(ctx, dir, remoteName, url); err != nil {
 			fmt.Fprintf(details, "  backup remote %s: add failed: %v\n", name, err)
-			errs = append(errs, fmt.Errorf("backup remote %s: add: %w", name, err))
+			errs = append(errs, errors.Wrap(err, fmt.Sprintf("backup remote %s: add", name)))
 			continue
 		}
 		// 推送当前分支 + tags
@@ -55,12 +56,12 @@ func (e *Executor) pushBackupRemotes(ctx context.Context, dir string, task *mode
 			Auth:     e.authConfig(ctx, repo, nil),
 		}); err != nil {
 			fmt.Fprintf(details, "  backup remote %s: push failed: %v\n", name, err)
-			errs = append(errs, fmt.Errorf("backup remote %s: push: %w", name, err))
+			errs = append(errs, errors.Wrap(err, fmt.Sprintf("backup remote %s: push", name)))
 			continue
 		}
 		fmt.Fprintf(details, "  backup remote %s: ok (%s)\n", name, url)
 	}
-	return errors.Join(errs...)
+	return stderrors.Join(errs...)
 }
 
 // expandBackupURL 替换 {owner}/{repo}/{key} 占位。

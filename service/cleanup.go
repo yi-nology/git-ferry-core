@@ -2,13 +2,14 @@ package service
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
+	"github.com/oekit/pkg/errors"
 )
 
 // cleanupTasks 列出并行清理的三张表及其执行体。
@@ -46,11 +47,11 @@ func (s *Service) CleanupOldData(ctx context.Context, maxAge time.Duration) (eve
 	var errs []error
 	for i, slot := range slots {
 		if slot.Err != nil {
-			errs = append(errs, fmt.Errorf("cleanup %s: %w", cleanupTasks[i].name, slot.Err))
+			errs = append(errs, errors.Wrap(slot.Err, fmt.Sprintf("cleanup %s", cleanupTasks[i].name)))
 		}
 	}
 	slog.Info("data cleanup completed", "events_deleted", events, "runs_deleted", runs, "steps_deleted", steps)
-	return events, runs, steps, errors.Join(errs...)
+	return events, runs, steps, stderrors.Join(errs...)
 }
 
 // recoverStuckWebhookEvents 周期回收卡在 processing 的 webhook 事件。

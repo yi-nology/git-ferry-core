@@ -183,8 +183,8 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 	}
 	if len(failed) > 0 {
 		// 逐分支推:失败的分支明确点名,其它分支已经送达。
-		return fmt.Errorf("push wiki failed for %d/%d branch(es):%s",
-			len(failed), len(branches), strings.Join(failed, "; "))
+		return oekiterrors.New(fmt.Sprintf("push wiki failed for %d/%d branch(es):%s",
+			len(failed), len(branches), strings.Join(failed, "; ")))
 	}
 	details.WriteString("  wiki: done\n")
 	return nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/oekit/pkg/errors"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -82,7 +83,7 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 		return nil, ErrTaskNotFound
 	}
 	if !opts.Issues && !opts.PRs {
-		return nil, fmt.Errorf("nothing selected: enable issues and/or prs")
+		return nil, errors.New("nothing selected: enable issues and/or prs")
 	}
 	limit := opts.Limit
 	if limit <= 0 {
@@ -98,19 +99,19 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 	}
 	srcRec, srcProv, err := s.repos.GetRepoWithProvider(task.SourceRepoKey)
 	if err != nil {
-		return nil, fmt.Errorf("resolve source provider: %w", err)
+		return nil, errors.Wrap(err, "resolve source provider")
 	}
 	tgtRec, tgtProv, err := s.repos.GetRepoWithProvider(task.TargetRepoKey)
 	if err != nil {
-		return nil, fmt.Errorf("resolve target provider: %w", err)
+		return nil, errors.Wrap(err, "resolve target provider")
 	}
 	src, ok := srcProv.(metadataMigrator)
 	if !ok {
-		return nil, fmt.Errorf("source provider does not support metadata migration")
+		return nil, errors.New("source provider does not support metadata migration")
 	}
 	tgt, ok := tgtProv.(metadataMigrator)
 	if !ok {
-		return nil, fmt.Errorf("target provider does not support metadata migration")
+		return nil, errors.New("target provider does not support metadata migration")
 	}
 
 	// owner/repo 用 repo 记录的平台侧坐标(不从 key 猜)。
@@ -144,7 +145,7 @@ func migrateIssues(ctx context.Context,
 ) error {
 	issues, err := listAllIssues(ctx, src, srcOwner, srcRepo, limit)
 	if err != nil {
-		return fmt.Errorf("list source issues: %w", err)
+		return errors.Wrap(err, "list source issues")
 	}
 	rep.SourceIssues = len(issues)
 	for _, is := range issues {
@@ -205,7 +206,7 @@ func migrateCRs(ctx context.Context,
 ) error {
 	crs, err := listAllCRs(ctx, src, srcOwner, srcRepo, limit)
 	if err != nil {
-		return fmt.Errorf("list source CRs: %w", err)
+		return errors.Wrap(err, "list source CRs")
 	}
 	rep.SourcePRs = len(crs)
 	for _, cr := range crs {

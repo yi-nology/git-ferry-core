@@ -12,6 +12,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/oekit/pkg/errors"
 
 	"github.com/yi-nology/git-ferry-core/mirror"
 )
@@ -79,36 +80,36 @@ func (r Resolution) NeedsHuman() bool {
 // 实测(review-service 的 40 个 hold):30 个可机械解决,6 个真冲突,4 个无基点。
 func Resolve(ctx context.Context, opts Options, plan *Plan) error {
 	if plan == nil {
-		return fmt.Errorf("plan 不能为空")
+		return errors.New("plan 不能为空")
 	}
 	replayer, err := mirror.NewRewriter(opts.Rules)
 	if err != nil {
-		return fmt.Errorf("编译身份规则失败: %w", err)
+		return errors.Wrap(err, "编译身份规则失败")
 	}
 	srcRepo, err := git.PlainOpen(opts.SourceDir)
 	if err != nil {
-		return fmt.Errorf("打开源仓失败: %w", err)
+		return errors.Wrap(err, "打开源仓失败")
 	}
 	tgtRepo, err := git.PlainOpen(opts.TargetDir)
 	if err != nil {
-		return fmt.Errorf("打开目标仓失败: %w", err)
+		return errors.Wrap(err, "打开目标仓失败")
 	}
 	srcCommit, err := resolveCommit(srcRepo, opts.SourceRef)
 	if err != nil {
-		return fmt.Errorf("解析源仓 ref %q 失败: %w", opts.SourceRef, err)
+		return errors.Wrap(err, fmt.Sprintf("解析源仓 ref %q 失败", opts.SourceRef))
 	}
 	tgtCommit, err := resolveCommit(tgtRepo, opts.TargetRef)
 	if err != nil {
-		return fmt.Errorf("解析目标仓 ref %q 失败: %w", opts.TargetRef, err)
+		return errors.Wrap(err, fmt.Sprintf("解析目标仓 ref %q 失败", opts.TargetRef))
 	}
 
 	srcHist, err := fileHistories(ctx, srcRepo, srcCommit.Hash)
 	if err != nil {
-		return fmt.Errorf("扫描源仓历史失败: %w", err)
+		return errors.Wrap(err, "扫描源仓历史失败")
 	}
 	tgtHist, err := fileHistories(ctx, tgtRepo, tgtCommit.Hash)
 	if err != nil {
-		return fmt.Errorf("扫描目标仓历史失败: %w", err)
+		return errors.Wrap(err, "扫描目标仓历史失败")
 	}
 
 	resolutions := make(map[string]Resolution)
@@ -276,11 +277,11 @@ func blobAtPath(repo *git.Repository, rev, path string) ([]byte, error) {
 	}
 	file, err := commit.File(path)
 	if err != nil {
-		return nil, fmt.Errorf("读取 %s@%s 失败: %w", path, rev, err)
+		return nil, errors.Wrap(err, fmt.Sprintf("读取 %s@%s 失败", path, rev))
 	}
 	content, err := file.Contents()
 	if err != nil {
-		return nil, fmt.Errorf("读取 %s@%s 内容失败: %w", path, rev, err)
+		return nil, errors.Wrap(err, fmt.Sprintf("读取 %s@%s 内容失败", path, rev))
 	}
 	return []byte(content), nil
 }
@@ -289,7 +290,7 @@ func blobAtPath(repo *git.Repository, rev, path string) ([]byte, error) {
 func readBlobByHash(repo *git.Repository, hash string) ([]byte, error) {
 	h := plumbing.NewHash(hash)
 	if h.IsZero() {
-		return nil, fmt.Errorf("blob hash 为空")
+		return nil, errors.New("blob hash 为空")
 	}
 	return readBlob(repo, h)
 }

@@ -2,12 +2,12 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/pkg/errors"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -36,7 +36,7 @@ func (s *Service) CreateTask(ctx context.Context, req *model.CreateTaskRequest) 
 	// (创建路径:cron 是普通字符串,空串=不设定时)
 	if req.Cron != "" {
 		if _, err := cron.ParseStandard(req.Cron); err != nil {
-			return nil, fmt.Errorf("invalid cron expression %q: %w", req.Cron, err)
+			return nil, errors.Wrap(err, fmt.Sprintf("invalid cron expression %q", req.Cron))
 		}
 	}
 
@@ -47,7 +47,7 @@ func (s *Service) CreateTask(ctx context.Context, req *model.CreateTaskRequest) 
 
 	if task.Cron != "" {
 		if err := s.addCronJob(task); err != nil {
-			return nil, fmt.Errorf("create cron job failed: %w", err)
+			return nil, errors.Wrap(err, "create cron job failed")
 		}
 	}
 
@@ -59,7 +59,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 	// (nil=不修改;空串=清空定时,不需要校验)
 	if req.Cron != nil && *req.Cron != "" {
 		if _, err := cron.ParseStandard(*req.Cron); err != nil {
-			return nil, fmt.Errorf("invalid cron expression %q: %w", *req.Cron, err)
+			return nil, errors.Wrap(err, fmt.Sprintf("invalid cron expression %q", *req.Cron))
 		}
 	}
 
@@ -70,7 +70,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 
 	if task.Cron != "" && task.Enabled {
 		if err := s.addCronJob(task); err != nil {
-			return nil, fmt.Errorf("update cron job failed: %w", err)
+			return nil, errors.Wrap(err, "update cron job failed")
 		}
 	} else {
 		s.removeCronJob(task.Key)

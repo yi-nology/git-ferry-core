@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/mirror"
 )
 
@@ -70,16 +71,16 @@ func loadPolicy(data []byte) ([]mirror.ScrubRule, mirror.Mapping, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&snap); err != nil {
 		// 兼容裸数组形态?不 —— 单一 schema,fail-closed。
-		return nil, mirror.Mapping{}, fmt.Errorf("policy JSON 解析失败: %w", err)
+		return nil, mirror.Mapping{}, errors.Wrap(err, "policy JSON 解析失败")
 	}
 	if snap.Version != 1 {
-		return nil, mirror.Mapping{}, fmt.Errorf("不支持的 policy 版本: %d", snap.Version)
+		return nil, mirror.Mapping{}, errors.New(fmt.Sprintf("不支持的 policy 版本: %d", snap.Version))
 	}
 	rules := make([]mirror.ScrubRule, 0, len(snap.ScrubRules))
 	for i, sr := range snap.ScrubRules {
 		pat, err := regexp.Compile(sr.Pattern)
 		if err != nil {
-			return nil, mirror.Mapping{}, fmt.Errorf("第 %d 条规则正则非法(%s): %w", i+1, sr.Name, err)
+			return nil, mirror.Mapping{}, errors.Wrap(err, fmt.Sprintf("第 %d 条规则正则非法(%s)", i+1, sr.Name))
 		}
 		sev := mirror.ScrubAuto
 		if sr.Severity == string(mirror.ScrubMandatory) {
@@ -150,7 +151,7 @@ func scanAll(dirs []string, rules []mirror.ScrubRule, mapping mirror.Mapping) ([
 			seen[rel] = true
 			data, err := os.ReadFile(p)
 			if err != nil {
-				return fmt.Errorf("读文件 %s 失败: %w", p, err)
+				return errors.Wrap(err, fmt.Sprintf("读文件 %s 失败", p))
 			}
 
 			oversized := len(data) > 8<<20

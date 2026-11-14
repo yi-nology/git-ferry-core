@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oekit/pkg/errors"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -33,17 +34,17 @@ func TypeCheckGate(ctx context.Context, dir string) error {
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		return fmt.Errorf("加载包失败: %w", err)
+		return errors.Wrap(err, "加载包失败")
 	}
 	if len(pkgs) == 0 {
-		return fmt.Errorf("模块内未发现任何 Go 包")
+		return errors.New("模块内未发现任何 Go 包")
 	}
 
 	var firstErr error
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
 		for _, e := range p.Errors {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("%s: %s", e.Pos, e.Msg)
+				firstErr = errors.New(fmt.Sprintf("%s: %s", e.Pos, e.Msg))
 			}
 		}
 	})
@@ -56,7 +57,7 @@ func TypeCheckGate(ctx context.Context, dir string) error {
 		// 却会一路流进模型上下文与日志(门禁错误是 agent 工具的返回内容)。
 		//
 		// 只动路径:报错里的 file:line:col 位置保持原样 —— 那是诊断的关键。
-		return fmt.Errorf("类型检查失败: %s", sanitizeLocalPaths(firstErr.Error()))
+		return errors.New(fmt.Sprintf("类型检查失败: %s", sanitizeLocalPaths(firstErr.Error())))
 	}
 	return nil
 }

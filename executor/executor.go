@@ -107,9 +107,8 @@ func NewExecutor(svc Service) (*Executor, error) {
 		// fail-fast:gogit(go-git)没有跨仓借对象库(--reference)能力,
 		// 缓存配置静默不生效等于配置撒谎——启动就炸,指向 native。
 		if _, ok := backend.(*gitbackend.NativeGitBackend); !ok {
-			return nil, fmt.Errorf(
-				"sync.clone_cache_dir requires the native git backend, resolved %T cannot borrow shared object stores via --reference",
-				backend)
+			return nil, oekiterrors.New(fmt.Sprintf("sync.clone_cache_dir requires the native git backend, resolved %T cannot borrow shared object stores via --reference",
+				backend))
 		}
 		exec.cache = newCloneCache(cacheDir, cacheMaxMB)
 	}
@@ -249,14 +248,14 @@ func (e *Executor) prepareRunContext(ctx context.Context, task *model.SyncTask, 
 		return nil, oekiterrors.Wrap(err, "query source repo failed")
 	}
 	if sourceRepo == nil {
-		return nil, fmt.Errorf("source repo not found: %s", task.SourceRepoKey)
+		return nil, oekiterrors.New(fmt.Sprintf("source repo not found: %s", task.SourceRepoKey))
 	}
 	targetRepo, err := e.service.GetRepoByKey(task.TargetRepoKey)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query target repo failed")
 	}
 	if targetRepo == nil {
-		return nil, fmt.Errorf("target repo not found: %s", task.TargetRepoKey)
+		return nil, oekiterrors.New(fmt.Sprintf("target repo not found: %s", task.TargetRepoKey))
 	}
 
 	// 空分支回退默认分支:避免坏 refspec 静默零推送
@@ -806,14 +805,14 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 			}
 		}
 		if len(branches) == 0 {
-			return false, "", "", fmt.Errorf("no local branches match %q", task.SourceBranch)
+			return false, "", "", oekiterrors.New(fmt.Sprintf("no local branches match %q", task.SourceBranch))
 		}
 		for _, b := range branches {
 			refSpecs = append(refSpecs, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 		}
 	} else {
 		if !matchesInclude(task.IncludeBranches, task.SourceBranch) {
-			return false, "", "", fmt.Errorf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches)
+			return false, "", "", oekiterrors.New(fmt.Sprintf("branch %q not in include_branches %q", task.SourceBranch, task.IncludeBranches))
 		}
 		// **源端还有这个分支吗?**
 		//
@@ -973,7 +972,7 @@ func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, ta
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+		return oekiterrors.New(fmt.Sprintf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; ")))
 	}
 	slog.Info("已删除目标上源端已不存在的分支",
 		"task", task.Key, "count", len(victims), "branches", strings.Join(victims, ","))

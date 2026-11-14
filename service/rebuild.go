@@ -1,10 +1,10 @@
 package service
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -24,10 +24,10 @@ import (
 func (s *Service) prepareRebuildWorkDir(taskKey string) error {
 	dir := s.GetTempDir(taskKey)
 	if dir == "" {
-		return fmt.Errorf("rebuild: 空的工作目录路径")
+		return errors.New("rebuild: 空的工作目录路径")
 	}
 	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("rebuild: 清空工作目录失败: %w", err)
+		return errors.Wrap(err, "rebuild: 清空工作目录失败")
 	}
 	slog.Info("rebuild: 工作目录已清空,本次将从源重新克隆", "task", taskKey, "dir", dir)
 	return nil

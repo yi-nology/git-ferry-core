@@ -3,7 +3,7 @@ package executor
 import (
 	"archive/zip"
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,7 +125,7 @@ func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *m
 		refs = append(refs, "refs/heads/"+b)
 	}
 	if len(refs) == 0 {
-		return nil, fmt.Errorf("no local branches match %q", task.SourceBranch)
+		return nil, oekiterrors.New(fmt.Sprintf("no local branches match %q", task.SourceBranch))
 	}
 	return refs, nil
 }
@@ -169,7 +169,7 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error)
 		removed++
 	}
 	if len(failures) > 0 {
-		return removed, fmt.Errorf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; "))
+		return removed, oekiterrors.New(fmt.Sprintf("轮转删除失败 %d 项:%s", len(failures), strings.Join(failures, "; ")))
 	}
 	return removed, nil
 }
@@ -243,7 +243,7 @@ func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *mod
 		})
 	}
 	if len(dests) == 0 {
-		return errors.Join(errs...)
+		return stderrors.Join(errs...)
 	}
 
 	results := FanoutUpload(ctx, uploadPath, dests)
@@ -259,7 +259,7 @@ func (e *Executor) fanoutBundle(ctx context.Context, bundlePath string, cfg *mod
 	}
 	fmt.Fprintf(details, "  fanout: %d ok, %d failed\n", okN, failN)
 	if failN > 0 {
-		errs = append(errs, fmt.Errorf("fanout: %d/%d destinations failed", failN, okN+failN))
+		errs = append(errs, oekiterrors.New(fmt.Sprintf("fanout: %d/%d destinations failed", failN, okN+failN)))
 	}
-	return errors.Join(errs...)
+	return stderrors.Join(errs...)
 }

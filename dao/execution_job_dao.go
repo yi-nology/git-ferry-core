@@ -2,9 +2,9 @@ package dao
 
 import (
 	"context"
-	"errors"
 	"time"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )

@@ -2,7 +2,7 @@ package executor
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -204,7 +204,7 @@ func (bundleStage) Run(ctx context.Context, rc *RunContext) error {
 		rc.Exec.recordRecoveryPoint(rc, path, cfg.Sync.BackupFormat)
 	}
 	rc.markBackup(len(errs) == 0)
-	return errors.Join(errs...)
+	return stderrors.Join(errs...)
 }
 
 // backupRemoteStage 同步成功后向配置的备份远端 push 镜像副本（GitHub/GitLab 等）。
