@@ -283,3 +283,78 @@ func TestOutbox_RunCleanedSkipDelivery(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// TestOutbox_DriftTopicRouting 漂移事件按 Topic 分发:
+// 不走 run 查找(RunID=0 会被误判废弃),投给 drift 订阅者。
+func TestOutbox_DriftTopicRouting(t *testing.T) {
+	svc := newOutboxTestService(t)
+
+	// 落一条 drift 事件(与 recordReconcile 同形态)
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runDAO.DB(), &model.OutboxEvent{
+		Topic:   model.OutboxTopicReconcileDrift,
+		TaskKey: "t-drift",
+		Status:  model.ReconcileDrift,
+		Payload: `{"status":"drift","source_sha":"aaa","target_sha":"bbb","source_ahead":3,"message":"两端漂移","checked_at":"2026-11-15T00:00:00Z"}`,
+	}))
+
+	got := make(chan ReconcileDrift, 1)
+	svc.SubscribeReconcileDrift(func(d ReconcileDrift) { got <- d })
+
+	svc.publishDueOutbox(0)
+
+	select {
+	case d := <-got:
+		assert.Equal(t, "t-drift", d.TaskKey)
+		assert.Equal(t, "drift", d.Status)
+		assert.Equal(t, 3, d.SourceAhead)
+		assert.Equal(t, "aaa", d.SourceSHA)
+		assert.Contains(t, d.Message, "两端漂移")
+	case <-time.After(2 * time.Second):
+		t.Fatal("drift 事件未投递给订阅者")
+	}
+	// 已投递 ⇒ 闭环
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Zero(t, n)
+}
+
+// TestOutbox_DriftNoSubscriberNotMarked 无 drift 订阅者时不标记已发布
+// (留待壳层注册订阅后重投——与 run 事件同语义)。
+func TestOutbox_DriftNoSubscriberNotMarked(t *testing.T) {
+	svc := newOutboxTestService(t)
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runDAO.DB(), &model.OutboxEvent{
+		Topic:   model.OutboxTopicReconcileDrift,
+		TaskKey: "t-x",
+		Status:  model.ReconcileDrift,
+		Payload: `{"status":"drift"}`,
+	}))
+
+	svc.publishDueOutbox(0)
+
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "无订阅者不得标记已发布(否则订阅者注册后永远收不到)")
+}
+
+// TestOutbox_DriftBadPayloadCloses 坏 payload 跳过并闭环(不无限重试)。
+func TestOutbox_DriftBadPayloadCloses(t *testing.T) {
+	svc := newOutboxTestService(t)
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runDAO.DB(), &model.OutboxEvent{
+		Topic:   model.OutboxTopicReconcileDrift,
+		TaskKey: "t-bad",
+		Payload: `{not json`,
+	}))
+	got := make(chan ReconcileDrift, 1)
+	svc.SubscribeReconcileDrift(func(d ReconcileDrift) { got <- d })
+
+	svc.publishDueOutbox(0)
+
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Zero(t, n, "坏 payload 应闭环(不无限重试)")
+	select {
+	case <-got:
+		t.Fatal("坏 payload 不应投递")
+	case <-time.After(100 * time.Millisecond):
+	}
+}

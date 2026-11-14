@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -112,6 +113,10 @@ func (s *Service) dispatchRunEvent(subs []runSubscriber, ev RunEvent) {
 //   - 两者皆 false:此刻**没有订阅者**,一个字节都没投出去 ⇒ **不得标记**,
 //     留待订阅者注册后的下一轮扫描(at-least-once:标记了却没投 = 静默丢失)。
 func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned bool) {
+	// 按主题分发:漂移事件不走 run 查找(RunID=0,查不到会被误判废弃)。
+	if ev.Topic == model.OutboxTopicReconcileDrift {
+		return s.deliverDriftEvent(ev)
+	}
 	subs := s.snapshotRunSubs()
 	if len(subs) == 0 {
 		return false, false
@@ -193,4 +198,83 @@ func (s *Service) markOutboxPublishedByRun(runID uint) {
 	if err := s.outbox.MarkPublishedByRun(runID); err != nil {
 		slog.Warn("outbox: 标记已发布失败(派发器宽限后会重投一次)", "run_id", runID, "error", err)
 	}
+}
+
+// ===== 对账漂移事件订阅(P3 闭环:core 落库 → 壳层告警) =====
+
+// ReconcileDrift 一次对账漂移(已从 outbox payload 解析)。
+type ReconcileDrift struct {
+	TaskKey     string    `json:"task_key"`
+	Status      string    `json:"status"` // drift/source_missing/target_missing
+	SourceSHA   string    `json:"source_sha"`
+	TargetSHA   string    `json:"target_sha"`
+	SourceAhead int       `json:"source_ahead"`
+	TargetAhead int       `json:"target_ahead"`
+	Message     string    `json:"message"`
+	At          time.Time `json:"checked_at"`
+}
+
+type driftSubscriber struct {
+	id uint64
+	fn func(ReconcileDrift)
+}
+
+// SubscribeReconcileDrift 注册漂移事件回调,返回取消函数(幂等)。
+// 与 SubscribeRuns 同契约:回调在独立 goroutine 分发、recover panic、
+// 调用方保证非阻塞;Stop/进程退出不等待订阅者。
+func (s *Service) SubscribeReconcileDrift(fn func(ReconcileDrift)) (cancel func()) {
+	if fn == nil {
+		return func() {}
+	}
+	s.driftSubMu.Lock()
+	s.driftSubID++
+	id := s.driftSubID
+	s.driftSubs = append(s.driftSubs, driftSubscriber{id: id, fn: fn})
+	s.driftSubMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.driftSubMu.Lock()
+			defer s.driftSubMu.Unlock()
+			for i := range s.driftSubs {
+				if s.driftSubs[i].id == id {
+					s.driftSubs = append(s.driftSubs[:i], s.driftSubs[i+1:]...)
+					break
+				}
+			}
+		})
+	}
+}
+
+// deliverDriftEvent 解析 payload 并投递漂移事件。
+// 无订阅者 ⇒ 不投也不标记(与 run 事件同语义,留待订阅者注册后重投)。
+func (s *Service) deliverDriftEvent(ev model.OutboxEvent) (delivered, abandoned bool) {
+	s.driftSubMu.Lock()
+	subs := make([]driftSubscriber, len(s.driftSubs))
+	copy(subs, s.driftSubs)
+	s.driftSubMu.Unlock()
+	if len(subs) == 0 {
+		return false, false
+	}
+	var d ReconcileDrift
+	if ev.Payload != "" {
+		if err := json.Unmarshal([]byte(ev.Payload), &d); err != nil {
+			// payload 坏了 ⇒ 事件失去意义,跳过并闭环(不无限重试坏事件)。
+			slog.Warn("outbox: drift payload 解析失败,跳过并闭环", "task", ev.TaskKey, "error", err)
+			return false, true
+		}
+	}
+	d.TaskKey = ev.TaskKey
+	if d.Status == "" {
+		d.Status = ev.Status
+	}
+	if d.At.IsZero() {
+		d.At = time.Now()
+	}
+	for _, sub := range subs {
+		fn := sub.fn
+		async.GoSafe(func() { fn(d) })
+	}
+	return true, true
 }

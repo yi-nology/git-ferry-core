@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed（对账漂移事件闭环——outbox Topic 分发）
+
+- **`reconcile.drift` 事件不再被静默丢弃**:此前 `deliverOutboxEvent`
+  只按 run 事件处理(按 RunID 查 run 记录),漂移事件 RunID=0 查不到
+  被误判「run 已清理」直接闭环——**告警事件落库即死**。现按
+  `Topic` 分发:drift 事件解析 payload 投给 `SubscribeReconcileDrift`
+  订阅者;无订阅者不标记(留待订阅者注册后重投,与 run 同语义);
+  坏 payload 跳过并闭环(不无限重试)。
+
 ## [v0.47.0] - 2026-11-14
 
 ### Changed（错误构造全量收敛 oekit——309 处 fmt.Errorf 清零,用户裁定）

@@ -46,7 +46,11 @@ type Service struct {
 	// 仅 reconcile_interval_hours>0 时启用。
 	reconciles *dao.ReconcileDAO
 	// recovery 恢复点索引(recovery_points,见 recovery.go)。
-	recovery        *dao.RecoveryPointDAO
+	recovery *dao.RecoveryPointDAO
+	// driftSubs 对账漂移订阅者(见 events.go;壳层接告警渠道)。
+	driftSubs       []driftSubscriber
+	driftSubID      uint64
+	driftSubMu      sync.Mutex
 	runSubs         []runSubscriber
 	runSubID        uint64
 	runSubMu        sync.Mutex
