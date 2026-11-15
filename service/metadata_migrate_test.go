@@ -21,6 +21,12 @@ type fakeMigrator struct {
 	closedIs        []string
 	closedCr        []string
 	failCreateIssue bool
+	// Ensure 收敛可控返回
+	ensureStateOutcome sdkprov.MutationOutcome
+	ensureStateErr     error
+	ensureLabelsErr    error
+	// ensuredState 记录 EnsureIssueState 调用(want)
+	ensuredState []sdkprov.IssueState
 }
 
 func (f *fakeMigrator) ListIssues(_ context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkprov.Issue, int, error) {
@@ -65,6 +71,26 @@ func (f *fakeMigrator) CloseCR(_ context.Context, _, _, number string) (*sdkprov
 	return &sdkprov.ChangeRequest{Number: number, State: sdkprov.CRStateClosed}, nil
 }
 
+// --- issueEnsurer(SDK 2B Ensure* 可注入缝) ---
+// ensureStateOutcome/ensureLabelsOutcome 可控返回(测试按需设置)。
+func (f *fakeMigrator) EnsureIssueState(_ context.Context, _, _, _ string, want sdkprov.IssueState) (sdkprov.MutationOutcome, error) {
+	f.ensuredState = append(f.ensuredState, want)
+	if f.ensureStateErr != nil {
+		return "", f.ensureStateErr
+	}
+	if f.ensureStateOutcome != "" {
+		return f.ensureStateOutcome, nil
+	}
+	return sdkprov.OutcomeUnchanged, nil
+}
+
+func (f *fakeMigrator) EnsureIssueLabels(_ context.Context, _, _, _ string, _ []string) (sdkprov.MutationOutcome, error) {
+	if f.ensureLabelsErr != nil {
+		return "", f.ensureLabelsErr
+	}
+	return sdkprov.OutcomeUnchanged, nil
+}
+
 // TestMigrateIssues_WithCommentsAndClose Issue 迁移:标题/正文/labels 搬运、
 // 源 closed 同步关闭、评论逐条搬运。
 func TestMigrateIssues_WithCommentsAndClose(t *testing.T) {
@@ -81,7 +107,7 @@ func TestMigrateIssues_WithCommentsAndClose(t *testing.T) {
 	tgt := &fakeMigrator{}
 	rep := &MetadataMigrateReport{Notes: metadataFidelityNotes}
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt,
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
 		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true, Comments: true}, rep))
 
 	assert.Equal(t, 3, rep.SourceIssues)
@@ -101,7 +127,7 @@ func TestMigrateDryRun(t *testing.T) {
 	tgt := &fakeMigrator{}
 	rep := &MetadataMigrateReport{}
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt,
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
 		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true, DryRun: true}, rep))
 
 	assert.Empty(t, tgt.createdIs, "dry-run 不得写目标")
@@ -122,7 +148,7 @@ func TestMigrateCreateFailureDoesNotAbort(t *testing.T) {
 	// 这里用 failCreateIssue 恒失败验证:报告两条错误、不 panic。
 	tgt.failCreateIssue = true
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt,
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
 		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
 	assert.Zero(t, rep.CreatedIssues)
 	assert.Len(t, rep.Errors, 2, "每条失败都要可见")
@@ -156,4 +182,49 @@ func TestMetadataFidelityNotes(t *testing.T) {
 	}
 	assert.Contains(t, joined, "重置", "作者/时间重置必须声明")
 	assert.Contains(t, joined, "merged", "merged 不重放必须声明")
+}
+
+// TestMigrateIssues_IdempotentConverge 幂等收敛(SDK 2B Ensure* 采用):
+// 目标已有同标题 issue ⇒ 不重复创建,EnsureIssueState/EnsureIssueLabels
+// 收敛;Unchanged/Updated 按 outcome 分类——迁移可安全重跑。
+func TestMigrateIssues_IdempotentConverge(t *testing.T) {
+	src := &fakeMigrator{issues: []*sdkprov.Issue{
+		{Number: "1", Title: "已存在", State: sdkprov.IssueStateClosed, Labels: []string{"bug"}},
+		{Number: "2", Title: "新建", State: sdkprov.IssueStateOpen},
+	}}
+	tgt := &fakeMigrator{
+		// 目标已有「已存在」同标题 issue
+		issues: []*sdkprov.Issue{
+			{Number: "9", Title: "已存在", State: sdkprov.IssueStateOpen, Labels: []string{"old"}},
+		},
+		ensureStateOutcome: sdkprov.OutcomeUnchanged,
+	}
+	rep := &MetadataMigrateReport{}
+
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
+		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+
+	// 「已存在」走收敛:不重复创建 + Ensure 被调(状态 open→closed want)
+	assert.Equal(t, 1, rep.CreatedIssues, "只有「新建」被创建")
+	assert.Equal(t, 1, rep.UnchangedIssues, "已达标 zero-write 计入 unchanged")
+	require.Len(t, tgt.ensuredState, 1, "收敛路径必须调 EnsureIssueState")
+	assert.Equal(t, sdkprov.IssueStateClosed, tgt.ensuredState[0], "want=源状态 closed")
+	assert.Empty(t, rep.Errors)
+}
+
+// TestMigrateIssues_UpdatedOutcome 收敛发生写入 ⇒ Updated 计数。
+func TestMigrateIssues_UpdatedOutcome(t *testing.T) {
+	src := &fakeMigrator{issues: []*sdkprov.Issue{
+		{Number: "1", Title: "t", State: sdkprov.IssueStateClosed},
+	}}
+	tgt := &fakeMigrator{
+		issues:             []*sdkprov.Issue{{Number: "9", Title: "t", State: sdkprov.IssueStateOpen}},
+		ensureStateOutcome: sdkprov.OutcomeUpdated,
+	}
+	rep := &MetadataMigrateReport{}
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
+		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+	assert.Equal(t, 1, rep.UpdatedIssues)
+	assert.Zero(t, rep.UnchangedIssues)
+	assert.Zero(t, rep.CreatedIssues, "收敛路径不得创建")
 }

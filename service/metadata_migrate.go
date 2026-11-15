@@ -36,6 +36,26 @@ type metadataMigrator interface {
 	CloseCR(ctx context.Context, owner, repo, number string) (*sdkprov.ChangeRequest, error)
 }
 
+// issueEnsurer 收敛能力最小面(SDK 2B Ensure* 的可注入缝):
+// 生产用 sdkEnsurer 包完整 Provider;测试用 fake 返回可控 outcome。
+type issueEnsurer interface {
+	EnsureIssueState(ctx context.Context, owner, repo, number string, want sdkprov.IssueState) (sdkprov.MutationOutcome, error)
+	EnsureIssueLabels(ctx context.Context, owner, repo, number string, want []string) (sdkprov.MutationOutcome, error)
+}
+
+// sdkEnsurer 生产适配:包完整 Provider 调 SDK 包级 Ensure* 函数。
+type sdkEnsurer struct{ p sdkprov.Provider }
+
+func (e sdkEnsurer) EnsureIssueState(ctx context.Context, owner, repo, number string, want sdkprov.IssueState) (sdkprov.MutationOutcome, error) {
+	out, _, err := sdkprov.EnsureIssueState(ctx, e.p, owner, repo, number, want)
+	return out, err
+}
+
+func (e sdkEnsurer) EnsureIssueLabels(ctx context.Context, owner, repo, number string, want []string) (sdkprov.MutationOutcome, error) {
+	out, _, err := sdkprov.EnsureIssueLabels(ctx, e.p, owner, repo, number, want)
+	return out, err
+}
+
 // MetadataMigrateOptions 一次元数据迁移的选项。
 type MetadataMigrateOptions struct {
 	// TaskKey 复用同步任务的源/目标仓库与凭据解析。
@@ -58,9 +78,13 @@ type MetadataMigrateReport struct {
 	SourceIssues int `json:"sourceIssues"`
 	SourcePRs    int `json:"sourcePrs"`
 	// Created* :实际写入数(dry-run 时为 0,DryRunPlanned 为将创建数)。
-	CreatedIssues   int      `json:"createdIssues"`
-	CreatedComments int      `json:"createdComments"`
-	CreatedPRs      int      `json:"createdPrs"`
+	CreatedIssues   int `json:"createdIssues"`
+	CreatedComments int `json:"createdComments"`
+	CreatedPRs      int `json:"createdPrs"`
+	// 按 MutationOutcome 分类的幂等收敛统计(SDK 2B Ensure* 语义):
+	// Updated=已有同标题 issue 且状态/标签发生写入;Unchanged=已达标零写入。
+	UpdatedIssues   int      `json:"updatedIssues,omitempty"`
+	UnchangedIssues int      `json:"unchangedIssues,omitempty"`
 	ClosedIssues    int      `json:"closedIssues"`
 	ClosedPRs       int      `json:"closedPrs"`
 	DryRun          bool     `json:"dryRun"`
@@ -121,7 +145,7 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 	rep := &MetadataMigrateReport{DryRun: opts.DryRun, Notes: metadataFidelityNotes}
 
 	if opts.Issues {
-		if err := migrateIssues(ctx, src, tgt, srcOwner, srcRepo, tgtOwner, tgtRepo, limit, opts, rep); err != nil {
+		if err := migrateIssues(ctx, src, tgt, sdkEnsurer{tgtProv}, srcOwner, srcRepo, tgtOwner, tgtRepo, limit, opts, rep); err != nil {
 			return rep, err
 		}
 	}
@@ -137,25 +161,75 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 	return rep, nil
 }
 
-// migrateIssues 搬运 Issue(含可选评论)。
+// migrateIssues 搬运 Issue(含可选评论)——**幂等收敛式**(SDK 2B Ensure*):
+//   - 目标无同标题 → CreateIssue(created);源 closed → EnsureIssueState 收敛;
+//   - 目标已有同标题 → 不重复创建,EnsureIssueState(状态)+EnsureIssueLabels
+//     (标签全集)收敛——Unchanged 零写 / Updated 恰写;
+//   - 评论仅对**新建**的 issue 重放(已有 issue 跳过,避免重复评论)。
+//
+// 跨平台无共同 ID,标题是迁移的自然键。
 func migrateIssues(ctx context.Context,
-	src, tgt metadataMigrator,
+	src, tgt metadataMigrator, ens issueEnsurer,
 	srcOwner, srcRepo, tgtOwner, tgtRepo string,
 	limit int, opts MetadataMigrateOptions, rep *MetadataMigrateReport,
 ) error {
 	issues, err := listAllIssues(ctx, src, srcOwner, srcRepo, limit)
 	if err != nil {
-		return errors.Wrap(err, "list source issues")
+		return fmt.Errorf("list source issues: %w", err)
 	}
 	rep.SourceIssues = len(issues)
+
+	// 目标已有 issue 按标题索引(收敛面)。
+	existing := map[string]*sdkprov.Issue{}
+	if !opts.DryRun {
+		tgtIssues, err := listAllIssues(ctx, tgt, tgtOwner, tgtRepo, limit)
+		if err != nil {
+			return fmt.Errorf("list target issues: %w", err)
+		}
+		for _, ti := range tgtIssues {
+			if ti != nil && !ti.IsPullRequest {
+				existing[ti.Title] = ti
+			}
+		}
+	}
+
 	for _, is := range issues {
 		if is == nil || is.IsPullRequest {
 			continue // PR 由 PR 通道搬运(GitHub 列表混入)
 		}
+		want := sdkprov.IssueStateOpen
+		if is.State == sdkprov.IssueStateClosed {
+			want = sdkprov.IssueStateClosed
+		}
 		if opts.DryRun {
-			rep.DryRunPlanned = append(rep.DryRunPlanned, "issue: "+is.Title)
+			if _, ok := existing[is.Title]; ok {
+				rep.DryRunPlanned = append(rep.DryRunPlanned, "converge: "+is.Title)
+			} else {
+				rep.DryRunPlanned = append(rep.DryRunPlanned, "issue: "+is.Title)
+			}
 			continue
 		}
+
+		// ---- 收敛路径:目标已有同标题 ----
+		if cur, ok := existing[is.Title]; ok && cur.Number != "" {
+			outcome, err := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, cur.Number, want)
+			if err != nil {
+				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure state %q: %v", is.Title, err))
+				continue
+			}
+			if _, err := ens.EnsureIssueLabels(ctx, tgtOwner, tgtRepo, cur.Number, is.Labels); err != nil {
+				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure labels %q: %v", is.Title, err))
+				continue
+			}
+			if outcome == sdkprov.OutcomeUpdated {
+				rep.UpdatedIssues++
+			} else {
+				rep.UnchangedIssues++
+			}
+			continue
+		}
+
+		// ---- 创建路径 ----
 		created, cerr := tgt.CreateIssue(ctx, sdkprov.CreateIssueOptions{
 			Owner:  tgtOwner,
 			Repo:   tgtRepo,
@@ -168,10 +242,10 @@ func migrateIssues(ctx context.Context,
 			continue
 		}
 		rep.CreatedIssues++
-		// 源已关闭 ⇒ 目标同步关闭(状态保真;时间戳仍会重置)。
-		if is.State == sdkprov.IssueStateClosed && created != nil && created.Number != "" {
-			if _, cerr := tgt.CloseIssue(ctx, tgtOwner, tgtRepo, created.Number); cerr != nil {
-				rep.Errors = append(rep.Errors, fmt.Sprintf("close issue %q: %v", is.Title, cerr))
+		// 源已关闭 ⇒ EnsureIssueState 幂等收敛(新建成 open → closed)。
+		if want == sdkprov.IssueStateClosed && created != nil && created.Number != "" {
+			if _, err := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, created.Number, want); err != nil {
+				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure state %q: %v", is.Title, err))
 			} else {
 				rep.ClosedIssues++
 			}

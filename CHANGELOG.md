@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Changed（元数据迁移采用 SDK 2B 新 API——幂等收敛式）
+
+- **MigrateRepoMetadata 升级为收敛式迁移**(采用 SDK v0.137.0
+  Phase 2B `Ensure*` 收敛函数):目标已有同标题 issue ⇒ **不再重复
+  创建**,`EnsureIssueState`(状态)+`EnsureIssueLabels`(标签全集)
+  收敛——Unchanged 零写 / Updated 恰写;新建 issue 的源 closed 也经
+  EnsureIssueState 幂等关闭。评论仅对新建 issue 重放(已有跳过,
+  避免重复评论)。跨平台无共同 ID,标题为迁移自然键。
+- **报告按 MutationOutcome 分类**:新增 `updatedIssues`/
+  `unchangedIssues` 计数;dry-run 对已有条目标 `converge:` 前缀。
+- 采用缝:`issueEnsurer` 最小接口 + `sdkEnsurer` 生产适配(包完整
+  Provider 调 SDK 包级 Ensure*),测试 fake 可注入 outcome。
+
 ### Changed（SDK v0.137.0 红利——三 breaking 解锁两个）
 
 - **依赖升级**:go-git-platform v0.131→**v0.137.0**(Phase 2B Capability
