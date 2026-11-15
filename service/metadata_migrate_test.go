@@ -141,6 +141,22 @@ func TestMigrateDryRun(t *testing.T) {
 	assert.Zero(t, rep.CreatedIssues)
 }
 
+// TestMigrateDryRun_ConvergePlan dry-run 必须能看见收敛面:目标已有
+// 同标题 ⇒ 计划标 converge:(此前目标列表被 dry-run 跳过,永远只报
+// create,计划失真)。
+func TestMigrateDryRun_ConvergePlan(t *testing.T) {
+	src := &fakeMigrator{issues: []*sdkprov.Issue{{Number: "1", Title: "t1"}}}
+	tgt := &fakeMigrator{issues: []*sdkprov.Issue{{Number: "9", Title: "t1"}}}
+	rep := &MetadataMigrateReport{}
+
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
+		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true, DryRun: true}, rep))
+
+	require.Len(t, rep.DryRunPlanned, 1)
+	assert.Contains(t, rep.DryRunPlanned[0], "converge: t1")
+	assert.Empty(t, tgt.createdIs, "dry-run 不得写目标")
+}
+
 // TestMigrateCreateFailureDoesNotAbort 单条失败不中断其余(完整报告)。
 func TestMigrateCreateFailureDoesNotAbort(t *testing.T) {
 	src := &fakeMigrator{issues: []*sdkprov.Issue{

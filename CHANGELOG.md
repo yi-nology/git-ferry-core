@@ -19,6 +19,20 @@
   `draftDegraded`——如实计数,绝不静默产出"看起来成功"的非 draft CR;
   保真边界 Notes 同步声明。测试 2 条(透传/降级)钉住。
 
+### Fixed（dry-run 盘点看不见收敛面——计划失真修复 + 卫生化）
+
+- **dry-run 也读目标 issue 索引**:此前目标列表被 dry-run 跳过 ⇒ 盘点
+  永远只报 create、`converge:` 计划项不可能出现(计划失真)。修复后
+  盘点如实反映"新建 X / 收敛 Y";测试 1 条钉住。
+- **fmt.Errorf 残留 2 处清零**(metadata_migrate.go):按 oekit 口径改
+  `errors.Wrap`(该项目 309 处清零后的新增回归)。
+- **测试 fake 补批量形**(metadata_service_test.go):SDK #163 的
+  `IssueManager` 新增强制方法 `RemoveIssueLabels`——fake 未实现会让
+  `prov.(IssueManager)` 断言失败,restore 的 issues/prs 两路被误判
+  "不支持"(全量测试红)。补方法体(panic,不预期走到)恢复接口满足。
+- **简化**:`listAllIssues`/`listAllCRs` 逐字重复的分页骨架合并为
+  泛型 `listAllPages`(行为逐字一致,少 ~20 行)。
+
 ## [v0.48.0] - 2026-11-15
 
 ### Changed（元数据迁移采用 SDK 2B 新 API——幂等收敛式）

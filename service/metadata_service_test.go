@@ -161,6 +161,14 @@ func (f *fakeEngineProv) RemoveIssueLabel(context.Context, string, string, strin
 	panic("fakeEngineProv: RemoveIssueLabel not expected")
 }
 
+// SDK v0.138.0 #163:IssueManager 增加批量形 RemoveIssueLabels(与
+// AddIssueLabels 对称)。实现体保留 panic(本 fake 不预期走到),只为
+// 满足接口断言——否则 prov.(IssueManager) 失败,restore 的 issues/prs
+// 两路会被误判"target does not support IssueManager"。
+func (f *fakeEngineProv) RemoveIssueLabels(context.Context, string, string, string, []string) error {
+	panic("fakeEngineProv: RemoveIssueLabels not expected")
+}
+
 // --- MilestoneManager ---
 
 func (f *fakeEngineProv) ListMilestones(_ context.Context, _, _ string, _ sdkprov.ListMilestonesOptions) ([]sdkprov.Milestone, error) {

@@ -85,17 +85,17 @@ type MetadataMigrateReport struct {
 	CreatedPRs      int `json:"createdPrs"`
 	// 按 MutationOutcome 分类的幂等收敛统计(SDK 2B Ensure* 语义):
 	// Updated=已有同标题 issue 且状态/标签发生写入;Unchanged=已达标零写入。
-	UpdatedIssues   int      `json:"updatedIssues,omitempty"`
-	UnchangedIssues int      `json:"unchangedIssues,omitempty"`
+	UpdatedIssues   int `json:"updatedIssues,omitempty"`
+	UnchangedIssues int `json:"unchangedIssues,omitempty"`
 	// DraftDegraded 目标平台创建面无 draft 表达(SDK #160 ErrDraftNotSupported)
 	// 而降级为非 draft 创建的 CR 数——如实计数,绝不静默。
 	DraftDegraded int      `json:"draftDegraded,omitempty"`
 	ClosedIssues  int      `json:"closedIssues"`
-	ClosedPRs       int      `json:"closedPrs"`
-	DryRun          bool     `json:"dryRun"`
-	DryRunPlanned   []string `json:"dryRunPlanned,omitempty"`
-	Errors          []string `json:"errors,omitempty"`
-	Notes           []string `json:"notes,omitempty"`
+	ClosedPRs     int      `json:"closedPrs"`
+	DryRun        bool     `json:"dryRun"`
+	DryRunPlanned []string `json:"dryRunPlanned,omitempty"`
+	Errors        []string `json:"errors,omitempty"`
+	Notes         []string `json:"notes,omitempty"`
 }
 
 // metadataFidelityNotes 保真边界(每次报告固定携带,不静默)。
@@ -181,21 +181,20 @@ func migrateIssues(ctx context.Context,
 ) error {
 	issues, err := listAllIssues(ctx, src, srcOwner, srcRepo, limit)
 	if err != nil {
-		return fmt.Errorf("list source issues: %w", err)
+		return errors.Wrap(err, "list source issues")
 	}
 	rep.SourceIssues = len(issues)
 
-	// 目标已有 issue 按标题索引(收敛面)。
-	existing := map[string]*sdkprov.Issue{}
-	if !opts.DryRun {
-		tgtIssues, err := listAllIssues(ctx, tgt, tgtOwner, tgtRepo, limit)
-		if err != nil {
-			return fmt.Errorf("list target issues: %w", err)
-		}
-		for _, ti := range tgtIssues {
-			if ti != nil && !ti.IsPullRequest {
-				existing[ti.Title] = ti
-			}
+	// 目标已有 issue 按标题索引(收敛面)。dry-run 也要读:否则盘点
+	// 永远报 create、看不到收敛项,计划失真。
+	tgtIssues, err := listAllIssues(ctx, tgt, tgtOwner, tgtRepo, limit)
+	if err != nil {
+		return errors.Wrap(err, "list target issues")
+	}
+	existing := make(map[string]*sdkprov.Issue, len(tgtIssues))
+	for _, ti := range tgtIssues {
+		if ti != nil && !ti.IsPullRequest {
+			existing[ti.Title] = ti
 		}
 	}
 
@@ -344,18 +343,20 @@ func createTargetCR(ctx context.Context, tgt metadataMigrator,
 	return created, err
 }
 
-// listAllIssues 分页取尽(Page=0 首页语义,短页=结束;limit 截断)。
-func listAllIssues(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkprov.Issue, error) {
-	var all []*sdkprov.Issue
+// pageSize 单页上限(SDK 统一 PerPage 约定)。
+const pageSize = 100
+
+// listAllPages 分页取尽(Page=0 首页语义,短页=结束;limit 截断)。
+// Issue/CR 共用——骨架只差一个"取一页"闭包。
+func listAllPages[T any](limit int, fetch func(page int) ([]T, error)) ([]T, error) {
+	var all []T
 	for page := 0; ; page++ {
-		batch, _, err := p.ListIssues(ctx, sdkprov.ListIssuesOptions{
-			Owner: owner, Repo: repo, Page: page, PerPage: 100,
-		})
+		batch, err := fetch(page)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, batch...)
-		if len(batch) < 100 || len(all) >= limit {
+		if len(batch) < pageSize || len(all) >= limit {
 			break
 		}
 	}
@@ -365,23 +366,22 @@ func listAllIssues(ctx context.Context, p metadataMigrator, owner, repo string, 
 	return all, nil
 }
 
-// listAllCRs 分页取尽(同上)。
-func listAllCRs(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkprov.ChangeRequest, error) {
-	var all []*sdkprov.ChangeRequest
-	for page := 0; ; page++ {
-		batch, _, err := p.ListCRs(ctx, sdkprov.ListCROptions{
-			Owner: owner, Repo: repo, Page: page, PerPage: 100,
+// listAllIssues 分页取尽 issue 列表。
+func listAllIssues(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkprov.Issue, error) {
+	return listAllPages(limit, func(page int) ([]*sdkprov.Issue, error) {
+		batch, _, err := p.ListIssues(ctx, sdkprov.ListIssuesOptions{
+			Owner: owner, Repo: repo, Page: page, PerPage: pageSize,
 		})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, batch...)
-		if len(batch) < 100 || len(all) >= limit {
-			break
-		}
-	}
-	if len(all) > limit {
-		all = all[:limit]
-	}
-	return all, nil
+		return batch, err
+	})
+}
+
+// listAllCRs 分页取尽 CR 列表。
+func listAllCRs(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkprov.ChangeRequest, error) {
+	return listAllPages(limit, func(page int) ([]*sdkprov.ChangeRequest, error) {
+		batch, _, err := p.ListCRs(ctx, sdkprov.ListCROptions{
+			Owner: owner, Repo: repo, Page: page, PerPage: pageSize,
+		})
+		return batch, err
+	})
 }
