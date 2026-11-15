@@ -21,6 +21,8 @@ type fakeMigrator struct {
 	closedIs        []string
 	closedCr        []string
 	failCreateIssue bool
+	// failDraft 目标平台无 draft 写面(模拟 SDK #160 ErrDraftNotSupported)
+	failDraft bool
 	// Ensure 收敛可控返回
 	ensureStateOutcome sdkprov.MutationOutcome
 	ensureStateErr     error
@@ -63,6 +65,9 @@ func (f *fakeMigrator) ListCRs(_ context.Context, _ sdkprov.ListCROptions) ([]*s
 
 func (f *fakeMigrator) CreateCR(_ context.Context, opts sdkprov.CreateCROptions) (*sdkprov.ChangeRequest, error) {
 	f.createdCr = append(f.createdCr, &opts)
+	if opts.Draft && f.failDraft {
+		return nil, sdkprov.ErrDraftNotSupported
+	}
 	return &sdkprov.ChangeRequest{Number: "cr-created", Title: opts.Title, State: sdkprov.CRStateOpened}, nil
 }
 
@@ -171,6 +176,46 @@ func TestMigrateCRs(t *testing.T) {
 	assert.Equal(t, 3, rep.CreatedPRs, "merged 也创建(状态不重放,见 Notes)")
 	assert.Equal(t, 1, rep.ClosedPRs, "仅源 closed 同步关闭;merged 不重放")
 	assert.Equal(t, "feat", tgt.createdCr[0].SourceBranch, "分支映射要带")
+}
+
+// TestMigrateCRs_DraftPreserved SDK #160 写侧:源 draft 透传目标
+// (平台创建面可表达时原样下发)。
+func TestMigrateCRs_DraftPreserved(t *testing.T) {
+	src := &fakeMigrator{crs: []*sdkprov.ChangeRequest{
+		{Number: "1", Title: "wip", SourceBranch: "feat", TargetBranch: "main", Draft: true},
+		{Number: "2", Title: "ready", SourceBranch: "feat2", TargetBranch: "main"},
+	}}
+	tgt := &fakeMigrator{}
+	rep := &MetadataMigrateReport{}
+
+	require.NoError(t, migrateCRs(context.Background(), src, tgt,
+		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{PRs: true}, rep))
+
+	require.Len(t, tgt.createdCr, 2)
+	assert.True(t, tgt.createdCr[0].Draft, "源 draft 必须透传")
+	assert.False(t, tgt.createdCr[1].Draft)
+	assert.Zero(t, rep.DraftDegraded)
+	assert.Equal(t, 2, rep.CreatedPRs)
+}
+
+// TestMigrateCRs_DraftDegraded 目标平台创建面无 draft 表达
+// (ErrDraftNotSupported)⇒ 降级非 draft 创建 + 计数留痕,绝不静默。
+func TestMigrateCRs_DraftDegraded(t *testing.T) {
+	src := &fakeMigrator{crs: []*sdkprov.ChangeRequest{
+		{Number: "1", Title: "wip", SourceBranch: "feat", TargetBranch: "main", Draft: true},
+	}}
+	tgt := &fakeMigrator{failDraft: true}
+	rep := &MetadataMigrateReport{}
+
+	require.NoError(t, migrateCRs(context.Background(), src, tgt,
+		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{PRs: true}, rep))
+
+	require.Len(t, tgt.createdCr, 2, "先 draft 再降级,两次调用都要可见")
+	assert.True(t, tgt.createdCr[0].Draft)
+	assert.False(t, tgt.createdCr[1].Draft, "降级路径必须非 draft")
+	assert.Equal(t, 1, rep.DraftDegraded)
+	assert.Equal(t, 1, rep.CreatedPRs, "降级成功后仍计 created")
+	assert.Empty(t, rep.Errors)
 }
 
 // TestMetadataFidelityNotes 保真边界必须随报告携带(诚实声明)。

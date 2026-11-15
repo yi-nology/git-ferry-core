@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed（SDK v0.138.0 升级 + draft 透传——迁移保真补全）
+
+- **依赖升级**:go-git-platform v0.137→**v0.138.0**,四单红利按消费面筛选:
+  - **#163 `EnsureIssueLabels` 收敛改批量单次**(Add/Remove 各一次调用)——
+    元数据迁移的收敛路径自动受益,标签收敛 API 调用数从 O(n) 降到 O(1);
+  - **#160 `CreateCROptions.Draft` 写侧落地**——迁移的 draft 状态从
+    「静默丢弃」变为「按平台能力透传」(GitHub/Gitee/GitCode 原样下发);
+  - #162 导出 `AllOperations` 全集(消费方能力矩阵去硬编码;本地暂无消费点);
+  - #161 `GetBranchProtection` 契约钉死 nil⇒ErrNotFound(本地无直连消费点,
+    Ensure* 内部自动受益)。
+- **迁移 draft 保真**:新增 `createTargetCR` 透传源 draft;目标平台创建面
+  表达不了 draft(`ErrDraftNotSupported`)⇒ 降级为非 draft 并计入
+  `draftDegraded`——如实计数,绝不静默产出"看起来成功"的非 draft CR;
+  保真边界 Notes 同步声明。测试 2 条(透传/降级)钉住。
+
 ## [v0.48.0] - 2026-11-15
 
 ### Changed（元数据迁移采用 SDK 2B 新 API——幂等收敛式）

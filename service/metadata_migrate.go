@@ -21,7 +21,9 @@ import (
 // **保真边界(诚实声明,进报告 Notes)**:
 //   - 作者/创建与评论时间 = 平台按调用身份重置,非原值;
 //   - assignee/milestone/label 归属人不跨平台搬运(ID 空间不同);
-//   - 源 PR 的 merged 状态不跨平台重放(只创建目标侧 CR,状态如实报告)。
+//   - 源 PR 的 merged 状态不跨平台重放(只创建目标侧 CR,状态如实报告);
+//   - draft 状态按源 PR 透传(SDK #160 写侧);目标平台创建面表达不了 draft
+//     时降级为非 draft 并计入 DraftDegraded(不静默)。
 
 // metadataMigrator 迁移所需的最小 provider 能力(源侧用读方法,
 // 目标侧用写方法;同一接口,两侧各传一个 provider 实现实例)。
@@ -85,7 +87,10 @@ type MetadataMigrateReport struct {
 	// Updated=已有同标题 issue 且状态/标签发生写入;Unchanged=已达标零写入。
 	UpdatedIssues   int      `json:"updatedIssues,omitempty"`
 	UnchangedIssues int      `json:"unchangedIssues,omitempty"`
-	ClosedIssues    int      `json:"closedIssues"`
+	// DraftDegraded 目标平台创建面无 draft 表达(SDK #160 ErrDraftNotSupported)
+	// 而降级为非 draft 创建的 CR 数——如实计数,绝不静默。
+	DraftDegraded int      `json:"draftDegraded,omitempty"`
+	ClosedIssues  int      `json:"closedIssues"`
 	ClosedPRs       int      `json:"closedPrs"`
 	DryRun          bool     `json:"dryRun"`
 	DryRunPlanned   []string `json:"dryRunPlanned,omitempty"`
@@ -98,6 +103,7 @@ var metadataFidelityNotes = []string{
 	"作者与创建/评论时间由平台按调用身份重置,非原值",
 	"assignee/milestone 不跨平台搬运(ID 空间不同)",
 	"源 PR 的 merged 状态不跨平台重放:目标侧只创建 CR(源 closed 的会同步关闭)",
+	"draft 状态按源 PR 透传;目标平台创建面无法表达 draft 时降级为非 draft 并计入 draftDegraded",
 	"GitHub 的 issue 列表含 PR(IsPullRequest),已过滤后由 PR 通道单独搬运",
 }
 
@@ -291,14 +297,7 @@ func migrateCRs(ctx context.Context,
 			rep.DryRunPlanned = append(rep.DryRunPlanned, "cr: "+cr.Title)
 			continue
 		}
-		created, cerr := tgt.CreateCR(ctx, sdkprov.CreateCROptions{
-			Owner:        tgtOwner,
-			Repo:         tgtRepo,
-			Title:        cr.Title,
-			Description:  cr.Description,
-			SourceBranch: cr.SourceBranch,
-			TargetBranch: cr.TargetBranch,
-		})
+		created, cerr := createTargetCR(ctx, tgt, tgtOwner, tgtRepo, cr, rep)
 		if cerr != nil {
 			rep.Errors = append(rep.Errors, fmt.Sprintf("create CR %q: %v", cr.Title, cerr))
 			continue
@@ -314,6 +313,35 @@ func migrateCRs(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+// createTargetCR 创建目标侧 CR:源 draft 状态按平台能力透传(SDK #160
+// CreateCROptions.Draft 写侧);目标平台创建面无 draft 表达
+// (ErrDraftNotSupported)⇒ 降级为非 draft 并计入 DraftDegraded——
+// 如实计数,绝不静默产出"看起来成功"的非 draft CR。
+func createTargetCR(ctx context.Context, tgt metadataMigrator,
+	owner, repo string, cr *sdkprov.ChangeRequest, rep *MetadataMigrateReport,
+) (*sdkprov.ChangeRequest, error) {
+	opts := sdkprov.CreateCROptions{
+		Owner:        owner,
+		Repo:         repo,
+		Title:        cr.Title,
+		Description:  cr.Description,
+		SourceBranch: cr.SourceBranch,
+		TargetBranch: cr.TargetBranch,
+		Draft:        cr.Draft,
+	}
+	created, err := tgt.CreateCR(ctx, opts)
+	if err == nil || !cr.Draft || !errors.Is(err, sdkprov.ErrDraftNotSupported) {
+		return created, err
+	}
+	// 降级路径:平台表达不了 draft ⇒ 非 draft 创建,计数留痕
+	opts.Draft = false
+	created, err = tgt.CreateCR(ctx, opts)
+	if err == nil {
+		rep.DraftDegraded++
+	}
+	return created, err
 }
 
 // listAllIssues 分页取尽(Page=0 首页语义,短页=结束;limit 截断)。
