@@ -2,6 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed（SDK v0.137.0 红利——三 breaking 解锁两个）
+
+- **依赖升级**:go-git-platform v0.131→**v0.137.0**(Phase 2B Capability
+  + Mutation Result)、**go-gitcode v0.16→v0.17.0、go-gongfeng v0.4→v0.5.0**
+  ——SDK 已适配(SDK #156 关闭),解除消费方钉回;thrift 仍按壳层
+  thriftgo 生成代码约束钉 v0.13(与 SDK 无关)。
+
 ## [v0.47.1] - 2026-11-15
 
 ### Fixed（对账漂移事件闭环——outbox Topic 分发）

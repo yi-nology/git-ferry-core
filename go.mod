@@ -9,14 +9,14 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/oekit/concurrency v0.35.0
 	github.com/oekit/logx v0.10.0
-	github.com/oekit/pkg v0.47.1
+	github.com/oekit/pkg v0.48.0
 	github.com/oekit/redisx v0.15.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sergi/go-diff v1.4.0
 	github.com/sethvargo/go-envconfig v1.4.3
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v0.132.0
+	github.com/yi-nology/go-git-platform v0.137.0
 	golang.org/x/tools v0.52.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
@@ -78,8 +78,8 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/skeema/knownhosts v1.3.3 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	github.com/yi-nology/go-gitcode v0.16.0 // indirect
-	github.com/yi-nology/go-gongfeng v0.4.0 // indirect
+	github.com/yi-nology/go-gitcode v0.17.0 // indirect
+	github.com/yi-nology/go-gongfeng v0.5.0 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	gitlab.com/gitlab-org/api/client-go/v3 v3.48.0 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
