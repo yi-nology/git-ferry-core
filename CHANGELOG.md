@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.49.0] - 2026-11-15
 
 ### Changed（SDK v0.138.0 升级 + draft 透传——迁移保真补全）
 
