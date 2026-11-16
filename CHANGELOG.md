@@ -2,6 +2,54 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed（P1 六单：#39/#40/#41/#42/#43/#44）
+
+- **#39 [retry] 冷却期不再吞预算**:`RetryTracker.Decision` 新增
+  `Deferred`/`RetryAfter`/`AttemptLimit`——冷却未到返回「可延后 + 剩余
+  等待时间」而不是模糊的 `Retry=false`;新增 `retry_schedules` 表
+  （`run_id` 唯一、`root_run_id`/`attempt`/`attempt_limit`/`retry_reason`
+  落库），冷却期判定先持久化排程，再由 core 延迟重跑派发器按
+  `next_attempt_at` 条件认领并触发 `RunTaskAsync(trigger=auto_retry)`。
+  重启后延迟重试仍生效，多实例单胜者；预算仍按 `sync_runs` 的
+  auto_retry 链计数，排程本身不消耗预算。迁移 v12。
+- **#40 [cron] 调度表改为数据库共享视图**:`sync_tasks.next_fire_at` 成为
+  唯一事实源；各实例不再维护本地 robfig 表，周期扫描后以单条条件更新
+  `UPDATE ... SET next_fire_at=? WHERE key=? AND next_fire_at<=now` 抢占，
+  跨实例配置一致，持有者退出后任意实例下一轮接手。配置更新不会用旧快照
+  回写 `next_fire_at`（`SyncTaskDAO.Update` 显式 Omit）。迁移 v11。
+- **#41 [migrate] Issue 迁移身份键改为源编号**:新增 `migration_mappings`
+  表，身份键 `(source_platform, source_repo, object_type, source_number)`，
+  标题只作展示字段——同标题的多个源 Issue 不再归并。迁移前先查映射：
+  命中回填编号 ⇒ 幂等收敛；未命中 ⇒ 先写 pending 占位再创建并回填，
+  中断残留的 pending 映射在报告中显式列为未闭环（不静默重建），
+  支持断点续迁。迁移 v13。
+- **#42 [config] 部署模式 fail-fast**:新增 `mode`（`standalone` 缺省 /
+  `distributed` / `worker`）与 `ValidateDeploymentMode`——distributed 必须
+  MySQL + `durable_queue=true` + Redis + `mirror_lock_fail_closed=true`；
+  worker 必须 `durable_queue=true` 且不得 `execute_jobs=false`；
+  非法组合在 `LoadConfig`/`NewService` 启动时报错并指名缺项，同时输出
+  启动自检日志。修复 `execute_jobs` 的 envconfig 指针被物化为 false
+  （`noinit`），保证「未配置 = 默认执行」。
+- **#43 [schema] 迁移锁全 DDL 同连接**:MySQL 路径统一走
+  `gormx.RunWithAdvisoryLock`（`db.Connection()` 把 GET_LOCK→迁移→
+  RELEASE_LOCK 钉在同一条 `*sql.Conn`），版本表 AutoMigrate 也移入互斥区；
+  不再存在连接池换连接导致 RELEASE_LOCK 落空/锁泄漏的形态。补回归测试
+  钉住「全部 DDL 在锁回调内」。
+- **#44 [reconcile] 错误分类收敛**:新增 `unknown`（401/403/429/5xx/
+  超时/解析失败）与 `unsupported`（平台无 CompareCommits）状态；只有
+  平台明确 404/410 才归 `source_missing`/`target_missing`，
+  CompareCommits 失败不再伪造成 `drift`。`unknown/unsupported` 单独计数、
+  单独 outbox 主题 `reconcile.unknown`、`ListReconcileUnknown`，
+  不计入漂移率。
+
+### Migration
+
+- v11 `sync_tasks.next_fire_at`（含索引）
+- v12 `retry_schedules`
+- v13 `migration_mappings`
+
 ## [v0.51.0] - 2026-11-17
 
 ### Fixed（durable_queue 数据丢失面之三单，本段随 #36/#37/#38 分 commit 追加）

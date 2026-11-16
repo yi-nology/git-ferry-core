@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -82,11 +83,29 @@ func TestReconcileBranches(t *testing.T) {
 	res = reconcileBranches(ctx, src, tgt, "o", "r", "main", "o", "r", "main")
 	assert.Equal(t, model.ReconcileTargetMissing, res.Status)
 
-	// 查询出错 ≠ 分支不存在:错误要留在 Message 里可见,而不是静默当 missing
+	// 查询出错 ≠ 分支不存在:非 404 的失败(500/403/429/超时)一律 unknown,
+	// 不得伪装成 source_missing(#44)。
 	brokenQ := &fakeErrQuerier{err: errors.New("api 500")}
 	res = reconcileBranches(ctx, brokenQ, tgt, "o", "r", "main", "o", "r", "main")
-	assert.Equal(t, model.ReconcileSourceMissing, res.Status)
+	assert.Equal(t, model.ReconcileUnknown, res.Status)
 	assert.Contains(t, res.Message, "api 500")
+
+	// 平台明确 404 ⇒ 分支不存在(missing)。
+	notFoundQ := &fakeErrQuerier{err: fmt.Errorf("get branch: %w", sdkprov.ErrNotFound)}
+	res = reconcileBranches(ctx, notFoundQ, tgt, "o", "r", "main", "o", "r", "main")
+	assert.Equal(t, model.ReconcileSourceMissing, res.Status)
+
+	// 目标侧查询 403/429 同样 unknown。
+	for _, qerr := range []error{
+		fmt.Errorf("auth: %w", sdkprov.ErrForbidden),
+		fmt.Errorf("throttle: %w", sdkprov.ErrRateLimited),
+		context.DeadlineExceeded,
+	} {
+		badTgt := &fakeErrQuerier{err: qerr}
+		src = &fakeQuerier{head: map[string]string{"o/r:main": "sha-5"}}
+		res = reconcileBranches(ctx, src, badTgt, "o", "r", "main", "o", "r", "main")
+		assert.Equal(t, model.ReconcileUnknown, res.Status, "err=%v 不得归 target_missing", qerr)
+	}
 }
 
 // fakeErrQuerier ListCommits 恒错(区分「查询失败」与「分支不存在」)。
@@ -99,14 +118,21 @@ func (f *fakeErrQuerier) CompareCommits(context.Context, string, string, string,
 	return nil, f.err
 }
 
-// TestReconcileBranches_CompareFailure 漂移但 Compare 挂:仍报 drift,
-// 不得 panic/误判 in_sync。
+// TestReconcileBranches_CompareFailure 漂移但 Compare 挂:报 unknown,
+// 不得 panic/误判 in_sync,也不得把「无法判断」报成「已证明漂移」(#44)。
 func TestReconcileBranches_CompareFailure(t *testing.T) {
 	src := &fakeQuerier{head: map[string]string{"o/r:main": "sha-7"}}
 	tgt := &fakeQuerier{head: map[string]string{"o/r:main": "sha-5"}, cmpErr: errors.New("compare boom")}
 	res := reconcileBranches(context.Background(), src, tgt, "o", "r", "main", "o", "r", "main")
-	require.Equal(t, model.ReconcileDrift, res.Status)
+	require.Equal(t, model.ReconcileUnknown, res.Status)
 	assert.Contains(t, res.Message, "CompareCommits 失败")
+	assert.Zero(t, res.SourceAhead, "无法比较时不得编造 ahead/behind")
+
+	// 平台无 Compare 能力 ⇒ unsupported(不是 drift)。
+	tgt.cmpErr = fmt.Errorf("compare: %w", sdkprov.ErrNotImplemented)
+	res = reconcileBranches(context.Background(), src, tgt, "o", "r", "main", "o", "r", "main")
+	assert.Equal(t, model.ReconcileUnsupported, res.Status)
+	assert.Contains(t, res.Message, "不支持 CompareCommits")
 }
 
 // TestBranchHeadSHA 单测:空列表 = 分支不存在("");错误上抛。
@@ -193,4 +219,29 @@ func TestRecordReconcile_NoStoreDegrades(t *testing.T) {
 	require.NoError(t, svc.recordReconcile(&model.ReconcileResult{
 		TaskKey: "t", Status: model.ReconcileDrift, CheckedAt: time.Now(),
 	}), "reconciles/outbox 为 nil 时应静默跳过")
+}
+
+// TestRecordReconcile_UnknownSeparateTopic #44:unknown/unsupported 不进
+// drift 告警主题,落到 reconcile.unknown(运营按主题分流);仍可被订阅方消费。
+func TestRecordReconcile_UnknownSeparateTopic(t *testing.T) {
+	svc := newReconcileTestService(t, &model.Config{})
+	require.NoError(t, svc.recordReconcile(&model.ReconcileResult{
+		TaskKey: "t-unknown", Status: model.ReconcileUnknown, Message: "403 from api", CheckedAt: time.Now(),
+	}))
+	evs, err := svc.outbox.ListDue(10, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	assert.Equal(t, model.OutboxTopicReconcileUnknown, evs[0].Topic, "unknown 不得进 drift 主题")
+	assert.Equal(t, "unknown", evs[0].Status)
+
+	got := make(chan ReconcileDrift, 1)
+	cancel := svc.SubscribeReconcileDrift(func(d ReconcileDrift) { got <- d })
+	defer cancel()
+	svc.publishDueOutbox(0)
+	select {
+	case d := <-got:
+		assert.Equal(t, "unknown", d.Status)
+	case <-time.After(time.Second):
+		t.Fatal("reconcile.unknown 事件必须仍可投递")
+	}
 }

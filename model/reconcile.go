@@ -5,9 +5,16 @@ import "time"
 // 对账状态(P3 跨平台一致性对账)。
 const (
 	ReconcileInSync        = "in_sync"        // 两端 SHA 一致
-	ReconcileDrift         = "drift"          // 两端 SHA 不一致
-	ReconcileSourceMissing = "source_missing" // 源分支不存在
-	ReconcileTargetMissing = "target_missing" // 目标分支不存在
+	ReconcileDrift         = "drift"          // CompareCommits 成功且 ahead/behind > 0
+	ReconcileSourceMissing = "source_missing" // 平台明确返回 404/branch not found(源)
+	ReconcileTargetMissing = "target_missing" // 平台明确返回 404/branch not found(目标)
+	// ReconcileUnknown 无法判断(401/403/429/5xx/超时/解析失败等):
+	// **不是**漂移,也**不是**分支不存在。单独计数,走凭据/限流运维告警,
+	// 不污染 drift 率。
+	ReconcileUnknown = "unknown"
+	// ReconcileUnsupported 平台无 CompareCommits 能力(SDK ErrNotImplemented /
+	// ErrPlatformNotSupported);SHA 已不同但无法量化 ahead/behind。
+	ReconcileUnsupported = "unsupported"
 )
 
 // ReconcileResult 一次任务对账结果(只读,不碰任何一端)。
@@ -31,6 +38,11 @@ type ReconcileResult struct {
 // OutboxTopicReconcileDrift 「对账漂移」事件主题:周期对账发现 drift/
 // 分支缺失时写入 outbox,订阅方(壳层通知/octopus 告警)按需消费。
 const OutboxTopicReconcileDrift = "reconcile.drift"
+
+// OutboxTopicReconcileUnknown 「对账无法判断」事件主题(#44):
+// 401/403/429/5xx/超时/平台无 Compare 能力时写入,与 drift 分主题,
+// 便于告警路由区分「真的漂移」与「凭据/限流/能力问题」。
+const OutboxTopicReconcileUnknown = "reconcile.unknown"
 
 // ReconcileRecord 每任务最新一次对账结果(落库,观测/告警的事实源)。
 // TaskKey 为主键:只留最新,历史由 outbox/日志承担。

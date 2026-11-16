@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
@@ -36,9 +35,7 @@ func setupTaskTestService(t *testing.T) (*Service, *gorm.DB) {
 	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, nil)
 
 	svc := &Service{
-		tasks:        taskService,
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
+		tasks: taskService,
 		config: &model.Config{
 			Sync: model.SyncConfig{
 				DefaultTimeout: 300,
@@ -118,9 +115,13 @@ func TestCreateTask_WithCron(t *testing.T) {
 		t.Errorf("expected cron '*/5 * * * *', got %q", task.Cron)
 	}
 
-	// Verify cron job was added
-	if _, exists := svc.cronEntryIDs[task.Key]; !exists {
-		t.Error("expected cron job to be added")
+	// cron 只落 DB(next_fire_at 由共享调度器播种),不再有本地点表。
+	stored, err := svc.GetTask(ctx, task.Key)
+	if err != nil || stored == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if stored.Cron != "*/5 * * * *" {
+		t.Errorf("expected persisted cron, got %q", stored.Cron)
 	}
 }
 
@@ -279,11 +280,6 @@ func TestDeleteTask(t *testing.T) {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
 
-	// Verify cron job exists
-	if _, exists := svc.cronEntryIDs[created.Key]; !exists {
-		t.Error("expected cron job to exist before deletion")
-	}
-
 	// Delete the task
 	err = svc.DeleteTask(ctx, created.Key)
 	if err != nil {
@@ -299,10 +295,6 @@ func TestDeleteTask(t *testing.T) {
 		t.Error("expected task to be deleted")
 	}
 
-	// Verify cron job is removed
-	if _, exists := svc.cronEntryIDs[created.Key]; exists {
-		t.Error("expected cron job to be removed after deletion")
-	}
 }
 
 func TestListHistory(t *testing.T) {
@@ -398,11 +390,7 @@ func TestPreviewSync_WithRepoDAO(t *testing.T) {
 
 	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
 
-	svc := &Service{
-		tasks:        taskService,
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
-	}
+	svc := &Service{tasks: taskService}
 
 	ctx := context.Background()
 
@@ -462,11 +450,7 @@ func TestPreviewSync_MissingRepo(t *testing.T) {
 
 	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
 
-	svc := &Service{
-		tasks:        taskService,
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
-	}
+	svc := &Service{tasks: taskService}
 
 	ctx := context.Background()
 
