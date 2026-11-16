@@ -21,7 +21,7 @@ func newQueueTestService(t *testing.T, key string, cfg *model.Config) *Service {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{},
-		&model.Repo{}, &model.PendingTrigger{}, &model.ExecutionJob{}))
+		&model.Repo{}, &model.PendingTrigger{}, &model.ExecutionJob{}, &model.ExecutionTaskState{}))
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
@@ -40,6 +40,14 @@ func newQueueTestService(t *testing.T, key string, cfg *model.Config) *Service {
 		Key: key, Name: "q", Enabled: true, SourceBranch: "main", TargetBranch: "main",
 	}))
 	return svc
+}
+
+// jobVersion 读作业当前租约纪元(fencing token,#37 测试用)。
+func jobVersion(t *testing.T, d *dao.ExecutionJobDAO, id uint) int64 {
+	t.Helper()
+	job, err := d.FindByID(id)
+	require.NoError(t, err)
+	return job.LeaseVersion
 }
 
 func TestDurableQueue_ModeSwitches(t *testing.T) {
@@ -169,7 +177,7 @@ func TestDurableQueue_RescheduleSkipsDeferredClaim(t *testing.T) {
 	ok, err := svc.jobs.Claim(ids[0], svc.instanceID, time.Minute)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, svc.jobs.Reschedule(ids[0], svc.instanceID, 30*time.Second))
+	require.NoError(t, svc.jobs.Reschedule(ids[0], svc.instanceID, jobVersion(t, svc.jobs, ids[0]), 30*time.Second))
 
 	// 退避窗口内:派发器认领必须被 not-before 挡住
 	ok, err = svc.jobs.Claim(ids[0], svc.instanceID, time.Minute)
@@ -200,7 +208,7 @@ func TestRenewLeaseTick_LostLeaseCancelsExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	cancelled := false
-	assert.True(t, svc.renewLeaseTick(ids[0], func() { cancelled = true }))
+	assert.True(t, svc.renewLeaseTick(ids[0], jobVersion(t, svc.jobs, ids[0]), func() { cancelled = true }))
 	assert.False(t, cancelled, "仍持有租约时不得触发取消")
 
 	// 失锁:reaper 回收 → 其它实例认领 ⇒ 旧属主续租必须报停
@@ -210,7 +218,7 @@ func TestRenewLeaseTick_LostLeaseCancelsExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	assert.False(t, svc.renewLeaseTick(ids[0], func() { cancelled = true }),
+	assert.False(t, svc.renewLeaseTick(ids[0], 1, func() { cancelled = true }),
 		"失锁后续租循环必须终止")
 	assert.True(t, cancelled, "失锁必须触发取消执行回调(旧属主停手,防脑裂)")
 }

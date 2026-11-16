@@ -131,7 +131,8 @@ type SyncConfig struct {
 	HistoryRetentionDays int `yaml:"history_retention_days" env:"GIT_SYNC_HISTORY_RETENTION_DAYS"`
 	// DurableQueue 持久化执行队列(execution_jobs,P2 分布式地基):
 	// true=触发先入队,由派发器按 lease 认领执行——实例崩溃/K8s 驱逐后
-	// 任务可被其它实例接管,重复触发自动合并不重复发布;
+	// 任务可被其它实例接管;重复触发自动合并不重复发布,且执行中到达的
+	// 触发以代次承接、收尾后补跑(#36)——合并不丢触发;
 	// false(默认)=直接执行(旧行为,零变化)。
 	DurableQueue bool `yaml:"durable_queue" env:"GIT_SYNC_DURABLE_QUEUE"`
 	// ReconcileIntervalHours 周期对账间隔(小时):>0 启用——按周期对全部

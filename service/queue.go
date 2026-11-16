@@ -61,7 +61,9 @@ func (s *Service) executesJobs() bool {
 	return s.config.Sync.ExecuteJobs == nil || *s.config.Sync.ExecuteJobs
 }
 
-// enqueueTaskRun 队列模式的触发入口:入队(同任务合并语义)。
+// enqueueTaskRun 队列模式的触发入口:入队(generation coalescing 合并语义)。
+// 被合并 ≠ 丢弃:每次触发都在状态行递增 desired_generation(#36),
+// 作业收尾 CAS 发现 completed < desired 会再入追赶作业承接。
 func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) error {
 	if s.jobs == nil {
 		// fail-closed:队列开启但 DAO 没接线(裸构造)——拒绝而不是静默直跑,
@@ -75,7 +77,7 @@ func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) 
 	if enqueued {
 		slog.Info("执行任务已入队", "task", taskKey, "trigger", trigger)
 	} else {
-		slog.Info("触发已合并:任务已有待执行作业", "task", taskKey, "trigger", trigger)
+		slog.Info("触发已合并:任务已有活动作业,代次已递增(收尾补跑承接)", "task", taskKey, "trigger", trigger)
 	}
 	return nil
 }
@@ -147,7 +149,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 			// 执行权被占(本实例或跨实例有执行在跑)——良性繁忙:退避重排,
 			// 作业放回 pending 且 attempt 不增(毒丸预算只留给崩溃接管)。
 			slog.Warn("job: 执行权被占,退避重排(不占接管预算)", "id", job.ID, "task", job.TaskKey, "error", err)
-			if rerr := s.jobs.Reschedule(job.ID, s.instanceID, jobBusyBackoff); rerr != nil {
+			if rerr := s.jobs.Reschedule(job.ID, s.instanceID, job.LeaseVersion, jobBusyBackoff); rerr != nil {
 				if oekiterrors.Is(rerr, dao.ErrLeaseLost) {
 					slog.Warn("job: 退避重排时已失锁(作业已被其它实例接管),本实例停手", "id", job.ID)
 					return
@@ -174,10 +176,19 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 
 		// 执行用可取消 ctx:续租发现失锁 ⇒ 取消,旧属主立即停手(防与
 		// 接管方并发推同一目标仓库 —— 脑裂分叉推送)。
+		//
+		// **边界声明(#37 留口子)**:取消 context 只是协作式停手,不构成
+		// 互斥证明——push 系统调用进行中信号不保证及时生效。目标仓库侧的
+		// 条件保护(push 前校验远端 ref 仍是预期值 / fencing token 随 push
+		// 传播)超出本仓 dao 层能力,属 executor/目标平台侧的后续工作;
+		// 届时 job.LeaseVersion 即现成的 fencing token,随 push 传播并在
+		// 目标侧做「token 未变才放行」的条件写入。本仓先把 dao 层的
+		// 续租/收尾/接管全部按纪元 fencing(#37),毒丸终态不可被旧属主
+		// 覆写、续租中的作业不被 reaper 重放。
 		execCtx, cancelExec := context.WithCancel(s.bgCtx)
 		defer cancelExec()
 		stopRenew := make(chan struct{})
-		go s.renewLeaseLoop(job.ID, stopRenew, cancelExec)
+		go s.renewLeaseLoop(job.ID, job.LeaseVersion, stopRenew, cancelExec)
 		run, execErr := s.executor.Execute(execCtx, task, job.Trigger, job.WebhookEventID)
 		close(stopRenew)
 
@@ -186,7 +197,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 		if run != nil {
 			runID = run.ID
 		}
-		if cerr := s.jobs.Complete(job.ID, s.instanceID, runID, execErr); cerr != nil {
+		if cerr := s.jobs.Complete(job.ID, s.instanceID, job.LeaseVersion, runID, execErr); cerr != nil {
 			if oekiterrors.Is(cerr, dao.ErrLeaseLost) {
 				slog.Error("job: 完成落库时已失锁(执行结果未入终态,作业已被其它实例接管重试)", "id", job.ID)
 				return
@@ -201,7 +212,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 func (s *Service) failJobAndRelease(job model.ExecutionJob, release func(), cause error) {
 	release()
 	slog.Warn("job: 执行前失败,作业判失败", "id", job.ID, "task", job.TaskKey, "error", cause)
-	if cerr := s.jobs.Complete(job.ID, s.instanceID, 0, cause); cerr != nil {
+	if cerr := s.jobs.Complete(job.ID, s.instanceID, job.LeaseVersion, 0, cause); cerr != nil {
 		if oekiterrors.Is(cerr, dao.ErrLeaseLost) {
 			slog.Warn("job: 失败落库时已失锁(作业已被其它实例接管重试)", "id", job.ID)
 			return
@@ -213,7 +224,7 @@ func (s *Service) failJobAndRelease(job model.ExecutionJob, release func(), caus
 // renewLeaseLoop 执行中周期续租,直到 stop 关闭或实例退出;
 // 续租发现失锁(ErrLeaseLost)⇒ Error 告警 + 取消执行 ctx(onLost),
 // 旧属主不得无感继续推送。
-func (s *Service) renewLeaseLoop(id uint, stop <-chan struct{}, onLost func()) {
+func (s *Service) renewLeaseLoop(id uint, leaseVersion int64, stop <-chan struct{}, onLost func()) {
 	tick := time.NewTicker(jobRenewInterval)
 	defer tick.Stop()
 	for {
@@ -223,7 +234,7 @@ func (s *Service) renewLeaseLoop(id uint, stop <-chan struct{}, onLost func()) {
 		case <-s.bgCtx.Done():
 			return
 		case <-tick.C:
-			if !s.renewLeaseTick(id, onLost) {
+			if !s.renewLeaseTick(id, leaseVersion, onLost) {
 				return
 			}
 		}
@@ -231,8 +242,8 @@ func (s *Service) renewLeaseLoop(id uint, stop <-chan struct{}, onLost func()) {
 }
 
 // renewLeaseTick 续租一次:返回是否继续续租循环(false = 已失锁,该停手)。
-func (s *Service) renewLeaseTick(id uint, onLost func()) bool {
-	err := s.jobs.RenewLease(id, s.instanceID, jobLeaseTTL)
+func (s *Service) renewLeaseTick(id uint, leaseVersion int64, onLost func()) bool {
+	err := s.jobs.RenewLease(id, s.instanceID, leaseVersion, jobLeaseTTL)
 	switch {
 	case err == nil:
 		return true

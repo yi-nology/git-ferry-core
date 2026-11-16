@@ -42,6 +42,7 @@ var allModels = []any{
 	&PendingTrigger{},
 	&OutboxEvent{},
 	&ExecutionJob{},
+	&ExecutionTaskState{},
 	&ReconcileRecord{},
 	&RecoveryPoint{},
 }
