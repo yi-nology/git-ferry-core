@@ -48,12 +48,15 @@ func TestReconcileDAO_UpsertKeepsLatest(t *testing.T) {
 	assert.Len(t, n, 1, "每任务只留一条")
 }
 
-// TestReconcileDAO_ListDrift 只列非 in_sync(告警面)。
+// TestReconcileDAO_ListDrift 漂移告警面只含 drift 与分支缺失;
+// unknown/unsupported 走 ListUnknown,不污染 drift 率(#44)。
 func TestReconcileDAO_ListDrift(t *testing.T) {
 	d := setupReconcileTestDB(t)
 	require.NoError(t, d.Upsert(mkRec("ok", model.ReconcileInSync, 0)))
 	require.NoError(t, d.Upsert(mkRec("bad", model.ReconcileDrift, 2)))
 	require.NoError(t, d.Upsert(mkRec("gone", model.ReconcileTargetMissing, 0)))
+	require.NoError(t, d.Upsert(mkRec("auth", model.ReconcileUnknown, 0)))
+	require.NoError(t, d.Upsert(mkRec("nocmp", model.ReconcileUnsupported, 0)))
 
 	drift, err := d.ListDrift()
 	require.NoError(t, err)
@@ -64,4 +67,14 @@ func TestReconcileDAO_ListDrift(t *testing.T) {
 	}
 	assert.True(t, keys["bad"] && keys["gone"])
 	assert.False(t, keys["ok"], "in_sync 不得出现在告警面")
+	assert.False(t, keys["auth"] || keys["nocmp"], "unknown/unsupported 不得计入漂移面")
+
+	unknown, err := d.ListUnknown()
+	require.NoError(t, err)
+	require.Len(t, unknown, 2)
+	uk := map[string]bool{}
+	for _, r := range unknown {
+		uk[r.TaskKey] = true
+	}
+	assert.True(t, uk["auth"] && uk["nocmp"])
 }
