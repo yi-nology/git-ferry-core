@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.51.0] - 2026-11-17
 
 ### Fixed（durable_queue 数据丢失面之三单，本段随 #36/#37/#38 分 commit 追加）
 
