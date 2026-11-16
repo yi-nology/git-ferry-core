@@ -8,6 +8,7 @@ package lock
 import (
 	"time"
 
+	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
 	"github.com/redis/go-redis/v9"
 )
@@ -34,11 +35,11 @@ type RedisPoolOptions struct {
 }
 
 // Option functional option for NewRedisClient.
-type Option func(*redis.Options)
+type Option func(*redis.UniversalOptions)
 
 // WithPoolOptions 设置连接池参数。
 func WithPoolOptions(pool RedisPoolOptions) Option {
-	return func(o *redis.Options) {
+	return func(o *redis.UniversalOptions) {
 		if pool.PoolSize > 0 {
 			o.PoolSize = pool.PoolSize
 		}
@@ -57,17 +58,23 @@ func WithPoolOptions(pool RedisPoolOptions) Option {
 	}
 }
 
-// NewRedisClient 按地址与连接池参数构造 go-redis 客户端,供 NewLocker / NewSemaphore 共用。
-func NewRedisClient(addr, password string, db int, opts ...Option) *redis.Client {
-	o := &redis.Options{
-		Addr:     addr,
+// RedisKeyPrefix 是 redisx 客户端的 key 前缀(作用于经 *redisx.Client
+// 封装方法的直连命令)。distlock/Semaphore 走 Client() 原生句柄 + 各自的
+// 前缀(LockKeyPrefix / SemaphoreKeyPrefix),滚动升级期间 key 布局不变。
+const RedisKeyPrefix = "gitferry"
+
+// NewRedisClient 用 oekit/redisx 构造客户端(统一 key 前缀、Close、健康检查),
+// 供 NewLocker / NewSemaphore 共用。
+func NewRedisClient(addr, password string, db int, opts ...Option) (*redisx.Client, error) {
+	o := &redis.UniversalOptions{
+		Addrs:    []string{addr},
 		Password: password,
 		DB:       db,
 	}
 	for _, opt := range opts {
 		opt(o)
 	}
-	return redis.NewClient(o)
+	return redisx.NewClient(o, redisx.WithPrefix(RedisKeyPrefix))
 }
 
 // ⚠️ **WithMaxAutoRenew 的「最大生命周期安全网」现已可用**:

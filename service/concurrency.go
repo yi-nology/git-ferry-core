@@ -9,8 +9,8 @@ import (
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
-	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -106,7 +106,7 @@ func (g *localGuard) TryCronLock(_ context.Context, _ string, _ time.Duration) (
 // redisGuard 多实例并发控制:distlock 做 taskKey 互斥(库内自动续期),ZSET 信号量做全局并发上限
 // (watchdog 续期)。进程崩溃后锁/槽在 TTL 内自动释放。
 type redisGuard struct {
-	client *redis.Client
+	client *redisx.Client
 	locker *distlock.RedisLocker
 	sem    *lock.Semaphore
 }
@@ -115,20 +115,23 @@ func newRedisGuard(addr, password string, db, maxConcurrent int, poolOpts lock.R
 	if maxConcurrent <= 0 {
 		maxConcurrent = model.DefaultMaxConcurrent
 	}
-	client := lock.NewRedisClient(addr, password, db, lock.WithPoolOptions(poolOpts))
+	client, err := lock.NewRedisClient(addr, password, db, lock.WithPoolOptions(poolOpts))
+	if err != nil {
+		return nil, errors.Wrap(err, "redis client init failed")
+	}
 	if err := client.Ping(context.Background()).Err(); err != nil {
-		_ = client.Close()
+		_ = client.Close(context.Background())
 		return nil, errors.Wrap(err, "redis ping failed")
 	}
 	// WithMaxAutoRenew(-1) 取消 distlock 默认的 10×TTL 续期上限:同步任务可能跑数小时
 	// (大仓库克隆),上限一到锁会在任务中途静默过期,被别的实例重复执行。
 	// 锁的生命周期由 release 里的 Unlock 显式终止。
-	locker := lock.NewLocker(client,
+	locker := lock.NewLocker(client.Client(),
 		distlock.WithAutoRenew(),
 		distlock.WithRenewInterval(renewInterval),
 		distlock.WithMaxAutoRenew(-1),
 	)
-	sem := lock.NewSemaphore(client, semSlotKey, maxConcurrent, semSlotTTL)
+	sem := lock.NewSemaphore(client.Client(), semSlotKey, maxConcurrent, semSlotTTL)
 	return &redisGuard{client: client, locker: locker, sem: sem}, nil
 }
 
@@ -219,7 +222,7 @@ func (g *redisGuard) TryCronLock(ctx context.Context, taskKey string, ttl time.D
 }
 
 func (g *redisGuard) Close() error {
-	return g.client.Close()
+	return g.client.Close(context.Background())
 }
 
 // newGuard 按是否配置 redis 选择实现。配了 redis 用分布式,否则用进程内。

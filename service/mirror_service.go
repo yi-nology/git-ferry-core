@@ -17,8 +17,8 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/syncx"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
-	"github.com/redis/go-redis/v9"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
@@ -55,7 +55,7 @@ type MirrorService struct {
 	lockFailClosed bool
 	lockTTL        time.Duration
 	// lockClient 是 locker 底层的 redis 连接,由 Service.Stop 统一关闭。
-	lockClient *redis.Client
+	lockClient *redisx.Client
 }
 
 // remoteLocker 跨实例锁的最小抽象(*distlock.RedisLocker 的天然实现),
@@ -81,13 +81,17 @@ func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 	// 配 redis 时追加跨实例互斥；未配 redis 只有进程内互斥。
 	// Redis 异常时的降级/拒绝策略由 sync.mirror_lock_fail_closed 决定。
 	var locker remoteLocker
-	var lockClient *redis.Client
+	var lockClient *redisx.Client
 	failClosed := false
 	if cfg := svc.GetConfig(); cfg != nil {
 		failClosed = cfg.Sync.MirrorLockFailClosed
 		if cfg.Redis.Addr != "" {
-			lockClient = lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
-			locker = lock.NewLocker(lockClient)
+			client, err := lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+			if err != nil {
+				return nil, oekiterrors.Wrap(err, "init mirror redis lock client failed")
+			}
+			lockClient = client
+			locker = lock.NewLocker(client.Client())
 		}
 	}
 	return &MirrorService{

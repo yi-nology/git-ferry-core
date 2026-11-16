@@ -2,6 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed（oekit 基础设施收编第一轮——gormx / redisx）
+
+- **gormx v0.12.1 接管 DB 基础设施**:
+  - `model.InitDBWithPool` 用 `gormx.Open` + `WithConnectionPool` /
+    `WithConnMaxIdleTime` 打开 MySQL/sqlite，连接池在 Open 时一次下发
+    （此前由 `service.initDB` 在 open 之后补设，存在中间态）。
+  - **schema 迁移互斥改用 `gormx.RunWithAdvisoryLock`**：GET_LOCK /
+    RELEASE_LOCK 与迁移语句钉在同一条连接上，修复连接池导致的释放落空 /
+    锁泄漏（#43）。**破坏性变更**：锁键从命名锁
+    `gitferry_schema_migrate` 改为 int64 咨询锁（MySQL 侧即十进制串），
+    滚动升级窗口内新旧版本不互斥——升级时先停旧副本再启新副本。
+    版本化 `schema_migrations` 机制不变。
+  - `isDuplicateKeyErr` 换 `gormx.IsUniqueViolation`（方言化判据，
+    替代 `Duplicate entry` / `UNIQUE constraint failed` 字符串匹配）。
+- **redisx v0.15.0 → v0.16.0**：`lock.NewRedisClient` 改用
+  `redisx.NewClient`（统一 key 前缀、`Close(ctx)`、`Ping`），返回
+  `*redisx.Client`；distlock / Semaphore 的 key 布局不变（滚动升级兼容）。
+- 依赖地板：logx v0.10.0 → v0.11.0、concurrency v0.35.0 → v0.36.0
+  （gormx / redisx 传递抬升）。
+- 有意不迁：`dao.Paginate` 保持 offset 契约（gormx.Paginate 是 page 制）；
+  DAO/service 的 `db.Save` 全量改写为 crud/gormrepo 留待 R1 状态模型
+  落地后按 DAO 增量做（见 ROADMAP.md）。
+
 ## [v0.50.0] - 2026-11-17
 
 ### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）

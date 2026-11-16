@@ -297,14 +297,14 @@ func (s *Service) doStop() {
 
 	// 释放镜像通道跨实例锁的 redis 连接
 	if s.mirror != nil && s.mirror.lockClient != nil {
-		if err := s.mirror.lockClient.Close(); err != nil {
+		if err := s.mirror.lockClient.Close(context.Background()); err != nil {
 			slog.Error("failed to close mirror redis lock", "error", err)
 		}
 	}
 
 	// 释放历史同步通道跨实例锁的 redis 连接
 	if s.history != nil && s.history.lockClient != nil {
-		if err := s.history.lockClient.Close(); err != nil {
+		if err := s.history.lockClient.Close(context.Background()); err != nil {
 			slog.Error("failed to close history redis lock", "error", err)
 		}
 	}

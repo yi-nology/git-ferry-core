@@ -15,8 +15,8 @@ import (
 
 	"github.com/oekit/concurrency/syncx"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
-	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/go-git/go-git/v5"
@@ -61,7 +61,7 @@ type HistoryService struct {
 	locker  *distlock.RedisLocker
 	lockTTL time.Duration
 	// lockClient 是 locker 底层的 redis 连接,由 Service.Stop 统一关闭。
-	lockClient *redis.Client
+	lockClient *redisx.Client
 	// materializeRuns 统计物化次数(可观测性:一次同步跑了多少遍流水线)。
 	//
 	// **一键同步应当是 1**:plan/resolve/物化/门禁都只跑一遍。
@@ -90,10 +90,14 @@ func NewHistoryService(svc *Service, db *gorm.DB) (*HistoryService, error) {
 	}
 	// 配 redis 时追加跨实例互斥;未配或 redis 抖动只降级为进程内互斥(有告警)。
 	var locker *distlock.RedisLocker
-	var lockClient *redis.Client
+	var lockClient *redisx.Client
 	if cfg := svc.GetConfig(); cfg != nil && cfg.Redis.Addr != "" {
-		lockClient = lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
-		locker = lock.NewLocker(lockClient)
+		client, err := lock.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+		if err != nil {
+			return nil, oekiterrors.Wrap(err, "init history redis lock client failed")
+		}
+		lockClient = client
+		locker = lock.NewLocker(client.Client())
 	}
 	h := &HistoryService{
 		svc:        svc,

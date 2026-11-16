@@ -31,20 +31,18 @@ type appDAOs struct {
 	provider  *sdkrt.Manager
 }
 
-// initDB 初始化 GORM 与连接池。
+// initDB 初始化 GORM 与连接池(gormx 接管 open/池,连接池参数在
+// Open 时一次下发,避免"先开后调"的中间态)。
 func initDB(cfg *Config) (*gorm.DB, error) {
-	db, err := model.InitDB(cfg.Database.Driver, cfg.Database.DSN)
+	db, err := model.InitDBWithPool(cfg.Database.Driver, cfg.Database.DSN, model.DBPoolOptions{
+		MaxOpenConns:    cfg.Database.MaxOpenConns,
+		MaxIdleConns:    cfg.Database.MaxIdleConns,
+		ConnMaxLifetime: time.Duration(cfg.Database.ConnMaxLifeSec) * time.Second,
+		ConnMaxIdleTime: time.Duration(cfg.Database.ConnMaxIdleSec) * time.Second,
+	})
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "init db failed")
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, err
-	}
-	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
-	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(time.Duration(cfg.Database.ConnMaxLifeSec) * time.Second)
-	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.Database.ConnMaxIdleSec) * time.Second)
 	return db, nil
 }
 

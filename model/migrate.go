@@ -1,10 +1,12 @@
 package model
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
+	"hash/fnv"
 	"time"
 
+	"github.com/oekit/gormx"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -48,13 +50,25 @@ type Migration struct {
 // 全新安装与存量库首次收敛都记到此版本;真实 DDL 迁移从 2 开始编号。
 const BaselineVersion uint64 = 1
 
-// schemaMigrateLockName MySQL GET_LOCK 的命名锁:串行化多实例启动时的
-// 迁移执行(sqlite 单写者无此问题)。
+// schemaMigrateLockName 迁移互斥的业务键:串行化多实例启动时的迁移执行
+// (sqlite 单写者无此问题)。
+//
+// **破坏性变更**:gormx 的咨询锁键是 int64(MySQL 侧即十进制串),
+// 不再是旧版本的命名锁 "gitferry_schema_migrate" ⇒ 新旧版本在滚动升级
+// 窗口内不互斥。升级时先停旧副本再启新副本(迁移本身幂等,风险可控)。
 const schemaMigrateLockName = "gitferry_schema_migrate"
 
-// schemaMigrateLockTimeoutSec GET_LOCK 等待秒数:等不到 = 另一实例正在迁移,
+// schemaMigrateLockTimeout 拿锁等待上限:等不到 = 另一实例正在迁移,
 // fail-closed 拒绝启动(宁可起不来,不可并发 DDL)。
-const schemaMigrateLockTimeoutSec = 60
+const schemaMigrateLockTimeout = 60 * time.Second
+
+// schemaMigrateLockKey 把业务键折成 gormx 会话级咨询锁的 int64 键
+// (FNV-1a 64,与 gormx/migrate 的 LockKey 口径一致;同一字符串跨副本必得同一键)。
+func schemaMigrateLockKey() int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(schemaMigrateLockName))
+	return int64(h.Sum64())
+}
 
 // migrations 已登记的版本化迁移(按 Version 升序;**只追加,不改写**)。
 var migrations = []Migration{
@@ -91,18 +105,27 @@ var migrations = []Migration{
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。
+//
+// 多实例串行化:MySQL 走 gormx.RunWithAdvisoryLock——GET_LOCK/RELEASE_LOCK
+// 与迁移语句钉在同一条连接上(会话级锁的连接池坑由此闭合);sqlite 单写者
+// 天然串行,不取锁。
 func ensureSchema(db *gorm.DB, driver string) error {
 	// 版本表自身幂等建表(先于锁,锁不需要它)。
 	if err := db.AutoMigrate(&SchemaMigration{}); err != nil {
 		return err
 	}
-
-	unlock, err := acquireSchemaLock(db, driver)
-	if err != nil {
-		return err
+	if driver != DriverMySQL {
+		return ensureSchemaLocked(db)
 	}
-	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), schemaMigrateLockTimeout)
+	defer cancel()
+	return gormx.RunWithAdvisoryLock(ctx, db, schemaMigrateLockKey(), ensureSchemaLocked)
+}
 
+// ensureSchemaLocked 在迁移互斥区内执行版本收敛。传入的 db 在 MySQL 路径下
+// 是**持锁连接**(gormx 钉住的 conn),迁移语句全部走它(避免 DDL 落到池里
+// 其它连接)。
+func ensureSchemaLocked(db *gorm.DB) error {
 	fresh := !db.Migrator().HasTable(&SyncTask{})
 
 	// 已应用版本集合。
@@ -148,36 +171,6 @@ func ensureSchema(db *gorm.DB, driver string) error {
 		}
 	}
 	return nil
-}
-
-// acquireSchemaLock MySQL 用 GET_LOCK 串行化;sqlite 单写者直接放行。
-// 返回的 unlock 幂等。
-func acquireSchemaLock(db *gorm.DB, driver string) (unlock func(), err error) {
-	noOp := func() {}
-	if driver != DriverMySQL {
-		return noOp, nil
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, err
-	}
-	var result sql.NullInt64
-	row := sqlDB.QueryRow(
-		fmt.Sprintf("SELECT GET_LOCK('%s', %d)", schemaMigrateLockName, schemaMigrateLockTimeoutSec))
-	if err := row.Scan(&result); err != nil {
-		return nil, oekiterrors.Wrap(err, "acquire schema migrate lock")
-	}
-	if !result.Valid || result.Int64 != 1 {
-		return nil, oekiterrors.New(fmt.Sprintf("schema migrate lock %s not acquired within %ds (另一实例正在迁移?)", schemaMigrateLockName, schemaMigrateLockTimeoutSec))
-	}
-	var once bool
-	return func() {
-		if once {
-			return
-		}
-		once = true
-		_, _ = sqlDB.Exec(fmt.Sprintf("SELECT RELEASE_LOCK('%s')", schemaMigrateLockName))
-	}, nil
 }
 
 // appliedVersions 已应用版本集合。

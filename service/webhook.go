@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/gormx"
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/filter/branchfilter"
@@ -36,15 +37,11 @@ func syntheticEventID() string {
 	return "syn-" + uuid.NewString()
 }
 
-// isDuplicateKeyErr 判断错误是否为 DB 唯一约束冲突(MySQL 1062 / SQLite UNIQUE)。
+// isDuplicateKeyErr 判断错误是否为 DB 唯一约束冲突。
+// 判据由 oekit/gormx 按方言收口(MySQL 1062 / SQLite UNIQUE / PostgreSQL
+// 23505,类型化判据 + 精确文案兜底),不再手写字符串匹配。
 func isDuplicateKeyErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "Duplicate entry") || // MySQL
-		strings.Contains(msg, "UNIQUE constraint failed") || // SQLite
-		strings.Contains(msg, "duplicate key") // PostgreSQL
+	return gormx.IsUniqueViolation(err)
 }
 
 // WebhookPayload 是协议无关的入站 Webhook 载荷。
