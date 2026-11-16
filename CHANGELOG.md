@@ -60,6 +60,17 @@
   单事务单连接(与 MySQL 的持锁连接口径一致,DDL 可事务化,收敛原子提交)。
   存量库升级已落库的 v2..v6 不改写(只追加纪律)。
 
+- **#38 [outbox] RunTaskWithTrigger 直跑路径丢弃 delivered 后无条件闭环**
+  (#15 在该入口未修完):直跑路径此前把 emitRunCompleted 的返回值丢弃并
+  无条件 markOutboxPublishedByRun —— 无订阅者(壳层未注册 runwatch /
+  进程刚启动 / 纯 CLI 模式)时完成事件被标记已发布却从未投递 ⇒ 通知与
+  自动补偿永久丢失,且事件已标记 published 在 outbox 里不可见,运维无法
+  事后补偿。修复:抽 `finishDirectRun` 共用收尾(广播完成事件 + 真投递才
+  闭环 outbox + 消费待补跑触发),finishRun(异步路径)与其共用同一实现
+  —— 两条路径不分叉;与 #15 的既有回归(service/outbox_test.go)同型补
+  直跑路径回归(无订阅者保留事件 → 订阅者注册后派发器重投闭环;有订阅者
+  正常闭环两条对照)。schema 无变更。
+
 ### Changed（oekit 基础设施收编第一轮——gormx / redisx）
 
 - **gormx v0.12.1 接管 DB 基础设施**:
