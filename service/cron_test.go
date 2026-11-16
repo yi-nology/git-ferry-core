@@ -120,14 +120,16 @@ func TestCron_ModificationVisibleToOtherInstance(t *testing.T) {
 	a := setupCronTestService(t, db)
 	b := setupCronTestService(t, db)
 
-	task := mustCreateCronTask(t, a, "cron-mod", "* * * * *")
+	// 用两个「下一次触发时间必然不同」的表达式(避免 * * * * 与
+	// */10 * * * * 在整十分钟点撞成同一时刻,造成测试 flaky)。
+	task := mustCreateCronTask(t, a, "cron-mod", "0 0 1 1 *")
 	require.NoError(t, a.runCronTick(context.Background()))
 	old, err := a.tasks.taskDAO.FindByKey(task.Key)
 	require.NoError(t, err)
 	require.NotNil(t, old.NextFireAt)
 
 	// A 修改表达式 ⇒ 排程清空,B 下一轮按新表达式重新播种。
-	newExpr := "*/10 * * * *"
+	newExpr := "0 0 1 2 *"
 	_, err = a.UpdateTask(context.Background(), &model.UpdateTaskRequest{Key: task.Key, Cron: &newExpr})
 	require.NoError(t, err)
 	mid, err := a.tasks.taskDAO.FindByKey(task.Key)
