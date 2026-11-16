@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repo"
 )
@@ -70,7 +71,7 @@ func (s *Service) ApplyTaskPolicies(ctx context.Context, data []byte) (*ApplyTas
 // 返回是否为新建。
 func (s *Service) applyOnePolicy(ctx context.Context, p model.TaskPolicy) (bool, error) {
 	existing, err := s.tasks.FindTaskByKey(p.Key)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrTaskNotFound) {
 		return false, err
 	}
 	if existing == nil {

@@ -113,7 +113,7 @@ func (s *Service) ReceiveWebhook(ctx context.Context, repoKey string, payload *W
 	eventID, needDedup := webhookEventID(event.ID)
 	if needDedup {
 		existing, err := s.webhooks.FindEventByEventID(eventID)
-		if err != nil {
+		if err != nil && !isRepoNotFound(err) {
 			return err
 		}
 		if existing != nil {

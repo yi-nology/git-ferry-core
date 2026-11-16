@@ -37,7 +37,11 @@ func (ws *WebhookService) ListRules(ctx context.Context, repoKey string) ([]*mod
 
 // GetRule returns a webhook rule by ID.
 func (ws *WebhookService) GetRule(ctx context.Context, id uint) (*model.WebhookRule, error) {
-	return ws.ruleRepo.FindByID(id)
+	rule, err := ws.ruleRepo.FindByID(id)
+	if err != nil {
+		return nil, mapNotFound(err, ErrRuleNotFound)
+	}
+	return rule, nil
 }
 
 // 规则默认值。
@@ -83,10 +87,7 @@ func (ws *WebhookService) CreateRule(ctx context.Context, req *model.CreateRuleR
 func (ws *WebhookService) UpdateRule(ctx context.Context, req *model.UpdateRuleRequest) (*model.WebhookRule, error) {
 	rule, err := ws.ruleRepo.FindByID(req.ID)
 	if err != nil {
-		return nil, err
-	}
-	if rule == nil {
-		return nil, ErrRuleNotFound
+		return nil, mapNotFound(err, ErrRuleNotFound)
 	}
 
 	// **只改请求里带了字段**(指针/非空语义):
@@ -140,10 +141,7 @@ func (ws *WebhookService) ListEvents(ctx context.Context, repoKey string, offset
 func (ws *WebhookService) MarkEventProcessing(ctx context.Context, eventID uint) (*model.WebhookEvent, error) {
 	event, err := ws.eventRepo.FindByID(eventID)
 	if err != nil {
-		return nil, err
-	}
-	if event == nil {
-		return nil, ErrEventNotFound
+		return nil, mapNotFound(err, ErrEventNotFound)
 	}
 	event.Status = model.StatusProcessing
 	// targeted UPDATE,避免全字段回写大 payload
@@ -213,7 +211,11 @@ func (ws *WebhookService) FindEventByEventID(eventID string) (*model.WebhookEven
 
 // FindEventByID returns a webhook event by ID (internal use).
 func (ws *WebhookService) FindEventByID(id uint) (*model.WebhookEvent, error) {
-	return ws.eventRepo.FindByID(id)
+	ev, err := ws.eventRepo.FindByID(id)
+	if err != nil {
+		return nil, mapNotFound(err, ErrEventNotFound)
+	}
+	return ev, nil
 }
 
 // ApplyRules applies webhook rules to an event.

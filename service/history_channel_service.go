@@ -211,7 +211,7 @@ func (h *HistoryService) CreateHistoryChannel(_ context.Context, in HistoryChann
 	if err := validateHistoryRepoDir(derefStr(in.TargetDir), "target_dir"); err != nil {
 		return nil, err
 	}
-	if existing, err := h.channels.FindByName(in.Name); err != nil {
+	if existing, err := h.channels.FindByName(in.Name); err != nil && !isRepoNotFound(err) {
 		return nil, err
 	} else if existing != nil {
 		return nil, oekiterrors.New(fmt.Sprintf("通道名已存在: %s", in.Name))
@@ -853,7 +853,7 @@ func (h *HistoryService) finishRun(run *model.HistoryRun, status, errMsg string)
 		run.DurationMs = now.Sub(*run.StartedAt).Milliseconds()
 	}
 	prev, err := h.runs.FindLastHashedByChannel(run.ChannelID)
-	if err != nil {
+	if err != nil && !isRepoNotFound(err) {
 		return nil, err
 	}
 	if prev != nil {
@@ -974,7 +974,7 @@ func (h *HistoryService) pushChannelLatest(ctx context.Context, channelID uint, 
 	// 找最近一次 **apply** 记录:apply 记录才有产物路径。
 	// (最新的记录可能是上一条 push 记录, 它自己不带产物。)
 	run, err := h.runs.FindLatestByChannelKind(channelID, model.HistoryRunKindApply)
-	if err != nil {
+	if err != nil && !isRepoNotFound(err) {
 		return nil, err
 	}
 	if run == nil {

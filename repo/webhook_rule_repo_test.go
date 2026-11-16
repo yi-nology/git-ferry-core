@@ -1,6 +1,7 @@
 package repo
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -144,10 +145,9 @@ func TestWebhookRuleRepo_Delete(t *testing.T) {
 
 	// Try to get the deleted rule
 	got, err := d.FindByID(rule.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
-
 	if got != nil {
 		t.Error("expected nil when getting deleted rule")
 	}
@@ -159,10 +159,9 @@ func TestWebhookRuleRepo_FindByID_NotFound(t *testing.T) {
 
 	// Try to get a non-existent rule
 	got, err := d.FindByID(999)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
-
 	if got != nil {
 		t.Error("expected nil when getting non-existent rule")
 	}

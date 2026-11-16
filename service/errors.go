@@ -4,6 +4,7 @@ import (
 	"github.com/oekit/pkg/errors"
 	"gorm.io/gorm"
 
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -75,6 +76,17 @@ const (
 	ErrorClassInternal    ErrorClass = "internal"
 )
 
+// mapNotFound 把 repo 的查无此条哨兵归一化为领域哨兵(对外文案/404 契约)。
+func mapNotFound(err error, sentinel error) error {
+	if errors.Is(err, repo.ErrNotFound) {
+		return sentinel
+	}
+	return err
+}
+
+// isRepoNotFound 供局部变量名与 repo 包名冲突的文件使用。
+func isRepoNotFound(err error) bool { return errors.Is(err, repo.ErrNotFound) }
+
 // Classify 归类错误；err 为 nil 返回空串。
 // 优先哨兵错误，其次 SDK provider 结构化错误，最后回落 internal。
 func Classify(err error) ErrorClass {
@@ -102,7 +114,7 @@ func Classify(err error) ErrorClass {
 		return ErrorClassValidation
 	case errors.Is(err, errLegalHold):
 		return ErrorClassConflict
-	case errors.Is(err, gorm.ErrRecordNotFound):
+	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, repo.ErrNotFound):
 		// Repo 的「查无此条」= 404,不是 500。
 		// 不分类的话,客户端拿到 500 会去重试一个根本不存在的东西。
 		return ErrorClassNotFound

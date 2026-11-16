@@ -41,11 +41,7 @@ func (d *HistoryChannelRepo) FindAll(page Pagination) ([]*model.HistoryChannel, 
 
 // FindByID 按 ID 取通道。
 func (d *HistoryChannelRepo) FindByID(id uint) (*model.HistoryChannel, error) {
-	var ch model.HistoryChannel
-	if err := d.db.First(&ch, id).Error; err != nil {
-		return nil, err
-	}
-	return &ch, nil
+	return d.getByID(id)
 }
 
 // Delete 软删通道。
@@ -85,11 +81,7 @@ func (d *HistoryTargetRepo) Delete(id uint) error {
 
 // FindByID 按 ID 取目标。
 func (d *HistoryTargetRepo) FindByID(id uint) (*model.HistoryTarget, error) {
-	var t model.HistoryTarget
-	if err := d.db.First(&t, id).Error; err != nil {
-		return nil, err
-	}
-	return &t, nil
+	return d.getByID(id)
 }
 
 // FindByChannel 列出通道的目标(按 ID 升序 = 推送优先级)。
@@ -159,11 +151,7 @@ func (d *HistoryRunRepo) Delete(id uint) error {
 
 // FindByID 按 ID 取执行记录。
 func (d *HistoryRunRepo) FindByID(id uint) (*model.HistoryRun, error) {
-	var run model.HistoryRun
-	if err := d.db.First(&run, id).Error; err != nil {
-		return nil, err
-	}
-	return &run, nil
+	return d.getByID(id)
 }
 
 // FindByChannel 分页列出通道的执行记录(新→旧)。
@@ -182,7 +170,7 @@ func (d *HistoryRunRepo) FindLatestByChannelKind(channelID uint, kind string) (*
 	if err := d.db.Where("channel_id = ? AND kind = ?", channelID, kind).
 		Order("id DESC").First(&run).Error; err != nil {
 		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		return nil, err
 	}
@@ -190,18 +178,6 @@ func (d *HistoryRunRepo) FindLatestByChannelKind(channelID uint, kind string) (*
 }
 
 // FindLatestByChannel 取通道最近一次执行记录。
-func (d *HistoryRunRepo) FindLatestByChannel(channelID uint) (*model.HistoryRun, error) {
-	var run model.HistoryRun
-	if err := d.db.Where("channel_id = ?", channelID).
-		Order("id DESC").First(&run).Error; err != nil {
-		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &run, nil
-}
-
 // FindLastHashedByChannel 取该通道最近一条**已入链**的执行记录。
 //
 // 执行中的记录字段还在变,哈希尚未计算 —— 续链时必须跳过它们,
@@ -211,7 +187,7 @@ func (d *HistoryRunRepo) FindLastHashedByChannel(channelID uint) (*model.History
 	if err := d.db.Where("channel_id = ? AND entry_hash <> ''", channelID).
 		Order("id DESC").First(&run).Error; err != nil {
 		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		return nil, err
 	}
@@ -267,17 +243,6 @@ func (d *HistoryOverrideRepo) FindByChannel(channelID uint) ([]*model.HistoryOve
 }
 
 // FindByPath 取通道对某路径的裁决。
-func (d *HistoryOverrideRepo) FindByPath(channelID uint, path string) (*model.HistoryOverride, error) {
-	var o model.HistoryOverride
-	if err := d.db.Where("channel_id = ? AND path = ?", channelID, path).First(&o).Error; err != nil {
-		if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &o, nil
-}
-
 // Delete 删除裁决。
 func (d *HistoryOverrideRepo) Delete(id uint) error {
 	return d.deleteByID(id)

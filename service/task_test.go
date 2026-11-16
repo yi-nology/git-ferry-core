@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -160,8 +161,8 @@ func TestGetTask_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	task, err := svc.GetTask(ctx, "non-existent-key")
-	if err != nil {
-		t.Fatalf("GetTask failed: %v", err)
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("expected ErrTaskNotFound, got %v", err)
 	}
 	if task != nil {
 		t.Error("expected nil task for non-existent key")
@@ -292,8 +293,8 @@ func TestDeleteTask(t *testing.T) {
 
 	// Verify task is deleted
 	task, err := svc.GetTask(ctx, created.Key)
-	if err != nil {
-		t.Fatalf("GetTask failed: %v", err)
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("expected ErrTaskNotFound, got %v", err)
 	}
 	if task != nil {
 		t.Error("expected task to be deleted")

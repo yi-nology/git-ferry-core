@@ -289,7 +289,7 @@ func TestSyncRunRepo_FindLastBackupSuccess(t *testing.T) {
 
 	// 无任何运行
 	got, err := d.FindLastBackupSuccess("t-rpo")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, got, "没有成功备份必须返回 nil,而不是零值记录")
 
 	// 12 条运行:仅第 2 条(id=2)备份成功 —— 落在「最近 10 条」窗口之外
@@ -316,6 +316,6 @@ func TestSyncRunRepo_FindLastBackupSuccess(t *testing.T) {
 
 	// 另一个任务完全隔离
 	got, err = d.FindLastBackupSuccess("t-other")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, got)
 }

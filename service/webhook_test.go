@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -251,8 +252,8 @@ func TestDeleteRule(t *testing.T) {
 
 	// Verify it's deleted
 	rule, err := svc.GetRule(context.TODO(), created.ID)
-	if err != nil {
-		t.Fatalf("GetRule failed: %v", err)
+	if !errors.Is(err, ErrRuleNotFound) {
+		t.Fatalf("expected ErrRuleNotFound, got %v", err)
 	}
 	if rule != nil {
 		t.Error("expected rule to be deleted")

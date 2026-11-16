@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -51,10 +52,7 @@ func (s *dbTemplateStore) ListByTag(tag string) []tpl.Template {
 func (s *dbTemplateStore) Get(id string) (*tpl.Template, error) {
 	t, err := s.repo.Get(id)
 	if err != nil {
-		return nil, err
-	}
-	if t == nil {
-		return nil, tpl.ErrNotFound
+		return nil, mapNotFound(err, tpl.ErrNotFound)
 	}
 	return t, nil
 }
@@ -67,7 +65,7 @@ func (s *dbTemplateStore) Upsert(t *tpl.Template) (*tpl.Template, error) {
 	}
 	now := time.Now()
 	existing, err := s.repo.Get(t.ID)
-	if err != nil {
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
 		return nil, err
 	}
 	if existing != nil {

@@ -51,7 +51,16 @@ func (rs *RepoService) ListReposWithFilter(ctx context.Context, offset, limit in
 
 // GetRepo returns a repository by key.
 func (rs *RepoService) GetRepo(ctx context.Context, key string) (*model.Repo, error) {
-	return rs.repoRepo.FindByKey(key)
+	return rs.findRepo(key)
+}
+
+// findRepo 查仓库并归一化查无此条。
+func (rs *RepoService) findRepo(key string) (*model.Repo, error) {
+	r, err := rs.repoRepo.FindByKey(key)
+	if err != nil {
+		return nil, mapNotFound(err, ErrRepoNotFound)
+	}
+	return r, nil
 }
 
 // CreateRepo creates a new repository.
@@ -128,12 +137,9 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 
 // UpdateRepo updates an existing repository.
 func (rs *RepoService) UpdateRepo(ctx context.Context, req *model.UpdateRepoRequest) (*model.Repo, error) {
-	repo, err := rs.repoRepo.FindByKey(req.Key)
+	repo, err := rs.findRepo(req.Key)
 	if err != nil {
 		return nil, err
-	}
-	if repo == nil {
-		return nil, ErrRepoNotFound
 	}
 
 	if req.Name != "" {
@@ -150,12 +156,9 @@ func (rs *RepoService) UpdateRepo(ctx context.Context, req *model.UpdateRepoRequ
 // DeleteRepo deletes a repository by key.
 func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 	// Get repo first to know the platform_id
-	repo, err := rs.repoRepo.FindByKey(key)
+	repo, err := rs.findRepo(key)
 	if err != nil {
 		return err
-	}
-	if repo == nil {
-		return ErrRepoNotFound
 	}
 
 	platformID := repo.PlatformID
@@ -177,12 +180,9 @@ func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 // GetRepoWithProvider 一次调用完成 repo 查找 + provider 解析,
 // 消除调用方重复的 "GetRepoByKey → nil check → resolveRepoProvider" 样板。
 func (rs *RepoService) GetRepoWithProvider(repoKey string) (*model.Repo, sdkprov.Provider, error) {
-	repo, err := rs.repoRepo.FindByKey(repoKey)
+	repo, err := rs.findRepo(repoKey)
 	if err != nil {
 		return nil, nil, err
-	}
-	if repo == nil {
-		return nil, nil, ErrRepoNotFound
 	}
 	prov, err := rs.resolveRepoProvider(repo)
 	if err != nil {
@@ -198,8 +198,12 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 	if repo.PlatformID > 0 && rs.platformRepo != nil {
 		var findErr error
 		platform, findErr = rs.platformRepo.FindByID(repo.PlatformID)
-		if findErr != nil {
+		if findErr != nil && !isRepoNotFound(findErr) {
 			return nil, oekiterrors.Wrap(findErr, fmt.Sprintf("find platform %d for repo %s", repo.PlatformID, repo.Key))
+		}
+		if isRepoNotFound(findErr) {
+			// 关联平台已删除:退化为按 CloneURL 探测(与原 nil 平台同路径)。
+			platform = nil
 		}
 	}
 	if platform != nil {
@@ -218,17 +222,14 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 
 // GetRepoByKey returns a repository by key.
 func (rs *RepoService) GetRepoByKey(key string) (*model.Repo, error) {
-	return rs.repoRepo.FindByKey(key)
+	return rs.findRepo(key)
 }
 
 // SetWebhookSecret 设置仓库的 Webhook 密钥(经 repo_dao 加密落库),供入站验签使用。
 func (rs *RepoService) SetWebhookSecret(repoKey, secret string) error {
-	repo, err := rs.repoRepo.FindByKey(repoKey)
+	repo, err := rs.findRepo(repoKey)
 	if err != nil {
 		return err
-	}
-	if repo == nil {
-		return ErrRepoNotFound
 	}
 	repo.WebhookSecret = secret
 	return rs.repoRepo.Update(repo)

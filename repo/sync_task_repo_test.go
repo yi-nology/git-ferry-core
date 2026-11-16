@@ -129,7 +129,7 @@ func TestSyncTaskRepo_Delete(t *testing.T) {
 
 	// Try to get the deleted task - should return nil (soft delete)
 	got, err := d.FindByKey("test-task")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting deleted task")
 }
@@ -140,7 +140,7 @@ func TestSyncTaskRepo_FindByKey_NotFound(t *testing.T) {
 
 	// Try to get a non-existent task
 	got, err := d.FindByKey("nonexistent")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent task")
 }

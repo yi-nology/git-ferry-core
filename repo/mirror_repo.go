@@ -36,11 +36,7 @@ func (d *MirrorChannelRepo) FindAll(page Pagination) ([]*model.MirrorChannel, in
 }
 
 func (d *MirrorChannelRepo) FindByID(id uint) (*model.MirrorChannel, error) {
-	var ch model.MirrorChannel
-	if err := d.db.First(&ch, id).Error; err != nil {
-		return nil, err
-	}
-	return &ch, nil
+	return d.getByID(id)
 }
 
 // Delete 软删通道及其目标。
@@ -66,11 +62,7 @@ func (d *MirrorChannelRepo) DeleteTarget(id uint) error {
 }
 
 func (d *MirrorChannelRepo) FindTargetByID(id uint) (*model.MirrorTarget, error) {
-	var t model.MirrorTarget
-	if err := d.db.First(&t, id).Error; err != nil {
-		return nil, err
-	}
-	return &t, nil
+	return d.targets.getByID(id)
 }
 
 func (d *MirrorChannelRepo) FindTargets(channelID uint) ([]*model.MirrorTarget, error) {
@@ -97,11 +89,7 @@ func (d *MirrorRunRepo) Update(run *model.MirrorRun) error {
 }
 
 func (d *MirrorRunRepo) FindByID(id uint) (*model.MirrorRun, error) {
-	var run model.MirrorRun
-	if err := d.db.First(&run, id).Error; err != nil {
-		return nil, err
-	}
-	return &run, nil
+	return d.getByID(id)
 }
 
 func (d *MirrorRunRepo) FindByChannel(channelID uint, page Pagination) ([]*model.MirrorRun, int64, error) {

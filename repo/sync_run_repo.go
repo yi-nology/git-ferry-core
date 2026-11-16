@@ -65,7 +65,7 @@ func (d *SyncRunRepo) FindLastBackupSuccess(taskKey string) (*model.SyncRun, err
 	err := d.db.Where("task_key = ? AND backup_status = ?", taskKey, model.BackupStatusSuccess).
 		Order("id DESC").First(&run).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err

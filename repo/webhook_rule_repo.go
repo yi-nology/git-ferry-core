@@ -1,8 +1,9 @@
 package repo
 
 import (
-	"errors"
+	"context"
 
+	"github.com/oekit/gormx/crud"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 )
@@ -21,13 +22,9 @@ func (d *WebhookRuleRepo) FindByRepoKey(repoKey string) ([]*model.WebhookRule, e
 	return rules, err
 }
 
+// FindByID 按主键取规则并预加载任务关联(gormrepo 查询构建器,不再手写 Preload)。
 func (d *WebhookRuleRepo) FindByID(id uint) (*model.WebhookRule, error) {
-	var rule model.WebhookRule
-	err := d.db.Preload("Tasks").First(&rule, id).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	return &rule, err
+	return d.g.GetOne(context.Background(), crud.NewQuery().Where("id", "=", id).Preload("Tasks"))
 }
 
 func (d *WebhookRuleRepo) Create(rule *model.WebhookRule) error {

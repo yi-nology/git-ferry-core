@@ -63,7 +63,7 @@ func (d *ForcePushApprovalRepo) FindPending(taskKey, branch string) (*model.Forc
 		Order("created_at ASC").First(a)
 	if q.Error != nil {
 		if errors.Is(q.Error, gorm.ErrRecordNotFound) {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		return nil, q.Error
 	}

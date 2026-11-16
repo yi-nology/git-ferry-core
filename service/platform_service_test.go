@@ -156,9 +156,9 @@ func TestPlatformService_Delete(t *testing.T) {
 	err = svc.DeletePlatform(ctx, "github")
 	require.NoError(t, err, "delete failed")
 
-	// Try to get the deleted platform - should return (nil, nil)
+	// Try to get the deleted platform
 	p, err := svc.GetPlatform(ctx, "github")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrPlatformNotFound)
 	assert.Nil(t, p, "expected nil platform for deleted key")
 }
 
@@ -232,9 +232,9 @@ func TestPlatformService_GetNotFound(t *testing.T) {
 	_, svc := setupPlatformServiceTestDB(t)
 	ctx := context.Background()
 
-	// Try to get a non-existent platform - should return (nil, nil)
+	// Try to get a non-existent platform
 	p, err := svc.GetPlatform(ctx, "nonexistent")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrPlatformNotFound)
 	assert.Nil(t, p, "expected nil platform for non-existent key")
 }
 
@@ -242,9 +242,9 @@ func TestPlatformService_GetByIDNotFound(t *testing.T) {
 	_, svc := setupPlatformServiceTestDB(t)
 	ctx := context.Background()
 
-	// Try to get a non-existent platform - should return (nil, nil)
+	// Try to get a non-existent platform
 	p, err := svc.GetPlatformByID(ctx, 999)
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrPlatformNotFound)
 	assert.Nil(t, p, "expected nil platform for non-existent ID")
 }
 

@@ -121,20 +121,6 @@ func (d *PlatformRepo) FindByType(platformType string) ([]*model.Platform, error
 	return platforms, nil
 }
 
-// FindDefault 查找默认平台(not found 返回 nil,nil)。
-func (d *PlatformRepo) FindDefault() (*model.Platform, error) {
-	var platform model.Platform
-	err := d.db.Where("is_default = ?", true).First(&platform).Error
-	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	d.decrypt(&platform)
-	return &platform, nil
-}
-
 // Update 更新平台(列白名单:不含主键/审计列,也不会 upsert)
 func (d *PlatformRepo) Update(platform *model.Platform) error {
 	if err := d.encrypt(platform); err != nil {

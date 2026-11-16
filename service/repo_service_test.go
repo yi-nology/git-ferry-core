@@ -66,7 +66,7 @@ func TestRepoService_GetNotFound(t *testing.T) {
 
 	// Try to get a non-existent repo
 	got, err := svc.GetRepoByKey("nonexistent")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrRepoNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent repo")
 }
@@ -131,7 +131,7 @@ func TestRepoService_Delete(t *testing.T) {
 
 	// Try to get the deleted repo
 	got, err := svc.GetRepoByKey("test-repo")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrRepoNotFound)
 
 	assert.Nil(t, got, "expected nil when getting deleted repo")
 }

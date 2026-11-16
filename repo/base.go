@@ -2,7 +2,6 @@ package repo
 
 import (
 	"context"
-	"errors"
 
 	"github.com/oekit/gormx/crud"
 	"github.com/oekit/gormx/gormrepo"
@@ -56,13 +55,9 @@ func writableColumns[T any](db *gorm.DB) []string {
 	return cols
 }
 
-// notFoundAsNil 把 gormrepo/crud 的 ErrNotFound 还原为本仓历史契约 (nil, nil)。
-func notFoundAsNil[T any](v *T, err error) (*T, error) {
-	if errors.Is(err, crud.ErrNotFound) {
-		return nil, nil
-	}
-	return v, err
-}
+// ErrNotFound 查无此条。与 gormrepo/crud 同一哨兵值,调用方统一用
+// errors.Is(err, repo.ErrNotFound) 判断(不再有 (nil, nil) 双形态)。
+var ErrNotFound = crud.ErrNotFound
 
 func (b *base[T, ID]) create(e *T) error {
 	return b.g.Create(context.Background(), e)
@@ -73,13 +68,11 @@ func (b *base[T, ID]) batchCreate(entities []*T, batchSize int) error {
 }
 
 func (b *base[T, ID]) getByID(id ID) (*T, error) {
-	v, err := b.g.GetByID(context.Background(), id)
-	return notFoundAsNil(v, err)
+	return b.g.GetByID(context.Background(), id)
 }
 
 func (b *base[T, ID]) getByCondition(query any, args ...any) (*T, error) {
-	v, err := b.g.GetByCondition(context.Background(), query, args...)
-	return notFoundAsNil(v, err)
+	return b.g.GetByCondition(context.Background(), query, args...)
 }
 
 func (b *base[T, ID]) update(e *T) error {

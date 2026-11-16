@@ -171,7 +171,7 @@ func TestInitDB_SQLite(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	db, err := InitDB("sqlite", dbPath)
+	db, err := InitDBWithPool("sqlite", dbPath, DBPoolOptions{})
 	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}
@@ -219,14 +219,14 @@ func TestInitDB_SQLite(t *testing.T) {
 }
 
 func TestInitDB_UnsupportedDriver(t *testing.T) {
-	_, err := InitDB("postgres", "test.db")
+	_, err := InitDBWithPool("postgres", "test.db", DBPoolOptions{})
 	if err == nil {
 		t.Fatal("Expected error for unsupported driver")
 	}
 }
 
 func TestInitDB_Memory(t *testing.T) {
-	db, err := InitDB("sqlite", ":memory:")
+	db, err := InitDBWithPool("sqlite", ":memory:", DBPoolOptions{})
 	if err != nil {
 		t.Fatalf("InitDB failed: %v", err)
 	}

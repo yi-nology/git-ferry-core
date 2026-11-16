@@ -155,27 +155,6 @@ func TestRepoRepo_CreateAndFindByKey(t *testing.T) {
 	assert.Equal(t, "active", got.Status, "expected status 'active'")
 }
 
-func TestRepoRepo_FindByCloneURL(t *testing.T) {
-	_, d := setupRepoTestDB(t)
-
-	// Create a repo
-	repo := &model.Repo{
-		Key:      "test-repo",
-		Name:     "Test Repo",
-		CloneURL: "https://github.com/testuser/test-repo.git",
-	}
-
-	err := d.Create(repo)
-	require.NoError(t, err, "create failed")
-
-	// Find by clone URL
-	got, err := d.FindByCloneURL("https://github.com/testuser/test-repo.git")
-	require.NoError(t, err, "find by clone URL failed")
-
-	assert.Equal(t, "test-repo", got.Key, "expected key 'test-repo'")
-	assert.Equal(t, "Test Repo", got.Name, "expected name 'Test Repo'")
-}
-
 func TestRepoRepo_FindAll(t *testing.T) {
 	_, d := setupRepoTestDB(t)
 
@@ -244,7 +223,7 @@ func TestRepoRepo_Delete(t *testing.T) {
 
 	// Try to get the deleted repo
 	got, err := d.FindByKey("test-repo")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting deleted repo")
 }
@@ -254,17 +233,7 @@ func TestRepoRepo_FindByKey_NotFound(t *testing.T) {
 
 	// Try to get a non-existent repo
 	got, err := d.FindByKey("nonexistent")
-	require.NoError(t, err, "unexpected error")
-
-	assert.Nil(t, got, "expected nil when getting non-existent repo")
-}
-
-func TestRepoRepo_FindByCloneURL_NotFound(t *testing.T) {
-	_, d := setupRepoTestDB(t)
-
-	// Try to get a non-existent repo
-	got, err := d.FindByCloneURL("https://github.com/nonexistent/repo.git")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent repo")
 }

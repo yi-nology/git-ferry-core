@@ -34,7 +34,7 @@
   （壳层随 core 升版同步）。
 - **14 个 Repo 嵌入 gormrepo 基座**：通用按主键建/读/改/删走
   `gormrepo.GormRepository[T, ID]`；按业务键取单条走
-  `GetByCondition`（not-found 仍还原为 `(nil, nil)` 历史契约）。
+  `GetByCondition`（查无此条统一 `repo.ErrNotFound`）。
 - **18 处 `db.Save` 全部替换**（`grep '\.Save('` 已清零）：
   - 配置实体 Update 走**列白名单**：不写回 `id/created_at/updated_at/
     deleted_at`，且 0 行命中即结束（不再触发 Save 的 upsert 旁路）；
@@ -50,6 +50,23 @@
     复合主键 upsert）按设计不收编泛型层。
 - 回归测试：`repo/save_protection_test.go`（不 upsert / `created_at`
   不被覆写 / 放行只消费一次 / 撤销不覆盖消费状态）。
+
+### Changed（删除兼容层——统一 ErrNotFound + 清理死代码）
+
+- **repo 查无此条统一返回 `repo.ErrNotFound`**：删除 `notFoundAsNil` 的
+  `(nil, nil)` 兼容映射；`service.Classify` 把该哨兵归入 404。服务层
+  公开 Get/Find 归一化为领域哨兵（`ErrTaskNotFound` / `ErrRepoNotFound` /
+  `ErrPlatformNotFound` / `ErrRuleNotFound` / `ErrEventNotFound` /
+  `tpl.ErrNotFound`）。**破坏性变更**：调用方不得再用 `obj == nil`
+  判断缺失，统一 `errors.Is(err, repo.ErrNotFound)`。
+- 删除 `model.InitDB` 旧入口（统一 `InitDBWithPool`，连接池在 Open 时下发）。
+- 删除 repo 层已无调用方的冗余查询及其测试：`FindByCloneURL` /
+  `FindByPlatformAndRepo` / `FindDefault` / `FindByPath` /
+  `FindLatestByChannel`。
+- `WebhookRuleRepo.FindByID` 改用 gormrepo `GetOne + Preload` 查询构建器。
+- 保留的**数据格式**兼容（需要数据迁移而非删代码，不属本轮）：
+  平台/仓库密文解密失败按存量明文读取、`executor/crypt.go` 旧密文格式、
+  schema baseline 存量收敛。
 
 ## [v0.50.0] - 2026-11-17
 

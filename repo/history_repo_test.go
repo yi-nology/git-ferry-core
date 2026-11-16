@@ -45,8 +45,8 @@ func TestHistoryChannelRepo(t *testing.T) {
 	require.Equal(t, ch.ID, byName.ID)
 
 	missing, err := d.FindByName("不存在")
-	require.NoError(t, err)
-	require.Nil(t, missing, "不存在的名称应返回 nil 而不是错误")
+	require.ErrorIs(t, err, ErrNotFound)
+	require.Nil(t, missing, "不存在的名称返回 ErrNotFound + nil 记录")
 
 	channels, total, err := d.FindAll(Pagination{Offset: 0, Limit: 50})
 	require.NoError(t, err)

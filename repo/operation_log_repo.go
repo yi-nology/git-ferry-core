@@ -35,7 +35,7 @@ func (d *OperationLogRepo) Latest() (*model.OperationLog, error) {
 	err := d.db.Order("id DESC").First(&log).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		return nil, err
 	}

@@ -55,10 +55,6 @@ type DBPoolOptions struct {
 	ConnMaxIdleTime time.Duration
 }
 
-func InitDB(driver, dsn string) (*gorm.DB, error) {
-	return InitDBWithPool(driver, dsn, DBPoolOptions{})
-}
-
 // InitDBWithPool 用 oekit/gormx 打开数据库:连接池配置由 gormx.Open 统一
 // 接管(WithConnectionPool 逐项 set,未设置的项不下发零值;见上游 #229)。
 func InitDBWithPool(driver, dsn string, pool DBPoolOptions) (*gorm.DB, error) {

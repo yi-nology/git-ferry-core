@@ -131,34 +131,6 @@ func (d *RepoRepo) Delete(key string) error {
 	return d.db.Where("`key` = ?", key).Delete(&model.Repo{}).Error
 }
 
-// FindByCloneURL 根据 Clone URL 查找仓库
-func (d *RepoRepo) FindByCloneURL(cloneURL string) (*model.Repo, error) {
-	var repo model.Repo
-	err := d.db.Where("clone_url = ?", cloneURL).First(&repo).Error
-	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &repo, nil
-}
-
-// FindByPlatformAndRepo 根据 platform_id + platform_repo 精确查找仓库。
-// 比 FindByCloneURL 更可靠:私有部署实例地址重写后 CloneURL 会变,
-// 但 (platform_id, platform_repo) 是稳定的业务主键。
-func (d *RepoRepo) FindByPlatformAndRepo(platformID uint, platformRepo string) (*model.Repo, error) {
-	var repo model.Repo
-	err := d.db.Where("platform_id = ? AND platform_repo = ?", platformID, platformRepo).First(&repo).Error
-	if oekiterrors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &repo, nil
-}
-
 // FindByPlatformID 根据平台 ID 查找仓库
 func (d *RepoRepo) FindByPlatformID(platformID uint) ([]*model.Repo, error) {
 	var repos []*model.Repo

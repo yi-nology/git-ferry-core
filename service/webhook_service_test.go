@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -181,8 +182,8 @@ func TestWebhookService_DeleteRule(t *testing.T) {
 
 	// Try to get the deleted rule
 	got, err := svc.GetRule(ctx, rule.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrRuleNotFound) {
+		t.Fatalf("expected ErrRuleNotFound, got %v", err)
 	}
 
 	if got != nil {
@@ -196,8 +197,8 @@ func TestWebhookService_GetRule_NotFound(t *testing.T) {
 
 	// Try to get a non-existent rule
 	got, err := svc.GetRule(ctx, 999)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrRuleNotFound) {
+		t.Fatalf("expected ErrRuleNotFound, got %v", err)
 	}
 
 	if got != nil {

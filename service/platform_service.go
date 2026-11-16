@@ -39,12 +39,32 @@ func (s *PlatformService) CreatePlatform(ctx context.Context, platform *model.Pl
 
 // GetPlatform 获取平台
 func (s *PlatformService) GetPlatform(ctx context.Context, key string) (*model.Platform, error) {
-	return s.platformRepo.FindByKey(key)
+	p, err := s.platformRepo.FindByKey(key)
+	if err != nil {
+		return nil, mapNotFound(err, ErrPlatformNotFound)
+	}
+	return p, nil
 }
 
 // GetPlatformByID 根据 ID 获取平台
 func (s *PlatformService) GetPlatformByID(ctx context.Context, id uint) (*model.Platform, error) {
-	return s.platformRepo.FindByID(id)
+	p, err := s.platformRepo.FindByID(id)
+	if err != nil {
+		return nil, mapNotFound(err, ErrPlatformNotFound)
+	}
+	return p, nil
+}
+
+// findPlatform 查平台并保持「platform not found: <key>」的对外文案。
+func (s *PlatformService) findPlatform(key string) (*model.Platform, error) {
+	p, err := s.platformRepo.FindByKey(key)
+	if err != nil {
+		if oekiterrors.Is(err, repo.ErrNotFound) {
+			return nil, oekiterrors.New(fmt.Sprintf("platform not found: %s", key))
+		}
+		return nil, err
+	}
+	return p, nil
 }
 
 // ListPlatforms 列出所有平台
@@ -74,12 +94,9 @@ func (s *PlatformService) UpdatePlatformStatus(ctx context.Context, key, status,
 
 // TestPlatformConnection 测试平台连接
 func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string) (*sdkmodel.TestConnectionResult, error) {
-	platform, err := s.platformRepo.FindByKey(key)
+	platform, err := s.findPlatform(key)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query platform failed")
-	}
-	if platform == nil {
-		return nil, oekiterrors.New(fmt.Sprintf("platform not found: %s", key))
 	}
 
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
@@ -98,12 +115,9 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 
 // ListPlatformRepos 列出平台上的仓库
 func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkmodel.PlatformRepo, error) {
-	platform, err := s.platformRepo.FindByKey(key)
+	platform, err := s.findPlatform(key)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query platform failed")
-	}
-	if platform == nil {
-		return nil, oekiterrors.New(fmt.Sprintf("platform not found: %s", key))
 	}
 
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
@@ -129,12 +143,9 @@ func (s *PlatformService) SyncPlatformRepos(ctx context.Context, key string) (in
 
 // SyncPlatformReposFiltered 按过滤器同步平台仓库(排除 archived/fork 等)。
 func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key string, filter *RepoImportFilter) (int, error) {
-	platform, err := s.platformRepo.FindByKey(key)
+	platform, err := s.findPlatform(key)
 	if err != nil {
 		return 0, oekiterrors.Wrap(err, "query platform failed")
-	}
-	if platform == nil {
-		return 0, oekiterrors.New(fmt.Sprintf("platform not found: %s", key))
 	}
 	provider, err := platformProvider(s.providerMgr, platform, s.hooks)
 	if err != nil {
@@ -200,24 +211,18 @@ func rewriteCloneHost(rawURL string, platform *model.Platform) string {
 
 // ListReposByPlatform 列出平台下的仓库
 func (s *PlatformService) ListReposByPlatform(ctx context.Context, platformKey string) ([]*model.Repo, error) {
-	platform, err := s.platformRepo.FindByKey(platformKey)
+	platform, err := s.findPlatform(platformKey)
 	if err != nil {
 		return nil, err
-	}
-	if platform == nil {
-		return nil, oekiterrors.New(fmt.Sprintf("platform not found: %s", platformKey))
 	}
 	return s.repoRepo.FindByPlatformID(platform.ID)
 }
 
 // CountReposByPlatform 统计平台下的仓库数量(不加载数据)
 func (s *PlatformService) CountReposByPlatform(ctx context.Context, platformKey string) (int64, error) {
-	platform, err := s.platformRepo.FindByKey(platformKey)
+	platform, err := s.findPlatform(platformKey)
 	if err != nil {
 		return 0, err
-	}
-	if platform == nil {
-		return 0, oekiterrors.New(fmt.Sprintf("platform not found: %s", platformKey))
 	}
 	return s.repoRepo.CountByPlatformID(platform.ID)
 }

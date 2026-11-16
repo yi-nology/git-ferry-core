@@ -151,7 +151,7 @@ func TestPlatformRepo_Delete(t *testing.T) {
 
 	// Try to get the deleted platform - should return (nil, nil)
 	p, err := d.FindByKey("github")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, p, "expected nil platform for deleted key")
 }
 
@@ -160,7 +160,7 @@ func TestPlatformRepo_FindByKey_NotFound(t *testing.T) {
 
 	// Try to get a non-existent platform - should return (nil, nil)
 	p, err := d.FindByKey("nonexistent")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, p, "expected nil platform for non-existent key")
 }
 
@@ -169,7 +169,7 @@ func TestPlatformRepo_FindByID_NotFound(t *testing.T) {
 
 	// Try to get a non-existent platform - should return (nil, nil)
 	p, err := d.FindByID(999)
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, p, "expected nil platform for non-existent ID")
 }
 
@@ -261,40 +261,6 @@ func TestPlatformRepo_Count(t *testing.T) {
 	require.NoError(t, err, "count failed")
 
 	assert.Equal(t, int64(2), count, "expected count 2")
-}
-
-func TestPlatformRepo_FindDefault(t *testing.T) {
-	_, d := setupPlatformTestDB(t)
-
-	// Create platforms
-	platform1 := &model.Platform{
-		Key:       "github",
-		Name:      "GitHub",
-		Type:      "github",
-		IsDefault: false,
-		Status:    "active",
-	}
-
-	platform2 := &model.Platform{
-		Key:       "gitlab",
-		Name:      "GitLab",
-		Type:      "gitlab",
-		IsDefault: true,
-		Status:    "active",
-	}
-
-	err := d.Create(platform1)
-	require.NoError(t, err, "create platform1 failed")
-
-	err = d.Create(platform2)
-	require.NoError(t, err, "create platform2 failed")
-
-	// Find default
-	got, err := d.FindDefault()
-	require.NoError(t, err, "find default failed")
-
-	assert.Equal(t, "gitlab", got.Key, "expected key 'gitlab'")
-	assert.True(t, got.IsDefault, "expected platform to be default")
 }
 
 func TestPlatformRepo_FindByType(t *testing.T) {

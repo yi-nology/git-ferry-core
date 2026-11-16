@@ -106,10 +106,10 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 	defer st.mu.Unlock()
 	a, gerr := st.repo.Get(id)
 	if gerr != nil {
+		if isRepoNotFound(gerr) {
+			return false, nil
+		}
 		return false, gerr
-	}
-	if a == nil {
-		return false, nil
 	}
 	now := time.Now().UTC()
 	a.Approved = true

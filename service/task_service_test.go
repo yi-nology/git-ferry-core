@@ -87,7 +87,7 @@ func TestTaskService_GetTask_NotFound(t *testing.T) {
 
 	// Try to get a non-existent task
 	got, err := svc.GetTask(ctx, "nonexistent")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrTaskNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent task")
 }
@@ -339,7 +339,7 @@ func TestTaskService_FindTaskByKey_NotFound(t *testing.T) {
 
 	// Try to get a non-existent task
 	got, err := svc.FindTaskByKey("nonexistent")
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrTaskNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent task")
 }

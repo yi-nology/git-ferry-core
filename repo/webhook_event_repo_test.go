@@ -142,7 +142,7 @@ func TestWebhookEventRepo_FindByID_NotFound(t *testing.T) {
 
 	// Try to get a non-existent event
 	got, err := d.FindByID(999)
-	require.NoError(t, err, "unexpected error")
+	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent event")
 }

@@ -80,7 +80,16 @@ func (ts *TaskService) CountTasksByStatus() (map[string]int64, error) {
 
 // GetTask returns a sync task by key.
 func (ts *TaskService) GetTask(ctx context.Context, key string) (*model.SyncTask, error) {
-	return ts.taskRepo.FindByKey(key)
+	return ts.findTask(key)
+}
+
+// findTask 查任务并归一化查无此条。
+func (ts *TaskService) findTask(key string) (*model.SyncTask, error) {
+	t, err := ts.taskRepo.FindByKey(key)
+	if err != nil {
+		return nil, mapNotFound(err, ErrTaskNotFound)
+	}
+	return t, nil
 }
 
 // CreateTask creates a new sync task.
@@ -130,12 +139,9 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 
 // UpdateTask updates an existing sync task.
 func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) (*model.SyncTask, error) {
-	task, err := ts.taskRepo.FindByKey(req.Key)
+	task, err := ts.findTask(req.Key)
 	if err != nil {
 		return nil, err
-	}
-	if task == nil {
-		return nil, ErrTaskNotFound
 	}
 
 	if req.Name != "" {
@@ -210,11 +216,11 @@ func (ts *TaskService) DeleteTask(ctx context.Context, key string) error {
 // PreviewSync previews a sync operation.
 func (ts *TaskService) PreviewSync(ctx context.Context, req *model.PreviewSyncRequest) (*model.PreviewSyncResult, error) {
 	sourceRepo, err := ts.repoRepo.FindByKey(req.SourceRepoKey)
-	if err != nil {
+	if err != nil && !isRepoNotFound(err) {
 		return nil, err
 	}
 	targetRepo, err := ts.repoRepo.FindByKey(req.TargetRepoKey)
-	if err != nil {
+	if err != nil && !isRepoNotFound(err) {
 		return nil, err
 	}
 
@@ -262,7 +268,7 @@ func (ts *TaskService) FindAllEnabledTasks() ([]*model.SyncTask, error) {
 
 // FindTaskByKey returns a sync task by key (internal use).
 func (ts *TaskService) FindTaskByKey(key string) (*model.SyncTask, error) {
-	return ts.taskRepo.FindByKey(key)
+	return ts.findTask(key)
 }
 
 // CleanupOldRuns removes sync runs older than the specified duration.
