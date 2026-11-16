@@ -11,7 +11,7 @@ import (
 	// 注册全部平台后端,使 NewProvider 在测试二进制中可用
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	_ "github.com/yi-nology/go-git-platform/adapter/all"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -30,13 +30,13 @@ func setupRegisterTestService(t *testing.T, platformAPIURL string) (*Service, *g
 		t.Fatalf("migrate: %v", err)
 	}
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
-		t.Fatalf("NewRepoRepo: %v", err)
+		t.Fatalf("NewRepoRepository: %v", err)
 	}
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	if err != nil {
-		t.Fatalf("NewPlatformRepo: %v", err)
+		t.Fatalf("NewPlatformRepository: %v", err)
 	}
 
 	// 平台记录指向 fake gitea 服务器
@@ -50,7 +50,7 @@ func setupRegisterTestService(t *testing.T, platformAPIURL string) (*Service, *g
 		t.Fatalf("create platform: %v", err)
 	}
 
-	if err := repoRepo.Create(&model.Repo{
+	if err := repoRepository.Create(&model.Repo{
 		Key:           "demo-repo",
 		Name:          "demo",
 		PlatformID:    platform.ID,
@@ -64,7 +64,7 @@ func setupRegisterTestService(t *testing.T, platformAPIURL string) (*Service, *g
 	}
 
 	svc := &Service{
-		repos: NewRepoService(repoRepo, platformRepo, sdkrt.NewManager(0)),
+		repos: NewRepoService(repoRepository, platformRepository, sdkrt.NewManager(0)),
 	}
 	return svc, db
 }

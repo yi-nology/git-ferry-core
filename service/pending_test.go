@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // newPendingTestService 造一个只够测"触发被拒/待补跑记账"的服务(不碰 executor)。
@@ -27,21 +27,21 @@ func newPendingTestService(t *testing.T, key string) (*Service, func()) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	taskRepo := repo.NewSyncTaskRepo(db)
-	runRepo := repo.NewSyncRunRepo(db)
-	runStepRepo := repo.NewSyncRunStepRepo(db)
-	repoRepo, err := repo.NewRepoRepo(db)
+	taskRepository := repository.NewSyncTaskRepository(db)
+	runRepository := repository.NewSyncRunRepository(db)
+	runStepRepository := repository.NewSyncRunStepRepository(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
 
 	svc := &Service{
-		tasks:   NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo),
+		tasks:   NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository),
 		guard:   newLocalGuard(2),
-		pending: repo.NewPendingTriggerRepo(db),
-		jobs:    repo.NewExecutionJobRepo(db),
+		pending: repository.NewPendingTriggerRepository(db),
+		jobs:    repository.NewExecutionJobRepository(db),
 		bgCtx:   context.Background(),
 		config:  &model.Config{},
 	}
-	require.NoError(t, taskRepo.Create(&model.SyncTask{
+	require.NoError(t, taskRepository.Create(&model.SyncTask{
 		Key: key, Name: "pending", Enabled: true, SourceBranch: "main", TargetBranch: "main",
 	}))
 

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"github.com/yi-nology/git-ferry-core/tpl"
 )
 
@@ -24,7 +24,7 @@ type TemplateStore interface {
 
 // dbTemplateStore 表 backing 的模板库（表 templates）。
 type dbTemplateStore struct {
-	repo *repo.TemplateRepo
+	repo *repository.TemplateRepository
 }
 
 func (s *dbTemplateStore) List() []tpl.Template {
@@ -65,7 +65,7 @@ func (s *dbTemplateStore) Upsert(t *tpl.Template) (*tpl.Template, error) {
 	}
 	now := time.Now()
 	existing, err := s.repo.Get(t.ID)
-	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
 	}
 	if existing != nil {

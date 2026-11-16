@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // newOutboxTestService 造带 outbox 的轻量服务(不跑 executor)。
@@ -26,15 +26,15 @@ func newOutboxTestService(t *testing.T) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
 	taskSvc := NewTaskService(
-		repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo)
-	taskSvc.outbox = repo.NewOutboxEventRepo(db)
+		repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository)
+	taskSvc.outbox = repository.NewOutboxEventRepository(db)
 
 	return &Service{
 		tasks:  taskSvc,
-		outbox: repo.NewOutboxEventRepo(db),
+		outbox: repository.NewOutboxEventRepository(db),
 		bgCtx:  context.Background(),
 		config: &model.Config{},
 	}
@@ -47,12 +47,12 @@ func TestOutbox_CompletionWritesEventInTx(t *testing.T) {
 
 	task := &model.SyncTask{Key: "ob-tx", Name: "ob", Enabled: true,
 		SourceBranch: "main", TargetBranch: "main"}
-	require.NoError(t, svc.tasks.taskRepo.Create(task))
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
 	end := time.Now()
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
 		Status: model.StatusFailed, StartTime: end.Add(-time.Second), EndTime: &end,
 		ErrorMessage: "boom"}
-	require.NoError(t, svc.tasks.runRepo.Create(run))
+	require.NoError(t, svc.tasks.runRepository.Create(run))
 
 	require.NoError(t, svc.tasks.CompleteRunWithTaskUpdate(run, task))
 
@@ -70,7 +70,7 @@ func TestOutbox_CompletionWritesEventInTx(t *testing.T) {
 	// CompleteRun(不带 task 更新)路径同样写事件
 	run2 := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerManual,
 		Status: model.StatusSuccess, StartTime: time.Now(), EndTime: &end}
-	require.NoError(t, svc.tasks.runRepo.Create(run2))
+	require.NoError(t, svc.tasks.runRepository.Create(run2))
 	require.NoError(t, svc.tasks.CompleteRun(run2))
 	n, err := svc.outbox.CountUnpublished()
 	require.NoError(t, err)
@@ -85,14 +85,14 @@ func TestOutbox_CrashRecoveryRedelivers(t *testing.T) {
 
 	task := &model.SyncTask{Key: "ob-crash", Name: "ob", Enabled: true,
 		SourceBranch: "main", TargetBranch: "main"}
-	require.NoError(t, svc.tasks.taskRepo.Create(task))
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
 	end := time.Now().Add(-time.Minute)
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
 		Status: model.StatusFailed, StartTime: end.Add(-time.Second), EndTime: &end}
-	require.NoError(t, svc.tasks.runRepo.Create(run))
+	require.NoError(t, svc.tasks.runRepository.Create(run))
 
 	// 模拟崩溃残留:未发布、已过宽限期的事件
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Trigger: model.TriggerCron, Status: model.StatusFailed,
 		CreatedAt: time.Now().Add(-2 * time.Minute),
@@ -135,13 +135,13 @@ func TestOutbox_NoSubscriberNotMarkedPublished(t *testing.T) {
 
 	task := &model.SyncTask{Key: "ob-nosub", Name: "ob", Enabled: true,
 		SourceBranch: "main", TargetBranch: "main"}
-	require.NoError(t, svc.tasks.taskRepo.Create(task))
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
 	end := time.Now().Add(-time.Minute)
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
 		Status: model.StatusFailed, StartTime: end.Add(-time.Second), EndTime: &end}
-	require.NoError(t, svc.tasks.runRepo.Create(run))
+	require.NoError(t, svc.tasks.runRepository.Create(run))
 	// 模拟崩溃残留:未发布、已过宽限期的事件
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Trigger: model.TriggerCron, Status: model.StatusFailed,
 		CreatedAt: time.Now().Add(-2 * time.Minute),
@@ -179,11 +179,11 @@ func TestOutbox_FastPathNoSubscriberKeepsEvent(t *testing.T) {
 
 	task := &model.SyncTask{Key: "ob-fastnosub", Name: "ob", Enabled: true,
 		SourceBranch: "main", TargetBranch: "main"}
-	require.NoError(t, svc.tasks.taskRepo.Create(task))
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
 	end := time.Now()
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
 		Status: model.StatusSuccess, StartTime: end, EndTime: &end}
-	require.NoError(t, svc.tasks.runRepo.Create(run))
+	require.NoError(t, svc.tasks.runRepository.Create(run))
 	require.NoError(t, svc.tasks.CompleteRun(run)) // 同事务写 outbox 事件
 
 	// 此刻无订阅者:finishRun 语义下不得闭环
@@ -214,11 +214,11 @@ func TestOutbox_GraceSkipsFreshEvents(t *testing.T) {
 
 	task := &model.SyncTask{Key: "ob-grace", Name: "ob", Enabled: true,
 		SourceBranch: "main", TargetBranch: "main"}
-	require.NoError(t, svc.tasks.taskRepo.Create(task))
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
 		Status: model.StatusFailed, StartTime: time.Now()}
-	require.NoError(t, svc.tasks.runRepo.Create(run))
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.tasks.runRepository.Create(run))
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Status: model.StatusFailed, CreatedAt: time.Now(), // 刚落库
 	}))
@@ -242,12 +242,12 @@ func TestOutbox_FastPathClosesEvent(t *testing.T) {
 
 	task := &model.SyncTask{Key: "ob-fast", Name: "ob", Enabled: true,
 		SourceBranch: "main", TargetBranch: "main"}
-	require.NoError(t, svc.tasks.taskRepo.Create(task))
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
 	end := time.Now().Add(-time.Minute)
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerWebhook,
 		Status: model.StatusSuccess, StartTime: end, EndTime: &end}
-	require.NoError(t, svc.tasks.runRepo.Create(run))
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.tasks.runRepository.Create(run))
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Status: model.StatusSuccess, CreatedAt: time.Now().Add(-2 * time.Minute),
 	}))
@@ -264,7 +264,7 @@ func TestOutbox_FastPathClosesEvent(t *testing.T) {
 func TestOutbox_RunCleanedSkipDelivery(t *testing.T) {
 	svc := newOutboxTestService(t)
 
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: "gone", RunID: 999,
 		Status: model.StatusSuccess, CreatedAt: time.Now().Add(-time.Hour),
 	}))
@@ -290,7 +290,7 @@ func TestOutbox_DriftTopicRouting(t *testing.T) {
 	svc := newOutboxTestService(t)
 
 	// 落一条 drift 事件(与 recordReconcile 同形态)
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: "t-drift",
 		Status:  model.ReconcileDrift,
@@ -322,7 +322,7 @@ func TestOutbox_DriftTopicRouting(t *testing.T) {
 // (留待壳层注册订阅后重投——与 run 事件同语义)。
 func TestOutbox_DriftNoSubscriberNotMarked(t *testing.T) {
 	svc := newOutboxTestService(t)
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: "t-x",
 		Status:  model.ReconcileDrift,
@@ -339,7 +339,7 @@ func TestOutbox_DriftNoSubscriberNotMarked(t *testing.T) {
 // TestOutbox_DriftBadPayloadCloses 坏 payload 跳过并闭环(不无限重试)。
 func TestOutbox_DriftBadPayloadCloses(t *testing.T) {
 	svc := newOutboxTestService(t)
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepo.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: "t-bad",
 		Payload: `{not json`,

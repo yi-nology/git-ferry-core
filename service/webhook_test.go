@@ -8,7 +8,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 )
 
@@ -34,10 +34,10 @@ func setupWebhookTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 
 	db := setupWebhookTestDB(t)
-	ruleRepo := repo.NewWebhookRuleRepo(db)
-	eventRepo := repo.NewWebhookEventRepo(db)
+	ruleRepository := repository.NewWebhookRuleRepository(db)
+	eventRepository := repository.NewWebhookEventRepository(db)
 
-	webhookService := NewWebhookService(ruleRepo, eventRepo, nil)
+	webhookService := NewWebhookService(ruleRepository, eventRepository, nil)
 
 	svc := &Service{
 		webhooks: webhookService,

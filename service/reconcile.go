@@ -146,7 +146,7 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 	if s.reconciles == nil {
 		return
 	}
-	tasks, err := s.tasks.taskRepo.FindAllEnabled()
+	tasks, err := s.tasks.taskRepository.FindAllEnabled()
 	if err != nil {
 		slog.Error("reconcile: 列出启用任务失败", "error", err)
 		return
@@ -213,7 +213,7 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 		"checked_at":   res.CheckedAt,
 	})
 	// 漂移事件直接落 outbox(独立事实,无需事务);投递沿用既有派发器。
-	return s.outbox.CreateInTx(s.tasks.runRepo.DB(), &model.OutboxEvent{
+	return s.outbox.CreateInTx(s.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: res.TaskKey,
 		Status:  res.Status,

@@ -6,28 +6,28 @@ import (
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
-// appRepos 一次装配的全部 Repo(减少 NewService 样板,便于测试注入)。
-type appRepos struct {
-	repo      *repo.RepoRepo
-	task      *repo.SyncTaskRepo
-	run       *repo.SyncRunRepo
-	runStep   *repo.SyncRunStepRepo
-	rule      *repo.WebhookRuleRepo
-	event     *repo.WebhookEventRepo
-	platform  *repo.PlatformRepo
-	opLog     *repo.OperationLogRepo
-	template  *repo.TemplateRepo
-	approv    *repo.ForcePushApprovalRepo
-	pending   *repo.PendingTriggerRepo
-	outbox    *repo.OutboxEventRepo
-	jobs      *repo.ExecutionJobRepo
-	reconcile *repo.ReconcileRepo
-	recovery  *repo.RecoveryPointRepo
+// appRepositories 一次装配的全部 Repository(减少 NewService 样板,便于测试注入)。
+type appRepositories struct {
+	repo      *repository.RepoRepository
+	task      *repository.SyncTaskRepository
+	run       *repository.SyncRunRepository
+	runStep   *repository.SyncRunStepRepository
+	rule      *repository.WebhookRuleRepository
+	event     *repository.WebhookEventRepository
+	platform  *repository.PlatformRepository
+	opLog     *repository.OperationLogRepository
+	template  *repository.TemplateRepository
+	approv    *repository.ForcePushApprovalRepository
+	pending   *repository.PendingTriggerRepository
+	outbox    *repository.OutboxEventRepository
+	jobs      *repository.ExecutionJobRepository
+	reconcile *repository.ReconcileRepository
+	recovery  *repository.RecoveryPointRepository
 	provider  *sdkrt.Manager
 }
 
@@ -46,32 +46,32 @@ func initDB(cfg *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-// initRepos 装配 Repo 与平台 Provider 缓存。
-func initRepos(db *gorm.DB) (*appRepos, error) {
-	repoRepo, err := repo.NewRepoRepo(db)
+// initRepositories 装配 Repository 与平台 Provider 缓存。
+func initRepositories(db *gorm.DB) (*appRepositories, error) {
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "init repo Repo failed")
 	}
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "failed to create PlatformRepo")
 	}
-	return &appRepos{
-		repo:      repoRepo,
-		task:      repo.NewSyncTaskRepo(db),
-		run:       repo.NewSyncRunRepo(db),
-		runStep:   repo.NewSyncRunStepRepo(db),
-		rule:      repo.NewWebhookRuleRepo(db),
-		event:     repo.NewWebhookEventRepo(db),
-		platform:  platformRepo,
-		opLog:     repo.NewOperationLogRepo(db),
-		template:  repo.NewTemplateRepo(db),
-		approv:    repo.NewForcePushApprovalRepo(db),
-		pending:   repo.NewPendingTriggerRepo(db),
-		outbox:    repo.NewOutboxEventRepo(db),
-		jobs:      repo.NewExecutionJobRepo(db),
-		reconcile: repo.NewReconcileRepo(db),
-		recovery:  repo.NewRecoveryPointRepo(db),
+	return &appRepositories{
+		repo:      repoRepository,
+		task:      repository.NewSyncTaskRepository(db),
+		run:       repository.NewSyncRunRepository(db),
+		runStep:   repository.NewSyncRunStepRepository(db),
+		rule:      repository.NewWebhookRuleRepository(db),
+		event:     repository.NewWebhookEventRepository(db),
+		platform:  platformRepository,
+		opLog:     repository.NewOperationLogRepository(db),
+		template:  repository.NewTemplateRepository(db),
+		approv:    repository.NewForcePushApprovalRepository(db),
+		pending:   repository.NewPendingTriggerRepository(db),
+		outbox:    repository.NewOutboxEventRepository(db),
+		jobs:      repository.NewExecutionJobRepository(db),
+		reconcile: repository.NewReconcileRepository(db),
+		recovery:  repository.NewRecoveryPointRepository(db),
 		provider:  sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(64)),
 	}, nil
 }

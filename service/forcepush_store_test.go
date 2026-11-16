@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // newApprovalDB 建一个带审批表的内存库。
@@ -26,7 +26,7 @@ func newApprovalDB(t *testing.T) *gorm.DB {
 
 // TestForcePushStore_RoundTrip 请求 → 未放行 → 放行 → 已放行。
 func TestForcePushStore_RoundTrip(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	assert.Empty(t, st.List())
 	assert.False(t, st.IsForcePushApproved("t1", "main", ""))
@@ -57,7 +57,7 @@ func TestForcePushStore_RoundTrip(t *testing.T) {
 
 // TestForcePushStore_ApproverInterface 审批存储即执行器默认 approver（幂等 pending）。
 func TestForcePushStore_ApproverInterface(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 	var approver interface {
 		IsForcePushApproved(taskKey, branch, targetRef string) bool
 		RequestApproval(taskKey, branch, reason, targetRef string)
@@ -105,7 +105,7 @@ func TestForcePushStore_JSONContract(t *testing.T) {
 // 但实现只查 approved 标志 ⇒ 一次人工放行变成该任务+分支上的**常驻后门**,
 // 之后每次覆盖目标侧独有提交都无人复核。
 func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	st.RequestApproval("t1", "main", "divergent target has 1 unique commits", "sha-1")
 	id := st.List()[0].ID
@@ -138,7 +138,7 @@ func TestForcePushStore_ConsumeForcePushApproval(t *testing.T) {
 // 为什么需要撤销:放行是"人工授权覆盖目标侧独有提交",批错了要在**兑现之前**收回;
 // 没有撤销口子的话唯一的取消办法是等它被用掉 —— 而那正是最不该覆盖的时刻。
 func TestForcePushStore_Revoke(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	st.RequestApproval("t1", "main", "divergent", "sha-1")
 	id := st.List()[0].ID
@@ -173,7 +173,7 @@ func TestForcePushStore_Revoke(t *testing.T) {
 // (独有提交从 1 个变成 50 个),旧审批不该继续适用 ——
 // 否则一次"批 1 个独有提交"会变成"授权覆盖此后的一切"。
 func TestForcePushStore_ApprovalBoundToTargetState(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	st.RequestApproval("t1", "main", "divergent target has 1 unique commits", "sha-1")
 	id := st.List()[0].ID
@@ -201,7 +201,7 @@ func TestForcePushStore_ApprovalBoundToTargetState(t *testing.T) {
 // (独有提交从 1 个变成 50 个)时,旧的 pending 仍挂着、绑的还是**旧状态**
 // ⇒ 运维批的是一份过期的描述,批完的放行也对应旧状态。
 func TestForcePushStore_PendingRefreshesToCurrentState(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	st.RequestApproval("t1", "main", "divergent target has 1 unique commits", "sha-1")
 	require.Len(t, st.List(), 1)
@@ -224,7 +224,7 @@ func TestForcePushStore_PendingRefreshesToCurrentState(t *testing.T) {
 // 真正被授权的那条仍然 approved 且未消费 ⇒ 同一次人工放行可以反复授权覆盖,
 // "一次性"变成常驻后门。
 func TestForcePushStore_ConsumeBindsTargetRef(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	// 两条已放行记录:A 绑 SHA_X(较早),B 绑 SHA_Y(较新)。
 	st.RequestApproval("t1", "main", "divergent at sha-x", "sha-x")
@@ -258,7 +258,7 @@ func TestForcePushStore_ConsumeBindsTargetRef(t *testing.T) {
 // 撤销 = 授权被收回;消费它等于把"已收回"记成"已用掉",
 // 两条记录的状态都乱了(而且撤销的授权本就不该兑现)。
 func TestForcePushStore_ConsumeSkipsRevoked(t *testing.T) {
-	st := NewForcePushStore(repo.NewForcePushApprovalRepo(newApprovalDB(t)))
+	st := NewForcePushStore(repository.NewForcePushApprovalRepository(newApprovalDB(t)))
 
 	st.RequestApproval("t1", "main", "divergent at sha-r", "sha-r")
 	idR := approvalIDByTargetRef(t, st, "sha-r")

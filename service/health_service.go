@@ -129,8 +129,8 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 			return taskHealthInput{}, err
 		}
 		// RPO 事实键与评分窗口解耦:全历史单独取最近一次备份成功。
-		lastBackup, err := s.tasks.runRepo.FindLastBackupSuccess(tasks[i].Key)
-		if err != nil && !isRepoNotFound(err) {
+		lastBackup, err := s.tasks.runRepository.FindLastBackupSuccess(tasks[i].Key)
+		if err != nil && !isRepositoryNotFound(err) {
 			return taskHealthInput{}, err
 		}
 		return taskHealthInput{runs: runs, lastBackup: lastBackup}, nil

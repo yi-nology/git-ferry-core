@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // newPolicyTestService 造带任务存储的轻量服务。
@@ -24,10 +24,10 @@ func newPolicyTestService(t *testing.T) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
 	return &Service{
-		tasks:  NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo),
+		tasks:  NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository),
 		bgCtx:  context.Background(),
 		config: &model.Config{},
 	}

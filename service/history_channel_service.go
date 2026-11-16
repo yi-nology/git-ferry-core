@@ -27,7 +27,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/mirror/history"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"github.com/yi-nology/go-git-platform/auth/credential"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -47,10 +47,10 @@ import (
 //     目标树的既有提交原样保留。
 type HistoryService struct {
 	svc       *Service
-	channels  *repo.HistoryChannelRepo
-	targets   *repo.HistoryTargetRepo
-	runs      *repo.HistoryRunRepo
-	overrides *repo.HistoryOverrideRepo
+	channels  *repository.HistoryChannelRepository
+	targets   *repository.HistoryTargetRepository
+	runs      *repository.HistoryRunRepository
+	overrides *repository.HistoryOverrideRepository
 	backend   gitbackend.GitBackend
 	cm        *credential.CryptoManager
 	// locks 保证同一通道的进程内互斥(移植/推送/回滚不可并发)。
@@ -101,10 +101,10 @@ func NewHistoryService(svc *Service, db *gorm.DB) (*HistoryService, error) {
 	}
 	h := &HistoryService{
 		svc:        svc,
-		channels:   repo.NewHistoryChannelRepo(db),
-		targets:    repo.NewHistoryTargetRepo(db),
-		runs:       repo.NewHistoryRunRepo(db),
-		overrides:  repo.NewHistoryOverrideRepo(db),
+		channels:   repository.NewHistoryChannelRepository(db),
+		targets:    repository.NewHistoryTargetRepository(db),
+		runs:       repository.NewHistoryRunRepository(db),
+		overrides:  repository.NewHistoryOverrideRepository(db),
 		backend:    backend,
 		cm:         cm,
 		locks:      syncx.NewKeyedGate(1),
@@ -211,7 +211,7 @@ func (h *HistoryService) CreateHistoryChannel(_ context.Context, in HistoryChann
 	if err := validateHistoryRepoDir(derefStr(in.TargetDir), "target_dir"); err != nil {
 		return nil, err
 	}
-	if existing, err := h.channels.FindByName(in.Name); err != nil && !isRepoNotFound(err) {
+	if existing, err := h.channels.FindByName(in.Name); err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	} else if existing != nil {
 		return nil, oekiterrors.New(fmt.Sprintf("通道名已存在: %s", in.Name))
@@ -345,7 +345,7 @@ func (h *HistoryService) updateHistoryChannel(id uint, in HistoryChannelInput) (
 
 // ListHistoryChannels 列出通道。
 func (h *HistoryService) ListHistoryChannels(_ context.Context, offset, limit int) ([]*HistoryChannelDTO, int64, error) {
-	channels, total, err := h.channels.FindAll(repo.Pagination{Offset: offset, Limit: limit})
+	channels, total, err := h.channels.FindAll(repository.Pagination{Offset: offset, Limit: limit})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -853,7 +853,7 @@ func (h *HistoryService) finishRun(run *model.HistoryRun, status, errMsg string)
 		run.DurationMs = now.Sub(*run.StartedAt).Milliseconds()
 	}
 	prev, err := h.runs.FindLastHashedByChannel(run.ChannelID)
-	if err != nil && !isRepoNotFound(err) {
+	if err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	}
 	if prev != nil {
@@ -974,7 +974,7 @@ func (h *HistoryService) pushChannelLatest(ctx context.Context, channelID uint, 
 	// 找最近一次 **apply** 记录:apply 记录才有产物路径。
 	// (最新的记录可能是上一条 push 记录, 它自己不带产物。)
 	run, err := h.runs.FindLatestByChannelKind(channelID, model.HistoryRunKindApply)
-	if err != nil && !isRepoNotFound(err) {
+	if err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	}
 	if run == nil {
@@ -1160,7 +1160,7 @@ func (h *HistoryService) checkPushDivergence(ctx context.Context, run *model.His
 
 // ListHistoryRuns 列出通道的执行记录。
 func (h *HistoryService) ListHistoryRuns(_ context.Context, channelID uint, offset, limit int) ([]*HistoryRunDTO, int64, error) {
-	runs, total, err := h.runs.FindByChannel(channelID, repo.Pagination{Offset: offset, Limit: limit})
+	runs, total, err := h.runs.FindByChannel(channelID, repository.Pagination{Offset: offset, Limit: limit})
 	if err != nil {
 		return nil, 0, err
 	}

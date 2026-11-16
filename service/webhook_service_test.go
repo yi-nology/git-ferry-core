@@ -9,7 +9,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 )
 
@@ -34,14 +34,14 @@ func setupWebhookServiceTestDB(t *testing.T) (*gorm.DB, *WebhookService) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 
-	ruleRepo := repo.NewWebhookRuleRepo(db)
-	eventRepo := repo.NewWebhookEventRepo(db)
-	repoRepo, err := repo.NewRepoRepo(db)
+	ruleRepository := repository.NewWebhookRuleRepository(db)
+	eventRepository := repository.NewWebhookEventRepository(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
 		t.Fatalf("failed to create repo repository: %v", err)
 	}
 
-	svc := NewWebhookService(ruleRepo, eventRepo, repoRepo)
+	svc := NewWebhookService(ruleRepository, eventRepository, repoRepository)
 
 	return db, svc
 }

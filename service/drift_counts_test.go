@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
@@ -81,9 +81,9 @@ func TestDetectDrift_ComparesSourceWithTarget(t *testing.T) {
 		SourceBranch: "main", TargetBranch: "main", Enabled: true,
 	}).Error)
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(30 * 1e9)
 
@@ -92,11 +92,11 @@ func TestDetectDrift_ComparesSourceWithTarget(t *testing.T) {
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: tempDir}},
-		repos:     NewRepoService(repoRepo, platformRepo, mgr),
-		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
+		repos:     NewRepoService(repoRepository, platformRepository, mgr),
+		platforms: NewPlatformService(platformRepository, repoRepository, mgr),
 		tasks: NewTaskService(
-			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db),
-			repo.NewSyncRunStepRepo(db), repoRepo,
+			repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db),
+			repository.NewSyncRunStepRepository(db), repoRepository,
 		),
 	}
 
@@ -153,19 +153,19 @@ func TestDetectDrift_RespectsBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Platform{}, &model.Repo{}, &model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}))
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(30 * 1e9)
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},
-		repos:     NewRepoService(repoRepo, platformRepo, mgr),
-		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
+		repos:     NewRepoService(repoRepository, platformRepository, mgr),
+		platforms: NewPlatformService(platformRepository, repoRepository, mgr),
 		tasks: NewTaskService(
-			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db),
-			repo.NewSyncRunStepRepo(db), repoRepo,
+			repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db),
+			repository.NewSyncRunStepRepository(db), repoRepository,
 		),
 	}
 

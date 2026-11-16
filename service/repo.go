@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // ListRepos returns a paginated list of repositories.
@@ -18,7 +18,7 @@ func (s *Service) CountRepos() (int64, error) {
 }
 
 // ListReposWithFilter returns a filtered, sorted, paginated list of repositories.
-func (s *Service) ListReposWithFilter(ctx context.Context, offset, limit int, filter *repo.RepoFilter) ([]*model.Repo, int64, error) {
+func (s *Service) ListReposWithFilter(ctx context.Context, offset, limit int, filter *repository.RepoFilter) ([]*model.Repo, int64, error) {
 	return s.repos.ListReposWithFilter(ctx, offset, limit, filter)
 }
 

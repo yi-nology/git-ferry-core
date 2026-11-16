@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 )
 
@@ -34,32 +34,32 @@ func validateBranchName(branch string) error {
 
 // TaskService handles sync task-related operations.
 type TaskService struct {
-	taskRepo    *repo.SyncTaskRepo
-	runRepo     *repo.SyncRunRepo
-	runStepRepo *repo.SyncRunStepRepo
-	repoRepo    *repo.RepoRepo
+	taskRepository    *repository.SyncTaskRepository
+	runRepository     *repository.SyncRunRepository
+	runStepRepository *repository.SyncRunStepRepository
+	repoRepository    *repository.RepoRepository
 	// outbox 可选:接好后,运行完成会**同事务**写 outbox 事件
 	// (transactional outbox,见 model.OutboxEvent);nil = 不写(裸构造的测试路径)。
-	outbox *repo.OutboxEventRepo
+	outbox *repository.OutboxEventRepository
 }
 
 // NewTaskService creates a new TaskService instance.
-func NewTaskService(taskRepo *repo.SyncTaskRepo, runRepo *repo.SyncRunRepo, runStepRepo *repo.SyncRunStepRepo, repoRepo *repo.RepoRepo) *TaskService {
+func NewTaskService(taskRepository *repository.SyncTaskRepository, runRepository *repository.SyncRunRepository, runStepRepository *repository.SyncRunStepRepository, repoRepository *repository.RepoRepository) *TaskService {
 	return &TaskService{
-		taskRepo:    taskRepo,
-		runRepo:     runRepo,
-		runStepRepo: runStepRepo,
-		repoRepo:    repoRepo,
+		taskRepository:    taskRepository,
+		runRepository:     runRepository,
+		runStepRepository: runStepRepository,
+		repoRepository:    repoRepository,
 	}
 }
 
 // ListTasks returns a paginated list of sync tasks.
 func (ts *TaskService) ListTasks(ctx context.Context, repoKey string, offset, limit int) ([]*model.SyncTask, int64, error) {
-	page := repo.DefaultPagination(offset, limit)
+	page := repository.DefaultPagination(offset, limit)
 	if repoKey != "" {
-		return ts.taskRepo.FindByRepoKey(repoKey, page)
+		return ts.taskRepository.FindByRepoKey(repoKey, page)
 	}
-	return ts.taskRepo.FindAll(page)
+	return ts.taskRepository.FindAll(page)
 }
 
 // ListTasksFiltered 按仓库与最近一次执行状态过滤任务。
@@ -69,13 +69,13 @@ func (ts *TaskService) ListTasksFiltered(ctx context.Context, repoKey, status st
 	if repoKey == "" && status == "" {
 		return ts.ListTasks(ctx, repoKey, offset, limit)
 	}
-	page := repo.DefaultPagination(offset, limit)
-	return ts.taskRepo.FindFiltered(repoKey, status, page)
+	page := repository.DefaultPagination(offset, limit)
+	return ts.taskRepository.FindFiltered(repoKey, status, page)
 }
 
 // CountTasksByStatus returns task counts grouped by last_status (key "total" = overall).
 func (ts *TaskService) CountTasksByStatus() (map[string]int64, error) {
-	return ts.taskRepo.CountByStatus()
+	return ts.taskRepository.CountByStatus()
 }
 
 // GetTask returns a sync task by key.
@@ -85,7 +85,7 @@ func (ts *TaskService) GetTask(ctx context.Context, key string) (*model.SyncTask
 
 // findTask 查任务并归一化查无此条。
 func (ts *TaskService) findTask(key string) (*model.SyncTask, error) {
-	t, err := ts.taskRepo.FindByKey(key)
+	t, err := ts.taskRepository.FindByKey(key)
 	if err != nil {
 		return nil, mapNotFound(err, ErrTaskNotFound)
 	}
@@ -130,7 +130,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		ExcludeRefPatterns: req.ExcludeRefPatterns,
 	}
 
-	if err := ts.taskRepo.Create(task); err != nil {
+	if err := ts.taskRepository.Create(task); err != nil {
 		return nil, err
 	}
 
@@ -201,7 +201,7 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 		task.ExcludeRefPatterns = *req.ExcludeRefPatterns
 	}
 
-	if err := ts.taskRepo.Update(task); err != nil {
+	if err := ts.taskRepository.Update(task); err != nil {
 		return nil, err
 	}
 
@@ -210,17 +210,17 @@ func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequ
 
 // DeleteTask deletes a sync task by key.
 func (ts *TaskService) DeleteTask(ctx context.Context, key string) error {
-	return ts.taskRepo.Delete(key)
+	return ts.taskRepository.Delete(key)
 }
 
 // PreviewSync previews a sync operation.
 func (ts *TaskService) PreviewSync(ctx context.Context, req *model.PreviewSyncRequest) (*model.PreviewSyncResult, error) {
-	sourceRepo, err := ts.repoRepo.FindByKey(req.SourceRepoKey)
-	if err != nil && !isRepoNotFound(err) {
+	sourceRepo, err := ts.repoRepository.FindByKey(req.SourceRepoKey)
+	if err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	}
-	targetRepo, err := ts.repoRepo.FindByKey(req.TargetRepoKey)
-	if err != nil && !isRepoNotFound(err) {
+	targetRepo, err := ts.repoRepository.FindByKey(req.TargetRepoKey)
+	if err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	}
 
@@ -242,8 +242,8 @@ func (ts *TaskService) PreviewSync(ctx context.Context, req *model.PreviewSyncRe
 
 // ListHistory returns a paginated list of sync run history.
 func (ts *TaskService) ListHistory(ctx context.Context, taskKey string, offset, limit int) ([]*model.SyncRun, int64, error) {
-	page := repo.DefaultPagination(offset, limit)
-	return ts.runRepo.FindByTaskKey(taskKey, page)
+	page := repository.DefaultPagination(offset, limit)
+	return ts.runRepository.FindByTaskKey(taskKey, page)
 }
 
 // GetHistoryRun 按执行记录 ID 精确取某一条(带步骤)。
@@ -253,17 +253,17 @@ func (ts *TaskService) ListHistory(ctx context.Context, taskKey string, offset, 
 // 之前只有 ListHistory(按任务翻页)⇒ CLI 的 `history +detail --run-id`
 // 只能"翻页找那条",找不到就静默返回空列表。
 func (ts *TaskService) GetHistoryRun(ctx context.Context, taskKey string, runID uint) (*model.SyncRun, error) {
-	return ts.runRepo.FindByTaskKeyAndRunID(taskKey, runID)
+	return ts.runRepository.FindByTaskKeyAndRunID(taskKey, runID)
 }
 
 // DeleteHistory deletes a sync run by ID.
 func (ts *TaskService) DeleteHistory(ctx context.Context, id uint) error {
-	return ts.runRepo.Delete(id)
+	return ts.runRepository.Delete(id)
 }
 
 // FindAllEnabledTasks returns all enabled sync tasks.
 func (ts *TaskService) FindAllEnabledTasks() ([]*model.SyncTask, error) {
-	return ts.taskRepo.FindAllEnabled()
+	return ts.taskRepository.FindAllEnabled()
 }
 
 // FindTaskByKey returns a sync task by key (internal use).
@@ -273,12 +273,12 @@ func (ts *TaskService) FindTaskByKey(key string) (*model.SyncTask, error) {
 
 // CleanupOldRuns removes sync runs older than the specified duration.
 func (ts *TaskService) CleanupOldRuns(ctx context.Context, maxAge time.Duration) (int64, error) {
-	return ts.runRepo.CleanupOlderThan(ctx, maxAge)
+	return ts.runRepository.CleanupOlderThan(ctx, maxAge)
 }
 
 // CleanupOldRunSteps removes sync run steps older than the specified duration.
 func (ts *TaskService) CleanupOldRunSteps(ctx context.Context, maxAge time.Duration) (int64, error) {
-	return ts.runStepRepo.CleanupOlderThan(ctx, maxAge)
+	return ts.runStepRepository.CleanupOlderThan(ctx, maxAge)
 }
 
 // CreateRun creates a new sync run record for a task.
@@ -290,7 +290,7 @@ func (ts *TaskService) CreateRun(task *model.SyncTask, trigger string, webhookEv
 		StartTime:      time.Now(),
 		WebhookEventID: webhookEventID,
 	}
-	if err := ts.runRepo.Create(run); err != nil {
+	if err := ts.runRepository.Create(run); err != nil {
 		return nil, err
 	}
 	return run, nil
@@ -298,12 +298,12 @@ func (ts *TaskService) CreateRun(task *model.SyncTask, trigger string, webhookEv
 
 // CreateRunStep creates a new sync run step record.
 func (ts *TaskService) CreateRunStep(step *model.SyncRunStep) error {
-	return ts.runStepRepo.Create(step)
+	return ts.runStepRepository.Create(step)
 }
 
 // UpdateRunStep updates an existing sync run step record.
 func (ts *TaskService) UpdateRunStep(step *model.SyncRunStep) error {
-	return ts.runStepRepo.Update(step)
+	return ts.runStepRepository.Update(step)
 }
 
 // CompleteRun updates a sync run with final status and details.
@@ -323,12 +323,12 @@ func runCompletedOutbox(run *model.SyncRun) *model.OutboxEvent {
 
 func (ts *TaskService) CompleteRun(run *model.SyncRun) error {
 	if ts.outbox == nil {
-		return ts.runRepo.Update(run)
+		return ts.runRepository.Update(run)
 	}
 	// run 更新 + outbox 事件同一事务:要么都成立,要么都回滚 ——
 	// 否则「run 已完成但事件丢了」的崩溃窗口原样存在(outbox 就白做了)。
-	return ts.runRepo.DB().Transaction(func(tx *gorm.DB) error {
-		if err := ts.runRepo.UpdateInTx(tx, run); err != nil {
+	return ts.runRepository.DB().Transaction(func(tx *gorm.DB) error {
+		if err := ts.runRepository.UpdateInTx(tx, run); err != nil {
 			return err
 		}
 		return ts.outbox.CreateInTx(tx, runCompletedOutbox(run))
@@ -340,7 +340,7 @@ func (ts *TaskService) CompleteRun(run *model.SyncRun) error {
 // 只写这两列(不是整行 Save):执行期间的并发修改(策略/cron/开关)不能被
 // 执行开始时的旧快照悄悄改回去。
 func (ts *TaskService) UpdateTaskLastRun(task *model.SyncTask, run *model.SyncRun) error {
-	return ts.taskRepo.UpdateLastRun(task.Key, run.EndTime, run.Status)
+	return ts.taskRepository.UpdateLastRun(task.Key, run.EndTime, run.Status)
 }
 
 // CompleteRunWithTaskUpdate 在同一事务中完成 run 更新 + task 状态更新 + outbox 事件,
@@ -350,8 +350,8 @@ func (ts *TaskService) UpdateTaskLastRun(task *model.SyncTask, run *model.SyncRu
 // 执行开始时的旧快照写回,抹掉执行期间的并发修改(实测:一次 cron 执行
 // 把刚改的 force_push_policy=allow 还原成 block)。
 func (ts *TaskService) CompleteRunWithTaskUpdate(run *model.SyncRun, task *model.SyncTask) error {
-	return ts.runRepo.DB().Transaction(func(tx *gorm.DB) error {
-		if err := ts.runRepo.UpdateInTx(tx, run); err != nil {
+	return ts.runRepository.DB().Transaction(func(tx *gorm.DB) error {
+		if err := ts.runRepository.UpdateInTx(tx, run); err != nil {
 			return err
 		}
 		if err := tx.Model(&model.SyncTask{}).

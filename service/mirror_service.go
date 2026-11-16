@@ -23,7 +23,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"github.com/yi-nology/go-git-platform/auth/credential"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 	"gorm.io/gorm"
@@ -33,8 +33,8 @@ import (
 // 预检/执行/验证,底层调用 git-ferry-core/mirror。
 type MirrorService struct {
 	svc      *Service
-	channels *repo.MirrorChannelRepo
-	runs     *repo.MirrorRunRepo
+	channels *repository.MirrorChannelRepository
+	runs     *repository.MirrorRunRepository
 	backend  gitbackend.GitBackend
 	cm       *credential.CryptoManager
 	// locks 保证同一通道的进程内互斥（克隆/增量 fetch 不可重入）。
@@ -96,8 +96,8 @@ func NewMirrorService(svc *Service, db *gorm.DB) (*MirrorService, error) {
 	}
 	return &MirrorService{
 		svc:            svc,
-		channels:       repo.NewMirrorChannelRepo(db),
-		runs:           repo.NewMirrorRunRepo(db),
+		channels:       repository.NewMirrorChannelRepository(db),
+		runs:           repository.NewMirrorRunRepository(db),
 		backend:        backend,
 		cm:             cm,
 		locks:          syncx.NewKeyedGate(1),
@@ -495,7 +495,7 @@ func (m *MirrorService) DeleteMirrorTarget(targetID uint) error {
 	return m.channels.DeleteTarget(targetID)
 }
 
-func (m *MirrorService) ListMirrorChannels(page repo.Pagination) ([]*model.MirrorChannel, int64, error) {
+func (m *MirrorService) ListMirrorChannels(page repository.Pagination) ([]*model.MirrorChannel, int64, error) {
 	return m.channels.FindAll(page)
 }
 
@@ -1072,7 +1072,7 @@ func (m *MirrorService) VerifyMirrorTargetVersion(ctx context.Context, channelID
 // ---------- 版本矩阵 ----------
 
 // ListMirrorRuns 分页列出通道执行记录。
-func (m *MirrorService) ListMirrorRuns(channelID uint, page repo.Pagination) ([]*model.MirrorRun, int64, error) {
+func (m *MirrorService) ListMirrorRuns(channelID uint, page repository.Pagination) ([]*model.MirrorRun, int64, error) {
 	return m.runs.FindByChannel(channelID, page)
 }
 

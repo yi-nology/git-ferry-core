@@ -22,7 +22,7 @@ import (
 //
 // 这条用例是**反向验证**:把创建顺序改回"先 clone 再落库",本用例会变红。
 func TestMirrorChannelCreate_PublishUsesOwnClone(t *testing.T) {
-	m, repoRepo, _ := setupMirrorServiceTest(t)
+	m, repoRepository, _ := setupMirrorServiceTest(t)
 	ctx := context.Background()
 
 	srcA := filepath.Join(t.TempDir(), "alpha")
@@ -30,11 +30,11 @@ func TestMirrorChannelCreate_PublishUsesOwnClone(t *testing.T) {
 	makeHistoryRepo(t, srcA, map[string]string{"go.mod": "module example.com/alpha\n"})
 	makeHistoryRepo(t, srcB, map[string]string{"go.mod": "module example.com/beta\n"})
 
-	require.NoError(t, repoRepo.Create(&model.Repo{
+	require.NoError(t, repoRepository.Create(&model.Repo{
 		Key: "github/acme/alpha", Name: "alpha", Platform: "github",
 		CloneURL: srcA, Status: model.RepoStatusActive,
 	}))
-	require.NoError(t, repoRepo.Create(&model.Repo{
+	require.NoError(t, repoRepository.Create(&model.Repo{
 		Key: "github/acme/beta", Name: "beta", Platform: "github",
 		CloneURL: srcB, Status: model.RepoStatusActive,
 	}))

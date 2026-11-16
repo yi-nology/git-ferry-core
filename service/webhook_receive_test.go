@@ -17,7 +17,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
@@ -66,18 +66,18 @@ func TestReceiveWebhook_MultipleDeliveries_AllRecorded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err)
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
-	ruleRepo := repo.NewWebhookRuleRepo(db)
-	eventRepo := repo.NewWebhookEventRepo(db)
+	ruleRepository := repository.NewWebhookRuleRepository(db)
+	eventRepository := repository.NewWebhookEventRepository(db)
 
 	platform := &model.Platform{
 		Key: "gh", Name: "GitHub", Type: string(sdkmodel.PlatformGitHub), APIURL: srv.URL + "/",
 	}
-	require.NoError(t, platformRepo.Create(platform))
-	require.NoError(t, repoRepo.Create(&model.Repo{
+	require.NoError(t, platformRepository.Create(platform))
+	require.NoError(t, repoRepository.Create(&model.Repo{
 		Key: "octo/demo", Name: "demo", PlatformID: platform.ID, Platform: platform.Type,
 		PlatformOwner: "octo", PlatformRepo: "demo",
 		CloneURL: "https://github.com/octo/demo.git",
@@ -87,8 +87,8 @@ func TestReceiveWebhook_MultipleDeliveries_AllRecorded(t *testing.T) {
 	}))
 
 	svc := &Service{
-		repos:    NewRepoService(repoRepo, platformRepo, sdkrt.NewManager(0)),
-		webhooks: NewWebhookService(ruleRepo, eventRepo, repoRepo),
+		repos:    NewRepoService(repoRepository, platformRepository, sdkrt.NewManager(0)),
+		webhooks: NewWebhookService(ruleRepository, eventRepository, repoRepository),
 		bgCtx:    context.Background(),
 	}
 

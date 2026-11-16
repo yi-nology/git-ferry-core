@@ -18,7 +18,7 @@ import (
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // setupLifecycleTest 造 Service + 假 GitHub（ListRepos 分页返回固定集合）。
@@ -58,19 +58,19 @@ func setupLifecycleTest(t *testing.T) (*Service, *gorm.DB, func()) {
 		CloneURL: "https://github.com/acme/existing.git",
 	}).Error)
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(8))
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},
-		repos:     NewRepoService(repoRepo, platformRepo, mgr),
-		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
+		repos:     NewRepoService(repoRepository, platformRepository, mgr),
+		platforms: NewPlatformService(platformRepository, repoRepository, mgr),
 		tasks: NewTaskService(
-			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db),
-			repo.NewSyncRunStepRepo(db), repoRepo,
+			repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db),
+			repository.NewSyncRunStepRepository(db), repoRepository,
 		),
 	}
 	return svc, db, func() { srv.Close() }

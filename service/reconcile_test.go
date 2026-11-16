@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // fakeQuerier 可控的分支 HEAD/Compare fake。
@@ -133,12 +133,12 @@ func newReconcileTestService(t *testing.T, cfg *model.Config) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
 	return &Service{
-		tasks:      NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo),
-		reconciles: repo.NewReconcileRepo(db),
-		outbox:     repo.NewOutboxEventRepo(db),
+		tasks:      NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository),
+		reconciles: repository.NewReconcileRepository(db),
+		outbox:     repository.NewOutboxEventRepository(db),
 		bgCtx:      context.Background(),
 		config:     cfg,
 	}

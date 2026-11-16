@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // TestCleanupOldData_DeletesExpiredKeepsRecent 执行历史清理必须**只删过期的**。
@@ -53,9 +53,9 @@ func TestCleanupOldData_DeletesExpiredKeepsRecent(t *testing.T) {
 	// CleanupOldData 走的是子服务(webhooks / tasks)⇒ 要把它们装上
 	svc := &Service{
 		db:       db,
-		webhooks: NewWebhookService(repo.NewWebhookRuleRepo(db), repo.NewWebhookEventRepo(db), nil),
+		webhooks: NewWebhookService(repository.NewWebhookRuleRepository(db), repository.NewWebhookEventRepository(db), nil),
 		tasks: NewTaskService(
-			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), nil),
+			repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), nil),
 	}
 	events, runs, steps, err := svc.CleanupOldData(context.Background(), 30*24*time.Hour)
 	require.NoError(t, err)

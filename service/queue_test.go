@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // newQueueTestService 带持久化队列的轻量服务(不跑 executor/派发器)。
@@ -26,17 +26,17 @@ func newQueueTestService(t *testing.T, key string, cfg *model.Config) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
 	svc := &Service{
-		tasks:   NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo),
+		tasks:   NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository),
 		guard:   newLocalGuard(2),
-		pending: repo.NewPendingTriggerRepo(db),
-		jobs:    repo.NewExecutionJobRepo(db),
+		pending: repository.NewPendingTriggerRepository(db),
+		jobs:    repository.NewExecutionJobRepository(db),
 		bgCtx:   context.Background(),
 		config:  cfg,
 	}
-	require.NoError(t, svc.tasks.taskRepo.Create(&model.SyncTask{
+	require.NoError(t, svc.tasks.taskRepository.Create(&model.SyncTask{
 		Key: key, Name: "q", Enabled: true, SourceBranch: "main", TargetBranch: "main",
 	}))
 	return svc

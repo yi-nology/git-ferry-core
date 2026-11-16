@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // ===== force-push 审批（gitea-mirror block-and-approve 模式） =====
@@ -21,13 +21,13 @@ type ForcePushApproval = model.ForcePushApproval
 
 // ForcePushStore 审批存储，满足 executor.ForcePushApprover。
 type ForcePushStore struct {
-	repo *repo.ForcePushApprovalRepo
+	repo *repository.ForcePushApprovalRepository
 	// mu 序列化本实例内的读-改-写（RequestApproval 幂等判定）。
 	mu sync.Mutex
 }
 
 // NewForcePushStore 打开审批存储。
-func NewForcePushStore(d *repo.ForcePushApprovalRepo) *ForcePushStore {
+func NewForcePushStore(d *repository.ForcePushApprovalRepository) *ForcePushStore {
 	return &ForcePushStore{repo: d}
 }
 
@@ -106,7 +106,7 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 	defer st.mu.Unlock()
 	a, gerr := st.repo.Get(id)
 	if gerr != nil {
-		if isRepoNotFound(gerr) {
+		if isRepositoryNotFound(gerr) {
 			return false, nil
 		}
 		return false, gerr

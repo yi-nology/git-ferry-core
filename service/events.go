@@ -121,7 +121,7 @@ func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned
 	if len(subs) == 0 {
 		return false, false
 	}
-	run, err := s.tasks.runRepo.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
+	run, err := s.tasks.runRepository.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
 	if err != nil || run == nil {
 		// run 记录已被清理(保留期) ⇒ 事件失去意义,跳过投递并闭环。
 		slog.Warn("outbox: 重投时 run 记录不存在,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 )
 
@@ -33,9 +33,9 @@ func setupCronTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 
 	db := setupCronTestDB(t)
-	taskRepo := repo.NewSyncTaskRepo(db)
+	taskRepository := repository.NewSyncTaskRepository(db)
 
-	taskService := NewTaskService(taskRepo, nil, nil, nil)
+	taskService := NewTaskService(taskRepository, nil, nil, nil)
 
 	return &Service{
 		tasks:        taskService,

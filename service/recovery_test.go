@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // newRecoveryTestService 带恢复点存储的轻量服务。
@@ -25,7 +25,7 @@ func newRecoveryTestService(t *testing.T, backupDir string) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	return &Service{
-		recovery: repo.NewRecoveryPointRepo(db),
+		recovery: repository.NewRecoveryPointRepository(db),
 		config:   &model.Config{Sync: model.SyncConfig{BackupDir: backupDir}},
 		bgCtx:    context.Background(),
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
@@ -35,19 +35,19 @@ type Service struct {
 	approvals     *ForcePushStore
 	retryTracker  *RetryTracker
 	// pending 待补跑 webhook 触发的持久化存储(pending_triggers 表,见 pending.go)。
-	pending *repo.PendingTriggerRepo
+	pending *repository.PendingTriggerRepository
 	// outbox 事务外发盒(outbox_events 表,见 events.go):运行完成事件
 	// 与 run 落库同事务写入,派发器保证通知至少送达一次。
-	outbox *repo.OutboxEventRepo
+	outbox *repository.OutboxEventRepository
 	// jobs 持久化执行队列(execution_jobs 表,见 queue.go);instanceID 为
 	// lease 属主标识。仅 durable_queue=true 时启用。
-	jobs       *repo.ExecutionJobRepo
+	jobs       *repository.ExecutionJobRepository
 	instanceID string
 	// reconciles 对账结果存储(reconcile_results,见 reconcile.go);
 	// 仅 reconcile_interval_hours>0 时启用。
-	reconciles *repo.ReconcileRepo
+	reconciles *repository.ReconcileRepository
 	// recovery 恢复点索引(recovery_points,见 recovery.go)。
-	recovery *repo.RecoveryPointRepo
+	recovery *repository.RecoveryPointRepository
 	// driftSubs 对账漂移订阅者(见 events.go;壳层接告警渠道)。
 	driftSubs       []driftSubscriber
 	driftSubID      uint64
@@ -94,7 +94,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	if err := ensureTempDir(cfg.Git.TempDir); err != nil {
 		return nil, err
 	}
-	repos, err := initRepos(db)
+	repos, err := initRepositories(db)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +525,7 @@ func (s *Service) RecordOperation(ctx context.Context, entry *model.OperationLog
 }
 
 // ListOperations 按过滤条件分页返回审计日志。
-func (s *Service) ListOperations(ctx context.Context, offset, limit int, filter *repo.OperationLogFilter) ([]*model.OperationLog, int64, error) {
+func (s *Service) ListOperations(ctx context.Context, offset, limit int, filter *repository.OperationLogFilter) ([]*model.OperationLog, int64, error) {
 	return s.opLogs.List(ctx, offset, limit, filter)
 }
 

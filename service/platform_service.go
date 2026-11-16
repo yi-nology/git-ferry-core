@@ -9,7 +9,7 @@ import (
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -17,29 +17,29 @@ import (
 
 // PlatformService 平台服务
 type PlatformService struct {
-	platformRepo *repo.PlatformRepo
-	repoRepo     *repo.RepoRepo
-	providerMgr  *sdkrt.Manager
-	hooks        *sdkprov.Hooks
+	platformRepository *repository.PlatformRepository
+	repoRepository     *repository.RepoRepository
+	providerMgr        *sdkrt.Manager
+	hooks              *sdkprov.Hooks
 }
 
 // NewPlatformService 创建 PlatformService
-func NewPlatformService(platformRepo *repo.PlatformRepo, repoRepo *repo.RepoRepo, providerMgr *sdkrt.Manager) *PlatformService {
+func NewPlatformService(platformRepository *repository.PlatformRepository, repoRepository *repository.RepoRepository, providerMgr *sdkrt.Manager) *PlatformService {
 	return &PlatformService{
-		platformRepo: platformRepo,
-		repoRepo:     repoRepo,
-		providerMgr:  providerMgr,
+		platformRepository: platformRepository,
+		repoRepository:     repoRepository,
+		providerMgr:        providerMgr,
 	}
 }
 
 // CreatePlatform 创建平台
 func (s *PlatformService) CreatePlatform(ctx context.Context, platform *model.Platform) error {
-	return s.platformRepo.Create(platform)
+	return s.platformRepository.Create(platform)
 }
 
 // GetPlatform 获取平台
 func (s *PlatformService) GetPlatform(ctx context.Context, key string) (*model.Platform, error) {
-	p, err := s.platformRepo.FindByKey(key)
+	p, err := s.platformRepository.FindByKey(key)
 	if err != nil {
 		return nil, mapNotFound(err, ErrPlatformNotFound)
 	}
@@ -48,7 +48,7 @@ func (s *PlatformService) GetPlatform(ctx context.Context, key string) (*model.P
 
 // GetPlatformByID 根据 ID 获取平台
 func (s *PlatformService) GetPlatformByID(ctx context.Context, id uint) (*model.Platform, error) {
-	p, err := s.platformRepo.FindByID(id)
+	p, err := s.platformRepository.FindByID(id)
 	if err != nil {
 		return nil, mapNotFound(err, ErrPlatformNotFound)
 	}
@@ -57,9 +57,9 @@ func (s *PlatformService) GetPlatformByID(ctx context.Context, id uint) (*model.
 
 // findPlatform 查平台并保持「platform not found: <key>」的对外文案。
 func (s *PlatformService) findPlatform(key string) (*model.Platform, error) {
-	p, err := s.platformRepo.FindByKey(key)
+	p, err := s.platformRepository.FindByKey(key)
 	if err != nil {
-		if oekiterrors.Is(err, repo.ErrNotFound) {
+		if oekiterrors.Is(err, repository.ErrNotFound) {
 			return nil, oekiterrors.New(fmt.Sprintf("platform not found: %s", key))
 		}
 		return nil, err
@@ -69,27 +69,27 @@ func (s *PlatformService) findPlatform(key string) (*model.Platform, error) {
 
 // ListPlatforms 列出所有平台
 func (s *PlatformService) ListPlatforms(ctx context.Context) ([]*model.Platform, error) {
-	return s.platformRepo.FindAll()
+	return s.platformRepository.FindAll()
 }
 
 // UpdatePlatform 更新平台
 func (s *PlatformService) UpdatePlatform(ctx context.Context, platform *model.Platform) error {
-	return s.platformRepo.Update(platform)
+	return s.platformRepository.Update(platform)
 }
 
 // DeletePlatform 删除平台
 func (s *PlatformService) DeletePlatform(ctx context.Context, key string) error {
-	return s.platformRepo.Delete(key)
+	return s.platformRepository.Delete(key)
 }
 
 // SetDefaultPlatform 设置默认平台
 func (s *PlatformService) SetDefaultPlatform(ctx context.Context, key string) error {
-	return s.platformRepo.SetDefault(key)
+	return s.platformRepository.SetDefault(key)
 }
 
 // UpdatePlatformStatus 更新平台状态
 func (s *PlatformService) UpdatePlatformStatus(ctx context.Context, key, status, testResult string) error {
-	return s.platformRepo.UpdateStatus(key, status, testResult)
+	return s.platformRepository.UpdateStatus(key, status, testResult)
 }
 
 // TestPlatformConnection 测试平台连接
@@ -157,7 +157,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 		return 0, oekiterrors.Wrap(err, "list repos failed")
 	}
 
-	existingRepos, existingErr := s.repoRepo.FindByPlatformID(platform.ID)
+	existingRepos, existingErr := s.repoRepository.FindByPlatformID(platform.ID)
 	if existingErr != nil {
 		slog.Warn("sync repo: failed to load existing repos, treating all as new",
 			"platform_id", platform.ID, "error", existingErr)
@@ -167,7 +167,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 	plan := planRepoUpsert(platform, repos, indexExistingByKey(existingRepos), filter)
 	count := s.persistRepoPlan(plan)
 
-	if err := s.platformRepo.UpdateRepoCount(platform.ID); err != nil {
+	if err := s.platformRepository.UpdateRepoCount(platform.ID); err != nil {
 		slog.Warn("sync repo: failed to update platform repo count", "platform_id", platform.ID, "error", err)
 	}
 	return count, nil
@@ -215,7 +215,7 @@ func (s *PlatformService) ListReposByPlatform(ctx context.Context, platformKey s
 	if err != nil {
 		return nil, err
 	}
-	return s.repoRepo.FindByPlatformID(platform.ID)
+	return s.repoRepository.FindByPlatformID(platform.ID)
 }
 
 // CountReposByPlatform 统计平台下的仓库数量(不加载数据)
@@ -224,5 +224,5 @@ func (s *PlatformService) CountReposByPlatform(ctx context.Context, platformKey 
 	if err != nil {
 		return 0, err
 	}
-	return s.repoRepo.CountByPlatformID(platform.ID)
+	return s.repoRepository.CountByPlatformID(platform.ID)
 }

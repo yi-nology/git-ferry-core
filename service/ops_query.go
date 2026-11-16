@@ -7,7 +7,7 @@ import (
 
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // ===== 运维聚合查询（趋势 / 统一待办） =====
@@ -225,5 +225,5 @@ func nameOr(name, fallback string) string {
 
 // RecentRuns 取全局最近的 run（不分任务），供趋势类聚合使用。
 func (ts *TaskService) RecentRuns(offset, limit int) ([]*model.SyncRun, error) {
-	return ts.runRepo.FindRecent(repo.DefaultPagination(offset, limit))
+	return ts.runRepository.FindRecent(repository.DefaultPagination(offset, limit))
 }

@@ -7,7 +7,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +23,7 @@ func setupOperationLogTestService(t *testing.T) *OperationLogService {
 	if err := db.AutoMigrate(&model.OperationLog{}); err != nil {
 		t.Fatalf("failed to migrate test db: %v", err)
 	}
-	return NewOperationLogService(repo.NewOperationLogRepo(db))
+	return NewOperationLogService(repository.NewOperationLogRepository(db))
 }
 
 func TestOperationLogService_RecordAndList(t *testing.T) {
@@ -40,7 +40,7 @@ func TestOperationLogService_RecordAndList(t *testing.T) {
 	}
 
 	// List all
-	filter := &repo.OperationLogFilter{}
+	filter := &repository.OperationLogFilter{}
 	got, total, err := svc.List(ctx, 0, 50, filter)
 	if err != nil {
 		t.Fatalf("list failed: %v", err)
@@ -100,7 +100,7 @@ func TestOperationLogChainSurvivesPrecisionChange(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 	old.EntryHash = model.ComputeEntryHash("", old)
-	require.NoError(t, svc.opLogRepo.Create(old))
+	require.NoError(t, svc.opLogRepository.Create(old))
 
 	// 后续记录走正常路径(毫秒精度)。
 	prev := old.EntryHash

@@ -23,7 +23,7 @@ type AutoRetryPolicy struct {
 }
 
 // chainStatsFunc 查询「包含 runID 的连续 auto_retry 链」的统计,
-// 由 Service 注入并把事实落在 DB(见 repo.SyncRunRepo.AutoRetryChainStats)。
+// 由 Service 注入并把事实落在 DB(见 repository.SyncRunRepository.AutoRetryChainStats)。
 // 返回:链内 auto_retry 条数 + 最近一条链内运行的结束时间(无链时为零值)。
 type chainStatsFunc func(taskKey string, runID uint, runIsRetry bool) (int64, time.Time, error)
 

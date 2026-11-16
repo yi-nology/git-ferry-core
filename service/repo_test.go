@@ -7,7 +7,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"github.com/yi-nology/go-git-platform/auth/credential"
 	"github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -36,17 +36,17 @@ func setupTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	db := setupTestDB(t)
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
 		t.Fatalf("failed to create repo repository: %v", err)
 	}
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	if err != nil {
 		t.Fatalf("failed to create PlatformRepo: %v", err)
 	}
 
 	providerMgr := sdkrt.NewManager(0)
-	repoService := NewRepoService(repoRepo, platformRepo, providerMgr)
+	repoService := NewRepoService(repoRepository, platformRepository, providerMgr)
 
 	svc := &Service{
 		repos: repoService,

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"github.com/yi-nology/git-ferry-core/tpl"
 )
 
@@ -18,7 +18,7 @@ func newTemplateStore(t *testing.T) *dbTemplateStore {
 	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(t.TempDir(), "tpl.db")), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&tpl.Template{}))
-	return &dbTemplateStore{repo: repo.NewTemplateRepo(db)}
+	return &dbTemplateStore{repo: repository.NewTemplateRepository(db)}
 }
 
 func TestDBTemplateStore_CRUD(t *testing.T) {

@@ -5,17 +5,17 @@ import (
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // OperationLogService 处理审计日志相关操作。
 type OperationLogService struct {
-	opLogRepo *repo.OperationLogRepo
+	opLogRepository *repository.OperationLogRepository
 }
 
 // NewOperationLogService 创建新的 OperationLogService 实例。
-func NewOperationLogService(opLogRepo *repo.OperationLogRepo) *OperationLogService {
-	return &OperationLogService{opLogRepo: opLogRepo}
+func NewOperationLogService(opLogRepository *repository.OperationLogRepository) *OperationLogService {
+	return &OperationLogService{opLogRepository: opLogRepository}
 }
 
 // Record 记录一条审计日志(best-effort,由调用方决定如何处理错误)。
@@ -36,13 +36,13 @@ func (s *OperationLogService) Record(ctx context.Context, entry *model.Operation
 			entry.CreatedAt = time.Now()
 		}
 		entry.CreatedAt = model.TruncateDBTime(entry.CreatedAt)
-		prev, err := s.opLogRepo.Latest()
+		prev, err := s.opLogRepository.Latest()
 		if err == nil && prev != nil {
 			entry.PrevHash = prev.EntryHash
 		}
 		entry.EntryHash = model.ComputeEntryHash(entry.PrevHash, entry)
 	}
-	return s.opLogRepo.Create(entry)
+	return s.opLogRepository.Create(entry)
 }
 
 // AuditChainResult 审计哈希链校验结果。
@@ -55,7 +55,7 @@ type AuditChainResult struct {
 
 // VerifyAuditChain 全量校验审计哈希链完整性。
 func (s *OperationLogService) VerifyAuditChain() (*AuditChainResult, error) {
-	logs, err := s.opLogRepo.ListAscending()
+	logs, err := s.opLogRepository.ListAscending()
 	if err != nil {
 		return nil, err
 	}
@@ -83,16 +83,16 @@ func (s *OperationLogService) VerifyAuditChain() (*AuditChainResult, error) {
 }
 
 // List 按过滤条件分页返回审计日志。
-func (s *OperationLogService) List(ctx context.Context, offset, limit int, filter *repo.OperationLogFilter) ([]*model.OperationLog, int64, error) {
-	page := repo.DefaultPagination(offset, limit)
-	return s.opLogRepo.List(page, filter)
+func (s *OperationLogService) List(ctx context.Context, offset, limit int, filter *repository.OperationLogFilter) ([]*model.OperationLog, int64, error) {
+	page := repository.DefaultPagination(offset, limit)
+	return s.opLogRepository.List(page, filter)
 }
 
 // Stats 返回今日、近 7 天（本周）、总操作数。单次 SQL 查询。
 func (s *OperationLogService) Stats(ctx context.Context) (today, week, total int64, err error) {
 	now := time.Now()
 	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	r, err := s.opLogRepo.StatsOnce(startOfToday)
+	r, err := s.opLogRepository.StatsOnce(startOfToday)
 	if err != nil {
 		return 0, 0, 0, err
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 )
 
@@ -30,11 +30,11 @@ func setupTaskTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	db := setupTaskTestDB(t)
-	taskRepo := repo.NewSyncTaskRepo(db)
-	runRepo := repo.NewSyncRunRepo(db)
+	taskRepository := repository.NewSyncTaskRepository(db)
+	runRepository := repository.NewSyncRunRepository(db)
 
-	runStepRepo := repo.NewSyncRunStepRepo(db)
-	taskService := NewTaskService(taskRepo, runRepo, runStepRepo, nil)
+	runStepRepository := repository.NewSyncRunStepRepository(db)
+	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, nil)
 
 	svc := &Service{
 		tasks:        taskService,
@@ -389,15 +389,15 @@ func TestPreviewSync_WithRepoRepo(t *testing.T) {
 		t.Fatalf("failed to migrate repo: %v", err)
 	}
 
-	taskRepo := repo.NewSyncTaskRepo(db)
-	runRepo := repo.NewSyncRunRepo(db)
-	runStepRepo := repo.NewSyncRunStepRepo(db)
-	repoRepo, err := repo.NewRepoRepo(db)
+	taskRepository := repository.NewSyncTaskRepository(db)
+	runRepository := repository.NewSyncRunRepository(db)
+	runStepRepository := repository.NewSyncRunStepRepository(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
 		t.Fatalf("failed to create repo repository: %v", err)
 	}
 
-	taskService := NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo)
+	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
 
 	svc := &Service{
 		tasks:        taskService,
@@ -408,7 +408,7 @@ func TestPreviewSync_WithRepoRepo(t *testing.T) {
 	ctx := context.Background()
 
 	// Create repos
-	if err := repoRepo.Create(&model.Repo{
+	if err := repoRepository.Create(&model.Repo{
 		Key:      "source-repo",
 		Name:     "Source",
 		CloneURL: "https://github.com/source/repo.git",
@@ -416,7 +416,7 @@ func TestPreviewSync_WithRepoRepo(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create source repo failed: %v", err)
 	}
-	if err := repoRepo.Create(&model.Repo{
+	if err := repoRepository.Create(&model.Repo{
 		Key:      "target-repo",
 		Name:     "Target",
 		CloneURL: "https://github.com/target/repo.git",
@@ -453,15 +453,15 @@ func TestPreviewSync_MissingRepo(t *testing.T) {
 		t.Fatalf("failed to migrate repo: %v", err)
 	}
 
-	taskRepo := repo.NewSyncTaskRepo(db)
-	runRepo := repo.NewSyncRunRepo(db)
-	runStepRepo := repo.NewSyncRunStepRepo(db)
-	repoRepo, err := repo.NewRepoRepo(db)
+	taskRepository := repository.NewSyncTaskRepository(db)
+	runRepository := repository.NewSyncRunRepository(db)
+	runStepRepository := repository.NewSyncRunStepRepository(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
 		t.Fatalf("failed to create repo repository: %v", err)
 	}
 
-	taskService := NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo)
+	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
 
 	svc := &Service{
 		tasks:        taskService,
@@ -491,14 +491,14 @@ func TestPreviewSync(t *testing.T) {
 	if err := db.AutoMigrate(&model.Repo{}); err != nil {
 		t.Fatalf("migrate repo: %v", err)
 	}
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	if err != nil {
-		t.Fatalf("NewRepoRepo: %v", err)
+		t.Fatalf("NewRepoRepository: %v", err)
 	}
-	if err := repoRepo.Create(&model.Repo{Key: "src", Name: "src", Status: model.RepoStatusActive}); err != nil {
+	if err := repoRepository.Create(&model.Repo{Key: "src", Name: "src", Status: model.RepoStatusActive}); err != nil {
 		t.Fatalf("seed repo: %v", err)
 	}
-	ts := NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo)
+	ts := NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository)
 	ctx := context.Background()
 
 	// 目标缺失

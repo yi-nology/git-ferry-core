@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -34,16 +34,16 @@ func newMetadataServiceFixture(t *testing.T, backupDir string) (*Service, *gorm.
 	require.NoError(t, err, "open test db")
 	require.NoError(t, db.AutoMigrate(&model.Repo{}, &model.Platform{}), "migrate")
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(0)
 
 	svc := &Service{
 		config:    &Config{Sync: model.SyncConfig{BackupDir: backupDir}},
-		repos:     NewRepoService(repoRepo, platformRepo, mgr),
-		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
+		repos:     NewRepoService(repoRepository, platformRepository, mgr),
+		platforms: NewPlatformService(platformRepository, repoRepository, mgr),
 	}
 	return svc, db
 }

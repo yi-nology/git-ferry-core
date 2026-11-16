@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
@@ -25,14 +25,14 @@ func setupRepoServiceTestDB(t *testing.T) (*gorm.DB, *RepoService) {
 	err = db.AutoMigrate(&model.Repo{}, &model.Platform{})
 	require.NoError(t, err, "failed to migrate test db")
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err, "failed to create repo repository")
 
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err, "failed to create PlatformRepo")
 
 	providerMgr := sdkrt.NewManager(0)
-	svc := NewRepoService(repoRepo, platformRepo, providerMgr)
+	svc := NewRepoService(repoRepository, platformRepository, providerMgr)
 
 	return db, svc
 }
@@ -174,7 +174,7 @@ func TestRepoService_ListReposWithFilter(t *testing.T) {
 	}
 
 	// List with filter
-	filter := &repo.RepoFilter{
+	filter := &repository.RepoFilter{
 		Platform: "github",
 	}
 

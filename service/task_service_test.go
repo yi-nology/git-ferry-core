@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
 )
 
@@ -25,13 +25,13 @@ func setupTaskServiceTestDB(t *testing.T) (*gorm.DB, *TaskService) {
 	err = db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}, &model.Repo{})
 	require.NoError(t, err, "failed to migrate test db")
 
-	taskRepo := repo.NewSyncTaskRepo(db)
-	runRepo := repo.NewSyncRunRepo(db)
-	runStepRepo := repo.NewSyncRunStepRepo(db)
-	repoRepo, err := repo.NewRepoRepo(db)
+	taskRepository := repository.NewSyncTaskRepository(db)
+	runRepository := repository.NewSyncRunRepository(db)
+	runStepRepository := repository.NewSyncRunStepRepository(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err, "failed to create repo repository")
 
-	svc := NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo)
+	svc := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
 
 	return db, svc
 }

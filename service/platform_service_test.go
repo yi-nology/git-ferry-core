@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/git-ferry-core/repo"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
@@ -25,14 +25,14 @@ func setupPlatformServiceTestDB(t *testing.T) (*gorm.DB, *PlatformService) {
 	err = db.AutoMigrate(&model.Platform{}, &model.Repo{})
 	require.NoError(t, err, "failed to migrate test db")
 
-	platformRepo, err := repo.NewPlatformRepo(db)
+	platformRepository, err := repository.NewPlatformRepository(db)
 	require.NoError(t, err, "failed to create PlatformRepo")
 
-	repoRepo, err := repo.NewRepoRepo(db)
+	repoRepository, err := repository.NewRepoRepository(db)
 	require.NoError(t, err, "failed to create repo repository")
 
 	providerMgr := sdkrt.NewManager(0)
-	svc := NewPlatformService(platformRepo, repoRepo, providerMgr)
+	svc := NewPlatformService(platformRepository, repoRepository, providerMgr)
 
 	return db, svc
 }
