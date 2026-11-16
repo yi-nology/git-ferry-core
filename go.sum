@@ -157,6 +157,8 @@ github.com/next-bin/go-gitee v0.0.0-20260521141902-36ce436eee18 h1:hMf3u2RMBoIjR
 github.com/next-bin/go-gitee v0.0.0-20260521141902-36ce436eee18/go.mod h1:GvqteloYLLcJ0N3W6n+qNQXV/voE1Vuo3x7o/5H8EqM=
 github.com/oekit/concurrency v0.36.0 h1:QiRGjP44tloiP8qAXcmguhtqEpv9Byd+snBNZWLwAdg=
 github.com/oekit/concurrency v0.36.0/go.mod h1:9TJXufRRJMu5JvcqaavJLqq18vnwIeLgj5mAF64y46w=
+github.com/oekit/core v0.15.2 h1:UJ/KK3m1Y22Af/uI225FoICbnPeQzw76QZAfRxZbLOw=
+github.com/oekit/core v0.15.2/go.mod h1:GjsBFSUu4HY+BAbuOmwMCLoWdh3xvHZZCUmmZT7nOvc=
 github.com/oekit/gormx v0.12.1 h1:bwG/2LJCdH7fgjiwZbJ2EGl4v9aKvJ8ViTqjio1/dX8=
 github.com/oekit/gormx v0.12.1/go.mod h1:wXvusLqPQqZDEYzYNrRSZ+2+jVTx29bkZ2rbBes8Ibs=
 github.com/oekit/logx v0.11.0 h1:dlDDIqs04ibDJ7HJg1O0gd/gXUbirFc4WPHgjQV5N/w=
@@ -185,8 +187,6 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/sergi/go-diff v1.4.0 h1:n/SP9D5ad1fORl+llWyN+D6qoUETXNZARKjyY2/KVCw=
 github.com/sergi/go-diff v1.4.0/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
-github.com/sethvargo/go-envconfig v1.4.3 h1:9RJrW9aiy3SJVRJ1svntpZvBw3ghj941u/BseS/TokY=
-github.com/sethvargo/go-envconfig v1.4.3/go.mod h1:ebe6rgj7KzrRZPzDXU4W6WZWDEirQwvcgmS0bmC3Sjg=
 github.com/sirupsen/logrus v1.7.0/go.mod h1:yWOB1SBYBC5VeMP7gHvWumXLIWorT60ONWic61uBYv0=
 github.com/skeema/knownhosts v1.3.3 h1:tiFvsjIW+xqP5cqVsod7atn/xm57OY6v9KwxB1xWUyA=
 github.com/skeema/knownhosts v1.3.3/go.mod h1:2y0ntYxeqSNxOw5pfqSVDcRyBt2FqfxhzNDPoKz/ifQ=

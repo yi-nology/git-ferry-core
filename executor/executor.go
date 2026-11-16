@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
+	"github.com/oekit/pkg/procx"
 	"github.com/oekit/pkg/ptrx"
 	"github.com/oekit/pkg/stringx"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -217,7 +217,7 @@ func (e *Executor) runPostExec(task *model.SyncTask, run *model.SyncRun, details
 	// 超时后杀掉子进程并记进 details(脚本失败不影响同步结果,这是既有语义)。
 	execCtx, cancel := context.WithTimeout(context.Background(), postExecTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(execCtx, cfg.Sync.PostExecScript) //nolint:gosec // 路径由部署方配置
+	cmd := procx.Command(execCtx, cfg.Sync.PostExecScript) //nolint:gosec // 路径由部署方配置
 	// CommandContext 只杀**直接子进程**:脚本里再 fork 的孙子(sleep 等)仍持有
 	// stdout 管道 ⇒ CombinedOutput 会一直等管道关闭。
 	// WaitDelay 兜底:进程被杀后最多再等这么久就返回,不再挂住收尾。

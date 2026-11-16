@@ -87,6 +87,22 @@
 - 其余 SQL 片段均为 GORM 构建器形态（`CountByStatus` 的 `count(*)`
   聚合、列投影、`gorm.Expr` 原子自增），无字符串拼接、无用户输入。
 
+### Changed（深度收编 oekit——配置加载 + 子进程治理 + 小工具）
+
+- **配置加载改 `oekit/core/config`**：`model.LoadConfig` 用
+  `config.LoadFile`（YAML → tag 接线）+ `config.ApplyEnvOverlay`
+  （env 覆盖 YAML，含显式零值 false/0），删除
+  `sethvargo/go-envconfig` 与手写 `yaml.Unmarshal` 分支；新增 YAML 内
+  `${VAR}` / `${VAR:default}` 展开能力。
+- **子进程治理改 `oekit/pkg/procx`**：3 处 `exec.CommandContext` 全部替换为
+  `procx.Command`——ctx 取消/超时时**整棵进程树**终止（含跨组逃逸后代）。
+  修复 `post_exec` 脚本 fork 孙子进程时，`WaitDelay` 只能关管道、杀不掉树
+  的缺口；git 回落与 lifecycle 漂移检测同轨升级。
+- `derefStr` / `containsLine` 手写工具删除，改用
+  `oekit/pkg/ptrx.Deref` / `oekit/pkg/stringx.Contains`。
+- 依赖变化：+`github.com/oekit/core v0.15.2`；
+  −`sethvargo/go-envconfig`（`gopkg.in/yaml.v3` 降为 indirect）。
+
 ## [v0.50.0] - 2026-11-17
 
 ### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）

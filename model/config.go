@@ -1,14 +1,11 @@
 package model
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
+	"github.com/oekit/core/config"
 	"github.com/oekit/pkg/errors"
-	"github.com/sethvargo/go-envconfig"
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -195,33 +192,20 @@ type LogConfig struct {
 
 // LoadConfig 从指定路径加载配置文件。
 // path 参数由调用方控制（通常是启动参数或环境变量），不存在用户注入风险。
-// 环境变量会覆盖 YAML 文件中的同名配置（env 优先级更高）。
+//
+// 解码与 tag 接线统一走 oekit/core/config（YAML → ApplyEnv → 默认值/校验）；
+// 再 ApplyEnvOverlay 实现 12-factor 的「环境变量覆盖 YAML」（含显式零值）。
 func LoadConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // 配置文件路径由程序启动参数决定，非用户可控输入
-	if err != nil {
-		return nil, err
-	}
-
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := config.LoadFile(path, &cfg); err != nil {
 		return nil, err
 	}
-
-	// 环境变量覆盖 YAML 配置值（env 优先级高于 YAML）。
-	// 使用 ProcessWith 配合 DefaultOverwrite=true 确保已由 YAML 设定的字段也能被环境变量覆盖。
-	ctx := context.Background()
-	if err := envconfig.ProcessWith(ctx, &envconfig.Config{
-		Target:           &cfg,
-		Lookuper:         envconfig.OsLookuper(),
-		DefaultOverwrite: true,
-	}); err != nil {
+	if err := config.ApplyEnvOverlay(&cfg); err != nil {
 		return nil, errors.Wrap(err, "processing environment variables")
 	}
-
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-
 	return &cfg, nil
 }
 

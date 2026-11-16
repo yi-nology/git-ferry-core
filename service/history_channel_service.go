@@ -15,6 +15,7 @@ import (
 
 	"github.com/oekit/concurrency/syncx"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/ptrx"
 	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
 	"gorm.io/gorm"
@@ -194,21 +195,21 @@ func (h *HistoryService) CreateHistoryChannel(_ context.Context, in HistoryChann
 	if strings.TrimSpace(in.Name) == "" {
 		return nil, oekiterrors.New("通道名不能为空")
 	}
-	if strings.TrimSpace(derefStr(in.ModuleSource)) == "" ||
-		strings.TrimSpace(derefStr(in.ModuleTarget)) == "" {
+	if strings.TrimSpace(ptrx.Deref(in.ModuleSource, "")) == "" ||
+		strings.TrimSpace(ptrx.Deref(in.ModuleTarget, "")) == "" {
 		return nil, oekiterrors.New("module_source 与 module_target 都不能为空(身份改写是历史同步的前提)")
 	}
-	if derefStr(in.SourceRepoKey) == "" && derefStr(in.SourceDir) == "" {
+	if ptrx.Deref(in.SourceRepoKey, "") == "" && ptrx.Deref(in.SourceDir, "") == "" {
 		return nil, oekiterrors.New("source_repo_key 与 source_dir 至少给一个")
 	}
-	if derefStr(in.TargetRepoKey) == "" && derefStr(in.TargetDir) == "" {
+	if ptrx.Deref(in.TargetRepoKey, "") == "" && ptrx.Deref(in.TargetDir, "") == "" {
 		return nil, oekiterrors.New("target_repo_key 与 target_dir 至少给一个")
 	}
 	// 本地路径直连必须先过路径闸门(见 validateHistoryRepoDir)。
-	if err := validateHistoryRepoDir(derefStr(in.SourceDir), "source_dir"); err != nil {
+	if err := validateHistoryRepoDir(ptrx.Deref(in.SourceDir, ""), "source_dir"); err != nil {
 		return nil, err
 	}
-	if err := validateHistoryRepoDir(derefStr(in.TargetDir), "target_dir"); err != nil {
+	if err := validateHistoryRepoDir(ptrx.Deref(in.TargetDir, ""), "target_dir"); err != nil {
 		return nil, err
 	}
 	if existing, err := h.channels.FindByName(in.Name); err != nil && !isRepositoryNotFound(err) {
@@ -235,21 +236,21 @@ func (h *HistoryService) CreateHistoryChannel(_ context.Context, in HistoryChann
 
 	ch := &model.HistoryChannel{
 		Name:          strings.TrimSpace(in.Name),
-		SourceRepoKey: derefStr(in.SourceRepoKey),
-		TargetRepoKey: derefStr(in.TargetRepoKey),
-		SourceDir:     derefStr(in.SourceDir),
-		TargetDir:     derefStr(in.TargetDir),
-		ModuleSource:  derefStr(in.ModuleSource),
-		ModuleTarget:  derefStr(in.ModuleTarget),
-		HostSource:    derefStr(in.HostSource),
-		HostTarget:    derefStr(in.HostTarget),
-		AuthorName:    derefStr(in.AuthorName),
-		AuthorEmail:   derefStr(in.AuthorEmail),
+		SourceRepoKey: ptrx.Deref(in.SourceRepoKey, ""),
+		TargetRepoKey: ptrx.Deref(in.TargetRepoKey, ""),
+		SourceDir:     ptrx.Deref(in.SourceDir, ""),
+		TargetDir:     ptrx.Deref(in.TargetDir, ""),
+		ModuleSource:  ptrx.Deref(in.ModuleSource, ""),
+		ModuleTarget:  ptrx.Deref(in.ModuleTarget, ""),
+		HostSource:    ptrx.Deref(in.HostSource, ""),
+		HostTarget:    ptrx.Deref(in.HostTarget, ""),
+		AuthorName:    ptrx.Deref(in.AuthorName, ""),
+		AuthorEmail:   ptrx.Deref(in.AuthorEmail, ""),
 		PathRules:     string(pathRules),
 		ScrubRules:    string(scrubRules),
 		ConflictRules: string(conflictRules),
-		SourceBranch:  derefStr(in.SourceBranch),
-		TargetBranch:  derefStr(in.TargetBranch),
+		SourceBranch:  ptrx.Deref(in.SourceBranch, ""),
+		TargetBranch:  ptrx.Deref(in.TargetBranch, ""),
 		Enabled:       true, // 默认启用;显式 false 由下面的 in.Enabled 覆盖
 	}
 	if in.Enabled != nil {
@@ -1787,14 +1788,6 @@ func (h *HistoryService) credentialStatus(targets []*model.HistoryTarget) []Cred
 }
 
 // ===== 通道入参辅助 =====
-
-// derefStr 取指针值(nil → 空串)。
-func derefStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
 
 // setIfGiven 在「调用方给了值」时覆盖目标(指针语义:nil = 未指定)。
 func setIfGiven(dst *string, given *string) {

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oekit/pkg/stringx"
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
@@ -179,7 +180,7 @@ func droppedAddedLines(base, ours, theirs, merged string) []string {
 		for _, l := range exclusiveLines(side, base) {
 			// 空行也要参与判定:空行是完全合法的一行,
 			// 漏掉它就看不见「空行被吞了」。
-			if containsLine(mergedLines, l) || containsLine(splitLines(other), l) {
+			if stringx.Contains(mergedLines, l) || stringx.Contains(splitLines(other), l) {
 				continue
 			}
 			dropped = append(dropped, l)
@@ -188,16 +189,6 @@ func droppedAddedLines(base, ours, theirs, merged string) []string {
 	check(theirs, ours)
 	check(ours, theirs)
 	return dropped
-}
-
-// containsLine 判断行集合里有没有这一行。
-func containsLine(lines []string, want string) bool {
-	for _, l := range lines {
-		if l == want {
-			return true
-		}
-	}
-	return false
 }
 
 // wholeFileConflict 把整份文件做成一个冲突块(保守兜底)。

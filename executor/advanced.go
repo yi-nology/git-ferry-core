@@ -11,6 +11,7 @@ import (
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
+	"github.com/oekit/pkg/procx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -356,7 +357,7 @@ func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, di
 			return "", gitCmdError(args, stderr, err)
 		}
 	}
-	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // 参数由内部构造
+	cmd := procx.Command(ctx, "git", args...) //nolint:gosec // 参数由内部构造
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

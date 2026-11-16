@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
+	"github.com/oekit/pkg/procx"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -509,7 +509,7 @@ func runGitQuiet(ctx context.Context, dir string, args ...string) (string, error
 			return stdout + stderr, err
 		}
 	}
-	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // 内部构造
+	cmd := procx.Command(ctx, "git", args...) //nolint:gosec // 内部构造
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
