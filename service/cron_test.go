@@ -9,8 +9,8 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"gorm.io/gorm"
 )
 
@@ -33,9 +33,9 @@ func setupCronTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 
 	db := setupCronTestDB(t)
-	taskDAO := dao.NewSyncTaskDAO(db)
+	taskRepo := repo.NewSyncTaskRepo(db)
 
-	taskService := NewTaskService(taskDAO, nil, nil, nil)
+	taskService := NewTaskService(taskRepo, nil, nil, nil)
 
 	return &Service{
 		tasks:        taskService,

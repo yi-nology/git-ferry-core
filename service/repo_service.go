@@ -9,49 +9,49 @@ import (
 
 	"github.com/google/uuid"
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // RepoService handles repository-related operations.
 type RepoService struct {
-	repoDAO     *dao.RepoDAO
-	platformDAO *dao.PlatformDAO
-	providerMgr *sdkrt.Manager
-	hooks       *sdkprov.Hooks
+	repoRepo     *repo.RepoRepo
+	platformRepo *repo.PlatformRepo
+	providerMgr  *sdkrt.Manager
+	hooks        *sdkprov.Hooks
 }
 
 // NewRepoService creates a new RepoService instance.
-func NewRepoService(repoDAO *dao.RepoDAO, platformDAO *dao.PlatformDAO, providerMgr *sdkrt.Manager) *RepoService {
+func NewRepoService(repoRepo *repo.RepoRepo, platformRepo *repo.PlatformRepo, providerMgr *sdkrt.Manager) *RepoService {
 	return &RepoService{
-		repoDAO:     repoDAO,
-		platformDAO: platformDAO,
-		providerMgr: providerMgr,
+		repoRepo:     repoRepo,
+		platformRepo: platformRepo,
+		providerMgr:  providerMgr,
 	}
 }
 
 // ListRepos returns a paginated list of repositories.
 func (rs *RepoService) ListRepos(ctx context.Context, offset, limit int) ([]*model.Repo, int64, error) {
-	page := dao.DefaultPagination(offset, limit)
-	return rs.repoDAO.FindAll(page)
+	page := repo.DefaultPagination(offset, limit)
+	return rs.repoRepo.FindAll(page)
 }
 
 // CountRepos returns the total repo count via COUNT aggregate.
 func (rs *RepoService) CountRepos() (int64, error) {
-	return rs.repoDAO.Count()
+	return rs.repoRepo.Count()
 }
 
 // ListReposWithFilter returns a filtered, sorted, paginated list of repositories.
-func (rs *RepoService) ListReposWithFilter(ctx context.Context, offset, limit int, filter *dao.RepoFilter) ([]*model.Repo, int64, error) {
-	page := dao.DefaultPagination(offset, limit)
-	return rs.repoDAO.ListWithFilter(page, filter)
+func (rs *RepoService) ListReposWithFilter(ctx context.Context, offset, limit int, filter *repo.RepoFilter) ([]*model.Repo, int64, error) {
+	page := repo.DefaultPagination(offset, limit)
+	return rs.repoRepo.ListWithFilter(page, filter)
 }
 
 // GetRepo returns a repository by key.
 func (rs *RepoService) GetRepo(ctx context.Context, key string) (*model.Repo, error) {
-	return rs.repoDAO.FindByKey(key)
+	return rs.repoRepo.FindByKey(key)
 }
 
 // CreateRepo creates a new repository.
@@ -75,8 +75,8 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 		platformRepo = result.Repo
 	}
 
-	if req.PlatformID > 0 && rs.platformDAO != nil {
-		platform, err := rs.platformDAO.FindByID(req.PlatformID)
+	if req.PlatformID > 0 && rs.platformRepo != nil {
+		platform, err := rs.platformRepo.FindByID(req.PlatformID)
 		if err == nil && platform != nil {
 			platformType = platform.Type
 		}
@@ -112,13 +112,13 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 		Status:        model.RepoStatusActive,
 	}
 
-	if err := rs.repoDAO.Create(repo); err != nil {
+	if err := rs.repoRepo.Create(repo); err != nil {
 		return nil, err
 	}
 
 	// Update platform repo count
-	if repo.PlatformID > 0 && rs.platformDAO != nil {
-		if err := rs.platformDAO.UpdateRepoCount(repo.PlatformID); err != nil {
+	if repo.PlatformID > 0 && rs.platformRepo != nil {
+		if err := rs.platformRepo.UpdateRepoCount(repo.PlatformID); err != nil {
 			slog.Warn("create repo: failed to update platform repo count", "platform_id", repo.PlatformID, "error", err)
 		}
 	}
@@ -128,7 +128,7 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 
 // UpdateRepo updates an existing repository.
 func (rs *RepoService) UpdateRepo(ctx context.Context, req *model.UpdateRepoRequest) (*model.Repo, error) {
-	repo, err := rs.repoDAO.FindByKey(req.Key)
+	repo, err := rs.repoRepo.FindByKey(req.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (rs *RepoService) UpdateRepo(ctx context.Context, req *model.UpdateRepoRequ
 		repo.Name = req.Name
 	}
 
-	if err := rs.repoDAO.Update(repo); err != nil {
+	if err := rs.repoRepo.Update(repo); err != nil {
 		return nil, err
 	}
 
@@ -150,7 +150,7 @@ func (rs *RepoService) UpdateRepo(ctx context.Context, req *model.UpdateRepoRequ
 // DeleteRepo deletes a repository by key.
 func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 	// Get repo first to know the platform_id
-	repo, err := rs.repoDAO.FindByKey(key)
+	repo, err := rs.repoRepo.FindByKey(key)
 	if err != nil {
 		return err
 	}
@@ -160,13 +160,13 @@ func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 
 	platformID := repo.PlatformID
 
-	if err := rs.repoDAO.Delete(key); err != nil {
+	if err := rs.repoRepo.Delete(key); err != nil {
 		return err
 	}
 
 	// Update platform repo count
-	if platformID > 0 && rs.platformDAO != nil {
-		if err := rs.platformDAO.UpdateRepoCount(platformID); err != nil {
+	if platformID > 0 && rs.platformRepo != nil {
+		if err := rs.platformRepo.UpdateRepoCount(platformID); err != nil {
 			slog.Warn("delete repo: failed to update platform repo count", "platform_id", platformID, "error", err)
 		}
 	}
@@ -177,7 +177,7 @@ func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 // GetRepoWithProvider 一次调用完成 repo 查找 + provider 解析,
 // 消除调用方重复的 "GetRepoByKey → nil check → resolveRepoProvider" 样板。
 func (rs *RepoService) GetRepoWithProvider(repoKey string) (*model.Repo, sdkprov.Provider, error) {
-	repo, err := rs.repoDAO.FindByKey(repoKey)
+	repo, err := rs.repoRepo.FindByKey(repoKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -195,9 +195,9 @@ func (rs *RepoService) GetRepoWithProvider(repoKey string) (*model.Repo, sdkprov
 // 有关联平台记录时按平台配置构造(经 Manager 缓存),否则按 CloneURL 探测平台。
 func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, error) {
 	var platform *model.Platform
-	if repo.PlatformID > 0 && rs.platformDAO != nil {
+	if repo.PlatformID > 0 && rs.platformRepo != nil {
 		var findErr error
-		platform, findErr = rs.platformDAO.FindByID(repo.PlatformID)
+		platform, findErr = rs.platformRepo.FindByID(repo.PlatformID)
 		if findErr != nil {
 			return nil, oekiterrors.Wrap(findErr, fmt.Sprintf("find platform %d for repo %s", repo.PlatformID, repo.Key))
 		}
@@ -218,12 +218,12 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 
 // GetRepoByKey returns a repository by key.
 func (rs *RepoService) GetRepoByKey(key string) (*model.Repo, error) {
-	return rs.repoDAO.FindByKey(key)
+	return rs.repoRepo.FindByKey(key)
 }
 
 // SetWebhookSecret 设置仓库的 Webhook 密钥(经 repo_dao 加密落库),供入站验签使用。
 func (rs *RepoService) SetWebhookSecret(repoKey, secret string) error {
-	repo, err := rs.repoDAO.FindByKey(repoKey)
+	repo, err := rs.repoRepo.FindByKey(repoKey)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (rs *RepoService) SetWebhookSecret(repoKey, secret string) error {
 		return ErrRepoNotFound
 	}
 	repo.WebhookSecret = secret
-	return rs.repoDAO.Update(repo)
+	return rs.repoRepo.Update(repo)
 }
 
 // TestConnection tests the connection to a repository.

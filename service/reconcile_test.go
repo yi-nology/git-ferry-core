@@ -13,8 +13,8 @@ import (
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // fakeQuerier 可控的分支 HEAD/Compare fake。
@@ -133,12 +133,12 @@ func newReconcileTestService(t *testing.T, cfg *model.Config) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
 	return &Service{
-		tasks:      NewTaskService(dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db), dao.NewSyncRunStepDAO(db), repoDAO),
-		reconciles: dao.NewReconcileDAO(db),
-		outbox:     dao.NewOutboxEventDAO(db),
+		tasks:      NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo),
+		reconciles: repo.NewReconcileRepo(db),
+		outbox:     repo.NewOutboxEventRepo(db),
 		bgCtx:      context.Background(),
 		config:     cfg,
 	}

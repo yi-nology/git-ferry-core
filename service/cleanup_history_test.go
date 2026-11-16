@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // TestCleanupOldData_DeletesExpiredKeepsRecent 执行历史清理必须**只删过期的**。
@@ -53,9 +53,9 @@ func TestCleanupOldData_DeletesExpiredKeepsRecent(t *testing.T) {
 	// CleanupOldData 走的是子服务(webhooks / tasks)⇒ 要把它们装上
 	svc := &Service{
 		db:       db,
-		webhooks: NewWebhookService(dao.NewWebhookRuleDAO(db), dao.NewWebhookEventDAO(db), nil),
+		webhooks: NewWebhookService(repo.NewWebhookRuleRepo(db), repo.NewWebhookEventRepo(db), nil),
 		tasks: NewTaskService(
-			dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db), dao.NewSyncRunStepDAO(db), nil),
+			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), nil),
 	}
 	events, runs, steps, err := svc.CleanupOldData(context.Background(), 30*24*time.Hour)
 	require.NoError(t, err)

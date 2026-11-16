@@ -5,29 +5,29 @@ import (
 	"time"
 
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
-// appDAOs 一次装配的全部 DAO(减少 NewService 样板,便于测试注入)。
-type appDAOs struct {
-	repo      *dao.RepoDAO
-	task      *dao.SyncTaskDAO
-	run       *dao.SyncRunDAO
-	runStep   *dao.SyncRunStepDAO
-	rule      *dao.WebhookRuleDAO
-	event     *dao.WebhookEventDAO
-	platform  *dao.PlatformDAO
-	opLog     *dao.OperationLogDAO
-	template  *dao.TemplateDAO
-	approv    *dao.ForcePushApprovalDAO
-	pending   *dao.PendingTriggerDAO
-	outbox    *dao.OutboxEventDAO
-	jobs      *dao.ExecutionJobDAO
-	reconcile *dao.ReconcileDAO
-	recovery  *dao.RecoveryPointDAO
+// appRepos 一次装配的全部 Repo(减少 NewService 样板,便于测试注入)。
+type appRepos struct {
+	repo      *repo.RepoRepo
+	task      *repo.SyncTaskRepo
+	run       *repo.SyncRunRepo
+	runStep   *repo.SyncRunStepRepo
+	rule      *repo.WebhookRuleRepo
+	event     *repo.WebhookEventRepo
+	platform  *repo.PlatformRepo
+	opLog     *repo.OperationLogRepo
+	template  *repo.TemplateRepo
+	approv    *repo.ForcePushApprovalRepo
+	pending   *repo.PendingTriggerRepo
+	outbox    *repo.OutboxEventRepo
+	jobs      *repo.ExecutionJobRepo
+	reconcile *repo.ReconcileRepo
+	recovery  *repo.RecoveryPointRepo
 	provider  *sdkrt.Manager
 }
 
@@ -46,32 +46,32 @@ func initDB(cfg *Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-// initDAOs 装配 DAO 与平台 Provider 缓存。
-func initDAOs(db *gorm.DB) (*appDAOs, error) {
-	repoDAO, err := dao.NewRepoDAO(db)
+// initRepos 装配 Repo 与平台 Provider 缓存。
+func initRepos(db *gorm.DB) (*appRepos, error) {
+	repoRepo, err := repo.NewRepoRepo(db)
 	if err != nil {
-		return nil, oekiterrors.Wrap(err, "init repo DAO failed")
+		return nil, oekiterrors.Wrap(err, "init repo Repo failed")
 	}
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	if err != nil {
-		return nil, oekiterrors.Wrap(err, "failed to create PlatformDAO")
+		return nil, oekiterrors.Wrap(err, "failed to create PlatformRepo")
 	}
-	return &appDAOs{
-		repo:      repoDAO,
-		task:      dao.NewSyncTaskDAO(db),
-		run:       dao.NewSyncRunDAO(db),
-		runStep:   dao.NewSyncRunStepDAO(db),
-		rule:      dao.NewWebhookRuleDAO(db),
-		event:     dao.NewWebhookEventDAO(db),
-		platform:  platformDAO,
-		opLog:     dao.NewOperationLogDAO(db),
-		template:  dao.NewTemplateDAO(db),
-		approv:    dao.NewForcePushApprovalDAO(db),
-		pending:   dao.NewPendingTriggerDAO(db),
-		outbox:    dao.NewOutboxEventDAO(db),
-		jobs:      dao.NewExecutionJobDAO(db),
-		reconcile: dao.NewReconcileDAO(db),
-		recovery:  dao.NewRecoveryPointDAO(db),
+	return &appRepos{
+		repo:      repoRepo,
+		task:      repo.NewSyncTaskRepo(db),
+		run:       repo.NewSyncRunRepo(db),
+		runStep:   repo.NewSyncRunStepRepo(db),
+		rule:      repo.NewWebhookRuleRepo(db),
+		event:     repo.NewWebhookEventRepo(db),
+		platform:  platformRepo,
+		opLog:     repo.NewOperationLogRepo(db),
+		template:  repo.NewTemplateRepo(db),
+		approv:    repo.NewForcePushApprovalRepo(db),
+		pending:   repo.NewPendingTriggerRepo(db),
+		outbox:    repo.NewOutboxEventRepo(db),
+		jobs:      repo.NewExecutionJobRepo(db),
+		reconcile: repo.NewReconcileRepo(db),
+		recovery:  repo.NewRecoveryPointRepo(db),
 		provider:  sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(64)),
 	}, nil
 }

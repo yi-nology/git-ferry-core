@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // ===== force-push 审批（gitea-mirror block-and-approve 模式） =====
@@ -21,14 +21,14 @@ type ForcePushApproval = model.ForcePushApproval
 
 // ForcePushStore 审批存储，满足 executor.ForcePushApprover。
 type ForcePushStore struct {
-	dao *dao.ForcePushApprovalDAO
+	repo *repo.ForcePushApprovalRepo
 	// mu 序列化本实例内的读-改-写（RequestApproval 幂等判定）。
 	mu sync.Mutex
 }
 
 // NewForcePushStore 打开审批存储。
-func NewForcePushStore(d *dao.ForcePushApprovalDAO) *ForcePushStore {
-	return &ForcePushStore{dao: d}
+func NewForcePushStore(d *repo.ForcePushApprovalRepo) *ForcePushStore {
+	return &ForcePushStore{repo: d}
 }
 
 // ForcePushApprovals 返回 force-push 审批存储。
@@ -36,7 +36,7 @@ func (s *Service) ForcePushApprovals() *ForcePushStore { return s.approvals }
 
 // List 返回全部审批（按创建时间升序，与历史文件 append 顺序一致）。
 func (st *ForcePushStore) List() []ForcePushApproval {
-	list, err := st.dao.All()
+	list, err := st.repo.All()
 	if err != nil {
 		slog.Error("list force-push approvals failed", "error", err)
 		return []ForcePushApproval{}
@@ -46,7 +46,7 @@ func (st *ForcePushStore) List() []ForcePushApproval {
 
 // PendingCount 未放行条数。
 func (st *ForcePushStore) PendingCount() int {
-	n, err := st.dao.PendingCount()
+	n, err := st.repo.PendingCount()
 	if err != nil {
 		return 0
 	}
@@ -65,7 +65,7 @@ func (st *ForcePushStore) Request(taskKey, branch, reason, targetRef string) (Fo
 		TargetRef: targetRef,
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := st.dao.Create(&item); err != nil {
+	if err := st.repo.Create(&item); err != nil {
 		return ForcePushApproval{}, err
 	}
 	return item, nil
@@ -82,15 +82,15 @@ func (st *ForcePushStore) RequestApproval(taskKey, branch, reason, targetRef str
 	// 目标侧此后又变了(独有提交从 1 个变成 50 个)时,旧的 pending 仍挂着、
 	// 绑的还是**旧状态** ⇒ 运维批的是一份过期的描述。
 	// 刷新后,待批的永远是"当前这一次分歧"。
-	existing, err := st.dao.FindPending(taskKey, branch)
+	existing, err := st.repo.FindPending(taskKey, branch)
 	if err == nil && existing != nil {
 		existing.Reason = reason
 		existing.TargetRef = targetRef
 		existing.CreatedAt = time.Now().UTC()
-		_ = st.dao.Update(existing)
+		_ = st.repo.Update(existing)
 		return
 	}
-	_ = st.dao.Create(&ForcePushApproval{
+	_ = st.repo.Create(&ForcePushApproval{
 		ID:        fmt.Sprintf("fp-%d", time.Now().UnixNano()),
 		TaskKey:   taskKey,
 		Branch:    branch,
@@ -104,7 +104,7 @@ func (st *ForcePushStore) RequestApproval(taskKey, branch, reason, targetRef str
 func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	a, gerr := st.dao.Get(id)
+	a, gerr := st.repo.Get(id)
 	if gerr != nil {
 		return false, gerr
 	}
@@ -115,7 +115,7 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 	a.Approved = true
 	a.ApprovedBy = actor
 	a.ApprovedAt = &now
-	if err := st.dao.Update(a); err != nil {
+	if err := st.repo.Update(a); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -123,7 +123,7 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 
 // IsForcePushApproved 查询任务+分支是否已放行**且尚未被用掉**（executor 分歧保护回调）。
 func (st *ForcePushStore) IsForcePushApproved(taskKey, branch, targetRef string) bool {
-	ok, err := st.dao.IsApproved(taskKey, branch, targetRef)
+	ok, err := st.repo.IsApproved(taskKey, branch, targetRef)
 	if err != nil {
 		slog.Error("query force-push approval failed", "error", err)
 		return false
@@ -141,7 +141,7 @@ func (st *ForcePushStore) IsForcePushApproved(taskKey, branch, targetRef string)
 func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch, targetRef string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	found, err := st.dao.ConsumeApproved(taskKey, branch, targetRef, time.Now().UTC())
+	found, err := st.repo.ConsumeApproved(taskKey, branch, targetRef, time.Now().UTC())
 	if err != nil {
 		slog.Error("consume force-push approval failed", "error", err, "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
 		return
@@ -159,7 +159,7 @@ func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch, targetRef st
 func (st *ForcePushStore) Revoke(id, actor string) (found bool, err error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	found, err = st.dao.Revoke(id, actor, time.Now().UTC())
+	found, err = st.repo.Revoke(id, actor, time.Now().UTC())
 	if err != nil {
 		return false, err
 	}

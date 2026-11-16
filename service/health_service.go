@@ -16,7 +16,7 @@ import (
 
 // ===== 健康评分（Scorecards 风格） =====
 //
-// 规则与维度实现在 git-ferry-core/health（纯逻辑包）；本文件负责从 DAO 取事实、
+// 规则与维度实现在 git-ferry-core/health（纯逻辑包）；本文件负责从 Repo 取事实、
 // 拼 Facts、跑规则并聚合成壳层可直接序列化的快照。壳层只做入参与响应包装。
 
 // healthDims 全局唯一来源；壳层不再各自持有。
@@ -129,7 +129,7 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 			return taskHealthInput{}, err
 		}
 		// RPO 事实键与评分窗口解耦:全历史单独取最近一次备份成功。
-		lastBackup, err := s.tasks.runDAO.FindLastBackupSuccess(tasks[i].Key)
+		lastBackup, err := s.tasks.runRepo.FindLastBackupSuccess(tasks[i].Key)
 		return taskHealthInput{runs: runs, lastBackup: lastBackup}, err
 	})
 

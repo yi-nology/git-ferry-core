@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
 	_ "github.com/yi-nology/go-git-platform/adapter/all"
@@ -70,9 +70,9 @@ func TestResolveRepoProvider_GitHubAppOnlyPlatform(t *testing.T) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
 
 	// **只配 GitHub App,没有 PAT** ⇒ platform.AccessToken 为空。
@@ -84,10 +84,10 @@ func TestResolveRepoProvider_GitHubAppOnlyPlatform(t *testing.T) {
 		GitHubInstallationID: 99,
 		GitHubPrivateKey:     pemStr,
 	}
-	require.NoError(t, platformDAO.Create(platform))
+	require.NoError(t, platformRepo.Create(platform))
 	require.Empty(t, platform.AccessToken, "本用例的前提:平台没有 PAT")
 
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "app-only-repo", Name: "demo",
 		PlatformID: platform.ID, Platform: platform.Type,
 		PlatformOwner: "octo", PlatformRepo: "demo",
@@ -95,7 +95,7 @@ func TestResolveRepoProvider_GitHubAppOnlyPlatform(t *testing.T) {
 		Status:   model.RepoStatusActive,
 	}))
 
-	svc := &Service{repos: NewRepoService(repoDAO, platformDAO, sdkrt.NewManager(0))}
+	svc := &Service{repos: NewRepoService(repoRepo, platformRepo, sdkrt.NewManager(0))}
 
 	_, prov, err := svc.repos.GetRepoWithProvider("app-only-repo")
 	require.NoError(t, err)

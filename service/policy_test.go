@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // newPolicyTestService 造带任务存储的轻量服务。
@@ -24,10 +24,10 @@ func newPolicyTestService(t *testing.T) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
 	return &Service{
-		tasks:  NewTaskService(dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db), dao.NewSyncRunStepDAO(db), repoDAO),
+		tasks:  NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo),
 		bgCtx:  context.Background(),
 		config: &model.Config{},
 	}

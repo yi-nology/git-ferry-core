@@ -13,9 +13,9 @@ import (
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // DrillReport = executor.DrillReport(壳层直接使用)
@@ -271,7 +271,7 @@ func (s *Service) knownTaskPrefixes() map[string]string {
 		return out
 	}
 	ctx := context.Background()
-	tasks, _, err := s.ListTasks(ctx, "", 0, dao.MaxPageSize)
+	tasks, _, err := s.ListTasks(ctx, "", 0, repo.MaxPageSize)
 	if err != nil {
 		slog.Warn("RPO 报告:取任务列表失败,冷备将按文件名归组(可能不精确)", "error", err)
 		return out

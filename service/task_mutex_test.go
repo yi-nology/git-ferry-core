@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // TestRunTaskAsync_SameTaskKeyMutualExclusive 手动触发也必须受**同 taskKey 互斥**约束。
@@ -28,21 +28,21 @@ func TestRunTaskAsync_SameTaskKeyMutualExclusive(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}, &model.Repo{}))
 
-	taskDAO := dao.NewSyncTaskDAO(db)
-	runDAO := dao.NewSyncRunDAO(db)
-	runStepDAO := dao.NewSyncRunStepDAO(db)
-	repoDAO, err := dao.NewRepoDAO(db)
+	taskRepo := repo.NewSyncTaskRepo(db)
+	runRepo := repo.NewSyncRunRepo(db)
+	runStepRepo := repo.NewSyncRunStepRepo(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
 
 	svc := &Service{
-		tasks:  NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO),
+		tasks:  NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo),
 		guard:  newLocalGuard(2),
 		bgCtx:  context.Background(),
 		config: &model.Config{},
 	}
 
 	const key = "t-mutex"
-	require.NoError(t, taskDAO.Create(&model.SyncTask{
+	require.NoError(t, taskRepo.Create(&model.SyncTask{
 		Key: key, Name: "mutex", Enabled: true, SourceBranch: "main", TargetBranch: "main",
 	}))
 

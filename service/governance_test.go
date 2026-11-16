@@ -6,8 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -17,7 +17,7 @@ func setupOpLogSvc(t *testing.T) (*OperationLogService, *gorm.DB) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.OperationLog{}))
-	return NewOperationLogService(dao.NewOperationLogDAO(db)), db
+	return NewOperationLogService(repo.NewOperationLogRepo(db)), db
 }
 
 func TestAuditHashChain(t *testing.T) {

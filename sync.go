@@ -5,7 +5,7 @@
 // 转成 service.WebhookPayload 再调用 Service.ReceiveWebhook。
 // Config.Server 仅含 Host/Port/Mode，core 自身不会监听端口。
 //
-// 详细子域见 model / service / executor / dao / lock。
+// 详细子域见 model / service / executor / repo / lock。
 package sync
 
 import (

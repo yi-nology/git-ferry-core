@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"gorm.io/gorm"
 )
 
@@ -33,10 +33,10 @@ func setupWebhookTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 
 	db := setupWebhookTestDB(t)
-	ruleDAO := dao.NewWebhookRuleDAO(db)
-	eventDAO := dao.NewWebhookEventDAO(db)
+	ruleRepo := repo.NewWebhookRuleRepo(db)
+	eventRepo := repo.NewWebhookEventRepo(db)
 
-	webhookService := NewWebhookService(ruleDAO, eventDAO, nil)
+	webhookService := NewWebhookService(ruleRepo, eventRepo, nil)
 
 	svc := &Service{
 		webhooks: webhookService,
@@ -173,7 +173,7 @@ func TestUpdateRule(t *testing.T) {
 		t.Fatalf("CreateRule failed: %v", err)
 	}
 
-	// Update the rule without changing task keys (DAO has a bug with Replace)
+	// Update the rule without changing task keys (Repo has a bug with Replace)
 	updateReq := &model.UpdateRuleRequest{
 		ID:            created.ID,
 		Name:          "Updated Rule",

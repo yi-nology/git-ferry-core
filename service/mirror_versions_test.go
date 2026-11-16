@@ -33,7 +33,7 @@ func TestBuildVersionCells_StateComesFromNewestRun(t *testing.T) {
 		TagStatuses: `{"v1.0.0":{"status":"failed","commit":"C1","tree":"T1"}}`,
 		StartedAt:   &now,
 	}
-	// DAO 的顺序是 id DESC ⇒ 第一个即最新
+	// Repo 的顺序是 id DESC ⇒ 第一个即最新
 	cells := buildVersionCells([]*model.MirrorRun{newer, older})
 	require.Contains(t, cells, "v1.0.0")
 	cell := cells["v1.0.0"][7]

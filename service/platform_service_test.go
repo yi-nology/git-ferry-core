@@ -7,8 +7,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
@@ -25,14 +25,14 @@ func setupPlatformServiceTestDB(t *testing.T) (*gorm.DB, *PlatformService) {
 	err = db.AutoMigrate(&model.Platform{}, &model.Repo{})
 	require.NoError(t, err, "failed to migrate test db")
 
-	platformDAO, err := dao.NewPlatformDAO(db)
-	require.NoError(t, err, "failed to create PlatformDAO")
+	platformRepo, err := repo.NewPlatformRepo(db)
+	require.NoError(t, err, "failed to create PlatformRepo")
 
-	repoDAO, err := dao.NewRepoDAO(db)
-	require.NoError(t, err, "failed to create RepoDAO")
+	repoRepo, err := repo.NewRepoRepo(db)
+	require.NoError(t, err, "failed to create repo repository")
 
 	providerMgr := sdkrt.NewManager(0)
-	svc := NewPlatformService(platformDAO, repoDAO, providerMgr)
+	svc := NewPlatformService(platformRepo, repoRepo, providerMgr)
 
 	return db, svc
 }

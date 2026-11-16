@@ -88,7 +88,7 @@ func TestOperationLogChainSurvivesMySQL(t *testing.T) {
 	}
 
 	// 落库值必须没有亚毫秒成分。
-	stored, err := svc.opLogDAO.Latest()
+	stored, err := svc.opLogRepo.Latest()
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	require.Zero(t, stored.CreatedAt.Nanosecond()%int(time.Millisecond),

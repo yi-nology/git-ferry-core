@@ -9,35 +9,35 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/errors"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"github.com/yi-nology/go-git-platform/filter/branchfilter"
 )
 
 // WebhookService handles webhook-related operations.
 type WebhookService struct {
-	ruleDAO  *dao.WebhookRuleDAO
-	eventDAO *dao.WebhookEventDAO
-	repoDAO  *dao.RepoDAO
+	ruleRepo  *repo.WebhookRuleRepo
+	eventRepo *repo.WebhookEventRepo
+	repoRepo  *repo.RepoRepo
 }
 
 // NewWebhookService creates a new WebhookService instance.
-func NewWebhookService(ruleDAO *dao.WebhookRuleDAO, eventDAO *dao.WebhookEventDAO, repoDAO *dao.RepoDAO) *WebhookService {
+func NewWebhookService(ruleRepo *repo.WebhookRuleRepo, eventRepo *repo.WebhookEventRepo, repoRepo *repo.RepoRepo) *WebhookService {
 	return &WebhookService{
-		ruleDAO:  ruleDAO,
-		eventDAO: eventDAO,
-		repoDAO:  repoDAO,
+		ruleRepo:  ruleRepo,
+		eventRepo: eventRepo,
+		repoRepo:  repoRepo,
 	}
 }
 
 // ListRules returns webhook rules for a repository.
 func (ws *WebhookService) ListRules(ctx context.Context, repoKey string) ([]*model.WebhookRule, error) {
-	return ws.ruleDAO.FindByRepoKey(repoKey)
+	return ws.ruleRepo.FindByRepoKey(repoKey)
 }
 
 // GetRule returns a webhook rule by ID.
 func (ws *WebhookService) GetRule(ctx context.Context, id uint) (*model.WebhookRule, error) {
-	return ws.ruleDAO.FindByID(id)
+	return ws.ruleRepo.FindByID(id)
 }
 
 // 规则默认值。
@@ -72,7 +72,7 @@ func (ws *WebhookService) CreateRule(ctx context.Context, req *model.CreateRuleR
 	}
 	rule.SetTaskKeys(req.TaskKeys)
 
-	if err := ws.ruleDAO.Create(rule); err != nil {
+	if err := ws.ruleRepo.Create(rule); err != nil {
 		return nil, err
 	}
 
@@ -81,7 +81,7 @@ func (ws *WebhookService) CreateRule(ctx context.Context, req *model.CreateRuleR
 
 // UpdateRule updates an existing webhook rule.
 func (ws *WebhookService) UpdateRule(ctx context.Context, req *model.UpdateRuleRequest) (*model.WebhookRule, error) {
-	rule, err := ws.ruleDAO.FindByID(req.ID)
+	rule, err := ws.ruleRepo.FindByID(req.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (ws *WebhookService) UpdateRule(ctx context.Context, req *model.UpdateRuleR
 		rule.Description = *req.Description
 	}
 
-	if err := ws.ruleDAO.Update(rule); err != nil {
+	if err := ws.ruleRepo.Update(rule); err != nil {
 		return nil, err
 	}
 
@@ -127,18 +127,18 @@ func (ws *WebhookService) UpdateRule(ctx context.Context, req *model.UpdateRuleR
 
 // DeleteRule deletes a webhook rule by ID.
 func (ws *WebhookService) DeleteRule(ctx context.Context, id uint) error {
-	return ws.ruleDAO.Delete(id)
+	return ws.ruleRepo.Delete(id)
 }
 
 // ListEvents returns webhook events for a repository.
 func (ws *WebhookService) ListEvents(ctx context.Context, repoKey string, offset, limit int) ([]*model.WebhookEvent, int64, error) {
-	page := dao.DefaultPagination(offset, limit)
-	return ws.eventDAO.FindByRepoKey(repoKey, page)
+	page := repo.DefaultPagination(offset, limit)
+	return ws.eventRepo.FindByRepoKey(repoKey, page)
 }
 
 // MarkEventProcessing 查找事件并标记为 processing,返回该事件供后续处理。
 func (ws *WebhookService) MarkEventProcessing(ctx context.Context, eventID uint) (*model.WebhookEvent, error) {
-	event, err := ws.eventDAO.FindByID(eventID)
+	event, err := ws.eventRepo.FindByID(eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (ws *WebhookService) MarkEventProcessing(ctx context.Context, eventID uint)
 	}
 	event.Status = model.StatusProcessing
 	// targeted UPDATE,避免全字段回写大 payload
-	if err := ws.eventDAO.UpdateStatus(event.ID, model.StatusProcessing, nil); err != nil {
+	if err := ws.eventRepo.UpdateStatus(event.ID, model.StatusProcessing, nil); err != nil {
 		slog.Error("failed to update event status to processing", "eventID", eventID, "error", err)
 	}
 	return event, nil
@@ -159,7 +159,7 @@ func (ws *WebhookService) MarkEventProcessed(event *model.WebhookEvent) error {
 	now := time.Now()
 	event.ProcessedAt = &now
 	event.Status = model.StatusProcessed
-	if err := ws.eventDAO.UpdateStatus(event.ID, model.StatusProcessed, &now); err != nil {
+	if err := ws.eventRepo.UpdateStatus(event.ID, model.StatusProcessed, &now); err != nil {
 		slog.Error("failed to update event status to processed", "eventID", event.ID, "error", err)
 		return err
 	}
@@ -175,7 +175,7 @@ func (ws *WebhookService) MarkEventFailed(event *model.WebhookEvent, reason stri
 	event.ProcessedAt = &now
 	event.Status = model.StatusFailed
 	event.ErrorMessage = reason
-	if err := ws.eventDAO.UpdateStatusAndError(event.ID, model.StatusFailed, &now, reason); err != nil {
+	if err := ws.eventRepo.UpdateStatusAndError(event.ID, model.StatusFailed, &now, reason); err != nil {
 		slog.Error("failed to update event status to failed", "eventID", event.ID, "error", err)
 		return err
 	}
@@ -192,7 +192,7 @@ func (ws *WebhookService) MarkEventFailed(event *model.WebhookEvent, reason stri
 // 只回收**超过 olderThan** 的:正在处理中的事件不该被误伤
 // (一次大同步可能跑很久)。
 func (ws *WebhookService) RecoverStuckEvents(ctx context.Context, olderThan time.Duration) (int64, error) {
-	events, err := ws.eventDAO.FindStuckProcessing(ctx, olderThan)
+	events, err := ws.eventRepo.FindStuckProcessing(ctx, olderThan)
 	if err != nil {
 		return 0, err
 	}
@@ -208,12 +208,12 @@ func (ws *WebhookService) RecoverStuckEvents(ctx context.Context, olderThan time
 
 // FindEventByEventID returns a webhook event by event ID (internal use).
 func (ws *WebhookService) FindEventByEventID(eventID string) (*model.WebhookEvent, error) {
-	return ws.eventDAO.FindByEventID(eventID)
+	return ws.eventRepo.FindByEventID(eventID)
 }
 
 // FindEventByID returns a webhook event by ID (internal use).
 func (ws *WebhookService) FindEventByID(id uint) (*model.WebhookEvent, error) {
-	return ws.eventDAO.FindByID(id)
+	return ws.eventRepo.FindByID(id)
 }
 
 // ApplyRules applies webhook rules to an event.
@@ -222,7 +222,7 @@ func (ws *WebhookService) FindEventByID(id uint) (*model.WebhookEvent, error) {
 // 以前失败只进日志,事件照样被标成 processed ⇒ 事件列表里与成功事件无法区分,
 // 也没有任何可观测信号说"这次没同步",更没有可自动重试的对象。
 func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event *model.WebhookEvent, lastTriggerTime *sync.Map, runTaskFn func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error, webhookEventID *uint) error {
-	rules, err := ws.ruleDAO.FindByRepoKey(repoKey)
+	rules, err := ws.ruleRepo.FindByRepoKey(repoKey)
 	if err != nil {
 		slog.Error("find rules failed", "repoKey", repoKey, "error", err)
 		return err
@@ -286,10 +286,10 @@ func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event 
 
 // CreateWebhookEvent creates a new webhook event.
 func (ws *WebhookService) CreateWebhookEvent(event *model.WebhookEvent) error {
-	return ws.eventDAO.Create(event)
+	return ws.eventRepo.Create(event)
 }
 
 // CleanupOldEvents removes webhook events older than the specified duration.
 func (ws *WebhookService) CleanupOldEvents(ctx context.Context, maxAge time.Duration) (int64, error) {
-	return ws.eventDAO.CleanupOlderThan(ctx, maxAge)
+	return ws.eventRepo.CleanupOlderThan(ctx, maxAge)
 }

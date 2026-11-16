@@ -8,8 +8,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"gorm.io/gorm"
 )
 
@@ -25,13 +25,13 @@ func setupTaskServiceTestDB(t *testing.T) (*gorm.DB, *TaskService) {
 	err = db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}, &model.Repo{})
 	require.NoError(t, err, "failed to migrate test db")
 
-	taskDAO := dao.NewSyncTaskDAO(db)
-	runDAO := dao.NewSyncRunDAO(db)
-	runStepDAO := dao.NewSyncRunStepDAO(db)
-	repoDAO, err := dao.NewRepoDAO(db)
-	require.NoError(t, err, "failed to create RepoDAO")
+	taskRepo := repo.NewSyncTaskRepo(db)
+	runRepo := repo.NewSyncRunRepo(db)
+	runStepRepo := repo.NewSyncRunStepRepo(db)
+	repoRepo, err := repo.NewRepoRepo(db)
+	require.NoError(t, err, "failed to create repo repository")
 
-	svc := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
+	svc := NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo)
 
 	return db, svc
 }

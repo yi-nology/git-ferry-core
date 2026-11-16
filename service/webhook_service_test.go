@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"gorm.io/gorm"
 )
 
@@ -33,14 +33,14 @@ func setupWebhookServiceTestDB(t *testing.T) (*gorm.DB, *WebhookService) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 
-	ruleDAO := dao.NewWebhookRuleDAO(db)
-	eventDAO := dao.NewWebhookEventDAO(db)
-	repoDAO, err := dao.NewRepoDAO(db)
+	ruleRepo := repo.NewWebhookRuleRepo(db)
+	eventRepo := repo.NewWebhookEventRepo(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	if err != nil {
-		t.Fatalf("failed to create RepoDAO: %v", err)
+		t.Fatalf("failed to create repo repository: %v", err)
 	}
 
-	svc := NewWebhookService(ruleDAO, eventDAO, repoDAO)
+	svc := NewWebhookService(ruleRepo, eventRepo, repoRepo)
 
 	return db, svc
 }

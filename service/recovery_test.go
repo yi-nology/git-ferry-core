@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // newRecoveryTestService 带恢复点存储的轻量服务。
@@ -25,7 +25,7 @@ func newRecoveryTestService(t *testing.T, backupDir string) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	return &Service{
-		recovery: dao.NewRecoveryPointDAO(db),
+		recovery: repo.NewRecoveryPointRepo(db),
 		config:   &model.Config{Sync: model.SyncConfig{BackupDir: backupDir}},
 		bgCtx:    context.Background(),
 	}

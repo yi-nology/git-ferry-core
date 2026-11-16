@@ -3,7 +3,7 @@
 // 评分 = 若干**维度**(reliability / freshness / schedule / safety / completeness)
 // 按权重加权聚合;每个维度产出 (分数, 结论 reason, 明细 detail, 建议动作 action)。
 //
-// 事实(Facts)由调用方从 DAO 采集后传入,本包是纯逻辑,便于单测。
+// 事实(Facts)由调用方从 Repo 采集后传入,本包是纯逻辑,便于单测。
 package health
 
 import (

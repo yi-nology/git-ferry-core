@@ -11,8 +11,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	_ "github.com/yi-nology/go-git-platform/adapter/all"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
@@ -31,18 +31,18 @@ func setupOrgBulkDB(t *testing.T) (*Service, *gorm.DB) {
 		&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{},
 	), "migrate test db")
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(0)
 
 	svc := &Service{
 		config:    &Config{Git: model.GitConfig{TempDir: t.TempDir()}},
 		db:        db,
-		repos:     NewRepoService(repoDAO, platformDAO, mgr),
-		tasks:     NewTaskService(dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db), dao.NewSyncRunStepDAO(db), repoDAO),
-		platforms: NewPlatformService(platformDAO, repoDAO, mgr),
+		repos:     NewRepoService(repoRepo, platformRepo, mgr),
+		tasks:     NewTaskService(repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db), repo.NewSyncRunStepRepo(db), repoRepo),
+		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
 	}
 	return svc, db
 }

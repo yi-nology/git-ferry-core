@@ -16,10 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/mirror/history"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // newHistoryTestDB 造一个带历史同步表的内存库。
@@ -226,8 +226,8 @@ func TestHistoryServiceNeedsTargetRepo(t *testing.T) {
 	})
 	require.Error(t, err, "两侧仓库至少各给一个")
 
-	// 执行记录 DAO 的分页也要能用。
-	var _ dao.Pagination
+	// 执行记录 Repo 的分页也要能用。
+	var _ repo.Pagination
 	_ = os.Getenv("")
 }
 

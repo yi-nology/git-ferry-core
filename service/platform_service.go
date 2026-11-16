@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -17,64 +17,64 @@ import (
 
 // PlatformService 平台服务
 type PlatformService struct {
-	platformDAO *dao.PlatformDAO
-	repoDAO     *dao.RepoDAO
-	providerMgr *sdkrt.Manager
-	hooks       *sdkprov.Hooks
+	platformRepo *repo.PlatformRepo
+	repoRepo     *repo.RepoRepo
+	providerMgr  *sdkrt.Manager
+	hooks        *sdkprov.Hooks
 }
 
 // NewPlatformService 创建 PlatformService
-func NewPlatformService(platformDAO *dao.PlatformDAO, repoDAO *dao.RepoDAO, providerMgr *sdkrt.Manager) *PlatformService {
+func NewPlatformService(platformRepo *repo.PlatformRepo, repoRepo *repo.RepoRepo, providerMgr *sdkrt.Manager) *PlatformService {
 	return &PlatformService{
-		platformDAO: platformDAO,
-		repoDAO:     repoDAO,
-		providerMgr: providerMgr,
+		platformRepo: platformRepo,
+		repoRepo:     repoRepo,
+		providerMgr:  providerMgr,
 	}
 }
 
 // CreatePlatform 创建平台
 func (s *PlatformService) CreatePlatform(ctx context.Context, platform *model.Platform) error {
-	return s.platformDAO.Create(platform)
+	return s.platformRepo.Create(platform)
 }
 
 // GetPlatform 获取平台
 func (s *PlatformService) GetPlatform(ctx context.Context, key string) (*model.Platform, error) {
-	return s.platformDAO.FindByKey(key)
+	return s.platformRepo.FindByKey(key)
 }
 
 // GetPlatformByID 根据 ID 获取平台
 func (s *PlatformService) GetPlatformByID(ctx context.Context, id uint) (*model.Platform, error) {
-	return s.platformDAO.FindByID(id)
+	return s.platformRepo.FindByID(id)
 }
 
 // ListPlatforms 列出所有平台
 func (s *PlatformService) ListPlatforms(ctx context.Context) ([]*model.Platform, error) {
-	return s.platformDAO.FindAll()
+	return s.platformRepo.FindAll()
 }
 
 // UpdatePlatform 更新平台
 func (s *PlatformService) UpdatePlatform(ctx context.Context, platform *model.Platform) error {
-	return s.platformDAO.Update(platform)
+	return s.platformRepo.Update(platform)
 }
 
 // DeletePlatform 删除平台
 func (s *PlatformService) DeletePlatform(ctx context.Context, key string) error {
-	return s.platformDAO.Delete(key)
+	return s.platformRepo.Delete(key)
 }
 
 // SetDefaultPlatform 设置默认平台
 func (s *PlatformService) SetDefaultPlatform(ctx context.Context, key string) error {
-	return s.platformDAO.SetDefault(key)
+	return s.platformRepo.SetDefault(key)
 }
 
 // UpdatePlatformStatus 更新平台状态
 func (s *PlatformService) UpdatePlatformStatus(ctx context.Context, key, status, testResult string) error {
-	return s.platformDAO.UpdateStatus(key, status, testResult)
+	return s.platformRepo.UpdateStatus(key, status, testResult)
 }
 
 // TestPlatformConnection 测试平台连接
 func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string) (*sdkmodel.TestConnectionResult, error) {
-	platform, err := s.platformDAO.FindByKey(key)
+	platform, err := s.platformRepo.FindByKey(key)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query platform failed")
 	}
@@ -98,7 +98,7 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 
 // ListPlatformRepos 列出平台上的仓库
 func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkmodel.PlatformRepo, error) {
-	platform, err := s.platformDAO.FindByKey(key)
+	platform, err := s.platformRepo.FindByKey(key)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query platform failed")
 	}
@@ -129,7 +129,7 @@ func (s *PlatformService) SyncPlatformRepos(ctx context.Context, key string) (in
 
 // SyncPlatformReposFiltered 按过滤器同步平台仓库(排除 archived/fork 等)。
 func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key string, filter *RepoImportFilter) (int, error) {
-	platform, err := s.platformDAO.FindByKey(key)
+	platform, err := s.platformRepo.FindByKey(key)
 	if err != nil {
 		return 0, oekiterrors.Wrap(err, "query platform failed")
 	}
@@ -146,7 +146,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 		return 0, oekiterrors.Wrap(err, "list repos failed")
 	}
 
-	existingRepos, existingErr := s.repoDAO.FindByPlatformID(platform.ID)
+	existingRepos, existingErr := s.repoRepo.FindByPlatformID(platform.ID)
 	if existingErr != nil {
 		slog.Warn("sync repo: failed to load existing repos, treating all as new",
 			"platform_id", platform.ID, "error", existingErr)
@@ -156,7 +156,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 	plan := planRepoUpsert(platform, repos, indexExistingByKey(existingRepos), filter)
 	count := s.persistRepoPlan(plan)
 
-	if err := s.platformDAO.UpdateRepoCount(platform.ID); err != nil {
+	if err := s.platformRepo.UpdateRepoCount(platform.ID); err != nil {
 		slog.Warn("sync repo: failed to update platform repo count", "platform_id", platform.ID, "error", err)
 	}
 	return count, nil
@@ -200,24 +200,24 @@ func rewriteCloneHost(rawURL string, platform *model.Platform) string {
 
 // ListReposByPlatform 列出平台下的仓库
 func (s *PlatformService) ListReposByPlatform(ctx context.Context, platformKey string) ([]*model.Repo, error) {
-	platform, err := s.platformDAO.FindByKey(platformKey)
+	platform, err := s.platformRepo.FindByKey(platformKey)
 	if err != nil {
 		return nil, err
 	}
 	if platform == nil {
 		return nil, oekiterrors.New(fmt.Sprintf("platform not found: %s", platformKey))
 	}
-	return s.repoDAO.FindByPlatformID(platform.ID)
+	return s.repoRepo.FindByPlatformID(platform.ID)
 }
 
 // CountReposByPlatform 统计平台下的仓库数量(不加载数据)
 func (s *PlatformService) CountReposByPlatform(ctx context.Context, platformKey string) (int64, error) {
-	platform, err := s.platformDAO.FindByKey(platformKey)
+	platform, err := s.platformRepo.FindByKey(platformKey)
 	if err != nil {
 		return 0, err
 	}
 	if platform == nil {
 		return 0, oekiterrors.New(fmt.Sprintf("platform not found: %s", platformKey))
 	}
-	return s.repoDAO.CountByPlatformID(platform.ID)
+	return s.repoRepo.CountByPlatformID(platform.ID)
 }

@@ -23,9 +23,33 @@
   `*redisx.Client`；distlock / Semaphore 的 key 布局不变（滚动升级兼容）。
 - 依赖地板：logx v0.10.0 → v0.11.0、concurrency v0.35.0 → v0.36.0
   （gormx / redisx 传递抬升）。
-- 有意不迁：`dao.Paginate` 保持 offset 契约（gormx.Paginate 是 page 制）；
-  DAO/service 的 `db.Save` 全量改写为 crud/gormrepo 留待 R1 状态模型
-  落地后按 DAO 增量做（见 ROADMAP.md）。
+- 有意不迁：`dao.Paginate` 保持 offset 契约（gormx.Paginate 是 page 制）。
+
+### Changed（repo 层收编 gormrepo + Save 丢更新防护）
+
+- **`dao` 包 → `repo` 包**：`XxxDAO` → `XxxRepo`、`NewXxxDAO` →
+  `NewXxxRepo`、文件 `*_dao.go` → `*_repo.go`；壳层 `internal/corebridge`
+  别名同步改。**破坏性变更**：所有
+  `github.com/yi-nology/git-ferry-core/dao` 引用改为 `.../repo`
+  （壳层随 core 升版同步）。
+- **14 个 Repo 嵌入 gormrepo 基座**：通用按主键建/读/改/删走
+  `gormrepo.GormRepository[T, ID]`；按业务键取单条走
+  `GetByCondition`（not-found 仍还原为 `(nil, nil)` 历史契约）。
+- **18 处 `db.Save` 全部替换**（`grep '\.Save('` 已清零）：
+  - 配置实体 Update 走**列白名单**：不写回 `id/created_at/updated_at/
+    deleted_at`，且 0 行命中即结束（不再触发 Save 的 upsert 旁路）；
+  - `ForcePushApproval.ConsumeApproved` 改「候选行 + `consumed_at IS NULL`
+    条件更新」的 CAS：同一条放行不会被并发消费两次；`Revoke` 只写
+    `revoked_at/revoked_by`，不会把并发的消费状态覆盖回未消费；
+  - `HistoryOverride.Upsert` 更新分支走列白名单；`Template.Save` 改
+    `ON CONFLICT` 业务列 upsert；`WebhookRule.Update` 关联替换后按列
+    白名单回写；`SyncRunRepo.UpdateInTx` 供「run 终态 + outbox 同事务」
+    路径使用。
+  - 仍保留手写 SQL 的四个 Repo（execution_job 的 CAS/原语队列、
+    outbox_event 的批标记、pending_trigger 的 upsert、reconcile 的
+    复合主键 upsert）按设计不收编泛型层。
+- 回归测试：`repo/save_protection_test.go`（不 upsert / `created_at`
+  不被覆写 / 放行只消费一次 / 撤销不覆盖消费状态）。
 
 ## [v0.50.0] - 2026-11-17
 

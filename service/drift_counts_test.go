@@ -11,8 +11,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
@@ -81,9 +81,9 @@ func TestDetectDrift_ComparesSourceWithTarget(t *testing.T) {
 		SourceBranch: "main", TargetBranch: "main", Enabled: true,
 	}).Error)
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(30 * 1e9)
 
@@ -92,11 +92,11 @@ func TestDetectDrift_ComparesSourceWithTarget(t *testing.T) {
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: tempDir}},
-		repos:     NewRepoService(repoDAO, platformDAO, mgr),
-		platforms: NewPlatformService(platformDAO, repoDAO, mgr),
+		repos:     NewRepoService(repoRepo, platformRepo, mgr),
+		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
 		tasks: NewTaskService(
-			dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db),
-			dao.NewSyncRunStepDAO(db), repoDAO,
+			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db),
+			repo.NewSyncRunStepRepo(db), repoRepo,
 		),
 	}
 
@@ -153,19 +153,19 @@ func TestDetectDrift_RespectsBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Platform{}, &model.Repo{}, &model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}))
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(30 * 1e9)
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},
-		repos:     NewRepoService(repoDAO, platformDAO, mgr),
-		platforms: NewPlatformService(platformDAO, repoDAO, mgr),
+		repos:     NewRepoService(repoRepo, platformRepo, mgr),
+		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
 		tasks: NewTaskService(
-			dao.NewSyncTaskDAO(db), dao.NewSyncRunDAO(db),
-			dao.NewSyncRunStepDAO(db), repoDAO,
+			repo.NewSyncTaskRepo(db), repo.NewSyncRunRepo(db),
+			repo.NewSyncRunStepRepo(db), repoRepo,
 		),
 	}
 

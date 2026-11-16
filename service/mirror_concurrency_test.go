@@ -52,11 +52,11 @@ func (b *blockingCloneBackend) Clone(ctx context.Context, _ gitbackend.CloneOpti
 //
 // 修法:创建 run **之前**同步占位(try-acquire),占位一直持有到整段 run 结束。
 func TestExecuteMirrorRun_SameChannelMutualExclusive(t *testing.T) {
-	m, repoDAO, db := setupMirrorServiceTest(t)
+	m, repoRepo, db := setupMirrorServiceTest(t)
 	ctx := context.Background()
 	m.svc.bgCtx = context.Background()
 
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "github/acme/app", Name: "app", Platform: "github",
 		PlatformOwner: "acme", PlatformRepo: "app",
 		CloneURL: "https://github.com/acme/app.git",
@@ -150,11 +150,11 @@ func waitReservationReleased(t *testing.T, m *MirrorService, chID uint) {
 // TestExecuteMirrorRun_ReservationReleasedAfterRun run 结束后必须**释放占位** ——
 // 不释放的话通道会被永久锁死,再也无法发布。
 func TestExecuteMirrorRun_ReservationReleasedAfterRun(t *testing.T) {
-	m, repoDAO, db := setupMirrorServiceTest(t)
+	m, repoRepo, db := setupMirrorServiceTest(t)
 	ctx := context.Background()
 	m.svc.bgCtx = context.Background()
 
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "github/acme/app", Name: "app", Platform: "github",
 		PlatformOwner: "acme", PlatformRepo: "app",
 		CloneURL: "https://github.com/acme/app.git",

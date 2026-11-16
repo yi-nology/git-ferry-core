@@ -12,8 +12,8 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // ===== 持久化执行队列(P2 分布式地基,见 model.ExecutionJob) =====
@@ -64,9 +64,9 @@ func (s *Service) executesJobs() bool {
 // enqueueTaskRun 队列模式的触发入口:入队(同任务合并语义)。
 func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) error {
 	if s.jobs == nil {
-		// fail-closed:队列开启但 DAO 没接线(裸构造)——拒绝而不是静默直跑,
+		// fail-closed:队列开启但 Repo 没接线(裸构造)——拒绝而不是静默直跑,
 		// 否则多实例下去重语义 silently 退化成双执行。
-		return oekiterrors.New("durable queue enabled but execution job DAO not wired")
+		return oekiterrors.New("durable queue enabled but execution job Repo not wired")
 	}
 	enqueued, err := s.jobs.Enqueue(taskKey, trigger, webhookEventID)
 	if err != nil {
@@ -148,7 +148,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 			// 作业放回 pending 且 attempt 不增(毒丸预算只留给崩溃接管)。
 			slog.Warn("job: 执行权被占,退避重排(不占接管预算)", "id", job.ID, "task", job.TaskKey, "error", err)
 			if rerr := s.jobs.Reschedule(job.ID, s.instanceID, jobBusyBackoff); rerr != nil {
-				if oekiterrors.Is(rerr, dao.ErrLeaseLost) {
+				if oekiterrors.Is(rerr, repo.ErrLeaseLost) {
 					slog.Warn("job: 退避重排时已失锁(作业已被其它实例接管),本实例停手", "id", job.ID)
 					return
 				}
@@ -187,7 +187,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 			runID = run.ID
 		}
 		if cerr := s.jobs.Complete(job.ID, s.instanceID, runID, execErr); cerr != nil {
-			if oekiterrors.Is(cerr, dao.ErrLeaseLost) {
+			if oekiterrors.Is(cerr, repo.ErrLeaseLost) {
 				slog.Error("job: 完成落库时已失锁(执行结果未入终态,作业已被其它实例接管重试)", "id", job.ID)
 				return
 			}
@@ -202,7 +202,7 @@ func (s *Service) failJobAndRelease(job model.ExecutionJob, release func(), caus
 	release()
 	slog.Warn("job: 执行前失败,作业判失败", "id", job.ID, "task", job.TaskKey, "error", cause)
 	if cerr := s.jobs.Complete(job.ID, s.instanceID, 0, cause); cerr != nil {
-		if oekiterrors.Is(cerr, dao.ErrLeaseLost) {
+		if oekiterrors.Is(cerr, repo.ErrLeaseLost) {
 			slog.Warn("job: 失败落库时已失锁(作业已被其它实例接管重试)", "id", job.ID)
 			return
 		}
@@ -236,7 +236,7 @@ func (s *Service) renewLeaseTick(id uint, onLost func()) bool {
 	switch {
 	case err == nil:
 		return true
-	case oekiterrors.Is(err, dao.ErrLeaseLost):
+	case oekiterrors.Is(err, repo.ErrLeaseLost):
 		// 失锁:执行权已被其它实例接管,继续执行 = 脑裂分叉推送。
 		slog.Error("job: 续租发现已失锁,中止本次执行", "id", id, "error", err)
 		if onLost != nil {

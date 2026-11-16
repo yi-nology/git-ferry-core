@@ -7,8 +7,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
@@ -25,14 +25,14 @@ func setupRepoServiceTestDB(t *testing.T) (*gorm.DB, *RepoService) {
 	err = db.AutoMigrate(&model.Repo{}, &model.Platform{})
 	require.NoError(t, err, "failed to migrate test db")
 
-	repoDAO, err := dao.NewRepoDAO(db)
-	require.NoError(t, err, "failed to create RepoDAO")
+	repoRepo, err := repo.NewRepoRepo(db)
+	require.NoError(t, err, "failed to create repo repository")
 
-	platformDAO, err := dao.NewPlatformDAO(db)
-	require.NoError(t, err, "failed to create PlatformDAO")
+	platformRepo, err := repo.NewPlatformRepo(db)
+	require.NoError(t, err, "failed to create PlatformRepo")
 
 	providerMgr := sdkrt.NewManager(0)
-	svc := NewRepoService(repoDAO, platformDAO, providerMgr)
+	svc := NewRepoService(repoRepo, platformRepo, providerMgr)
 
 	return db, svc
 }
@@ -174,7 +174,7 @@ func TestRepoService_ListReposWithFilter(t *testing.T) {
 	}
 
 	// List with filter
-	filter := &dao.RepoFilter{
+	filter := &repo.RepoFilter{
 		Platform: "github",
 	}
 

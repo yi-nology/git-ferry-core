@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
@@ -66,29 +66,29 @@ func TestReceiveWebhook_MultipleDeliveries_AllRecorded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	ruleDAO := dao.NewWebhookRuleDAO(db)
-	eventDAO := dao.NewWebhookEventDAO(db)
+	ruleRepo := repo.NewWebhookRuleRepo(db)
+	eventRepo := repo.NewWebhookEventRepo(db)
 
 	platform := &model.Platform{
 		Key: "gh", Name: "GitHub", Type: string(sdkmodel.PlatformGitHub), APIURL: srv.URL + "/",
 	}
-	require.NoError(t, platformDAO.Create(platform))
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, platformRepo.Create(platform))
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "octo/demo", Name: "demo", PlatformID: platform.ID, Platform: platform.Type,
 		PlatformOwner: "octo", PlatformRepo: "demo",
 		CloneURL: "https://github.com/octo/demo.git",
 		Status:   model.RepoStatusActive,
-		// 验签用的密钥(加密存储,DAO 负责)
+		// 验签用的密钥(加密存储,Repo 负责)
 		WebhookSecret: secret,
 	}))
 
 	svc := &Service{
-		repos:    NewRepoService(repoDAO, platformDAO, sdkrt.NewManager(0)),
-		webhooks: NewWebhookService(ruleDAO, eventDAO, repoDAO),
+		repos:    NewRepoService(repoRepo, platformRepo, sdkrt.NewManager(0)),
+		webhooks: NewWebhookService(ruleRepo, eventRepo, repoRepo),
 		bgCtx:    context.Background(),
 	}
 

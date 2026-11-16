@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/health"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 func setupHealthTestService(t *testing.T) (*Service, *gorm.DB) {
@@ -26,10 +26,10 @@ func setupHealthTestService(t *testing.T) (*Service, *gorm.DB) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	taskDAO := dao.NewSyncTaskDAO(db)
-	runDAO := dao.NewSyncRunDAO(db)
-	stepDAO := dao.NewSyncRunStepDAO(db)
-	return &Service{tasks: NewTaskService(taskDAO, runDAO, stepDAO, nil)}, db
+	taskRepo := repo.NewSyncTaskRepo(db)
+	runRepo := repo.NewSyncRunRepo(db)
+	stepRepo := repo.NewSyncRunStepRepo(db)
+	return &Service{tasks: NewTaskService(taskRepo, runRepo, stepRepo, nil)}, db
 }
 
 // TestHealthSnapshot_ReportsStepLevelFailures 健康评分必须报出"失败发生在哪一步"。
@@ -43,18 +43,18 @@ func TestHealthSnapshot_ReportsStepLevelFailures(t *testing.T) {
 	svc, db := setupHealthTestService(t)
 
 	task := &model.SyncTask{Key: "health-steps", Name: "带步骤失败的任务", Enabled: true}
-	require.NoError(t, dao.NewSyncTaskDAO(db).Create(task))
+	require.NoError(t, repo.NewSyncTaskRepo(db).Create(task))
 
 	end := time.Now().Add(-time.Hour)
 	run := &model.SyncRun{
 		TaskKey: task.Key, TriggerSource: "manual", Status: "success",
 		StartTime: end, EndTime: &end, ErrorType: "network", RetryTotal: 2,
 	}
-	require.NoError(t, dao.NewSyncRunDAO(db).Create(run))
-	require.NoError(t, dao.NewSyncRunStepDAO(db).Create(&model.SyncRunStep{
+	require.NoError(t, repo.NewSyncRunRepo(db).Create(run))
+	require.NoError(t, repo.NewSyncRunStepRepo(db).Create(&model.SyncRunStep{
 		RunID: run.ID, StepName: "clone", Status: "success",
 	}))
-	require.NoError(t, dao.NewSyncRunStepDAO(db).Create(&model.SyncRunStep{
+	require.NoError(t, repo.NewSyncRunStepRepo(db).Create(&model.SyncRunStep{
 		RunID: run.ID, StepName: "push", Status: "failed", ErrorMsg: "boom",
 	}))
 
@@ -116,9 +116,9 @@ func TestHealthSnapshot_RPONotTruncatedByWindow(t *testing.T) {
 	svc, db := setupHealthTestService(t)
 
 	task := &model.SyncTask{Key: "health-rpo", Name: "RPO 任务", Enabled: true}
-	require.NoError(t, dao.NewSyncTaskDAO(db).Create(task))
+	require.NoError(t, repo.NewSyncTaskRepo(db).Create(task))
 
-	runDAO := dao.NewSyncRunDAO(db)
+	runRepo := repo.NewSyncRunRepo(db)
 	end := time.Now().Add(-25 * time.Hour)
 	for i := 0; i < 12; i++ {
 		r := &model.SyncRun{
@@ -128,7 +128,7 @@ func TestHealthSnapshot_RPONotTruncatedByWindow(t *testing.T) {
 		if i == 1 { // 第 2 条:唯一备份成功,窗口外
 			r.BackupStatus = model.BackupStatusSuccess
 		}
-		require.NoError(t, runDAO.Create(r))
+		require.NoError(t, runRepo.Create(r))
 	}
 
 	snap, err := svc.HealthSnapshot(context.Background(), 10, nil)

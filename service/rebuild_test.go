@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // newRebuildTestService 造一个带真实临时目录的服务(只测 rebuild 语义,不碰 executor)。
@@ -28,26 +28,26 @@ func newRebuildTestService(t *testing.T, key string) (*Service, string, func()) 
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	taskDAO := dao.NewSyncTaskDAO(db)
-	runDAO := dao.NewSyncRunDAO(db)
-	runStepDAO := dao.NewSyncRunStepDAO(db)
-	repoDAO, err := dao.NewRepoDAO(db)
+	taskRepo := repo.NewSyncTaskRepo(db)
+	runRepo := repo.NewSyncRunRepo(db)
+	runStepRepo := repo.NewSyncRunStepRepo(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
 
 	tempDir := t.TempDir()
 	svc := &Service{
-		tasks:   NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO),
+		tasks:   NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo),
 		guard:   newLocalGuard(2),
-		pending: dao.NewPendingTriggerDAO(db),
+		pending: repo.NewPendingTriggerRepo(db),
 		bgCtx:   context.Background(),
 		config:  &model.Config{Git: model.GitConfig{TempDir: tempDir}},
 	}
 	// repo 服务要装上:executor 的 prepareRunContext 会查源仓库
 	// (查不到 ⇒ 返回错误而不是 panic,接线用例才能正常跑完)。
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
-	svc.repos = NewRepoService(repoDAO, platformDAO, nil)
-	require.NoError(t, taskDAO.Create(&model.SyncTask{
+	svc.repos = NewRepoService(repoRepo, platformRepo, nil)
+	require.NoError(t, taskRepo.Create(&model.SyncTask{
 		Key: key, Name: "rebuild", Enabled: true, SourceBranch: "main", TargetBranch: "main",
 		SourceRepoKey: "no-such-repo", TargetRepoKey: "no-such-repo",
 	}))

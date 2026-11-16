@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // setupMirrorServiceTest 建仅 DB 依赖的 MirrorService（backup 模式不触发 git）。
-func setupMirrorServiceTest(t *testing.T) (*MirrorService, *dao.RepoDAO, *gorm.DB) {
+func setupMirrorServiceTest(t *testing.T) (*MirrorService, *repo.RepoRepo, *gorm.DB) {
 	t.Helper()
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
@@ -30,23 +30,23 @@ func setupMirrorServiceTest(t *testing.T) (*MirrorService, *dao.RepoDAO, *gorm.D
 		Git:  model.GitConfig{TempDir: t.TempDir()},
 		Sync: model.SyncConfig{BackupDir: t.TempDir()},
 	}
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
-	svc := &Service{config: cfg, repos: NewRepoService(repoDAO, platformDAO, nil)}
+	svc := &Service{config: cfg, repos: NewRepoService(repoRepo, platformRepo, nil)}
 
 	m, err := NewMirrorService(svc, db)
 	require.NoError(t, err)
-	return m, repoDAO, db
+	return m, repoRepo, db
 }
 
 // TestMirrorChannelCRUD_BackupMode backup 模式全程不碰 git：建/列/改/删 + 二次确认。
 func TestMirrorChannelCRUD_BackupMode(t *testing.T) {
-	m, repoDAO, db := setupMirrorServiceTest(t)
+	m, repoRepo, db := setupMirrorServiceTest(t)
 	ctx := context.Background()
 
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "github/acme/app", Name: "app", Platform: "github",
 		PlatformOwner: "acme", PlatformRepo: "app",
 		CloneURL: "https://github.com/acme/app.git",
@@ -71,7 +71,7 @@ func TestMirrorChannelCRUD_BackupMode(t *testing.T) {
 	require.NotEmpty(t, raw.Credential)
 	assert.NotContains(t, raw.Credential, "s3cr3t-token", "凭据不能明文入库")
 
-	list, total, err := m.ListMirrorChannels(dao.DefaultPagination(0, 20))
+	list, total, err := m.ListMirrorChannels(repo.DefaultPagination(0, 20))
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 	require.Len(t, list, 1)
@@ -104,16 +104,16 @@ func TestMirrorChannelCRUD_BackupMode(t *testing.T) {
 	// 删除通道：确认名必须匹配
 	require.Error(t, m.DeleteMirrorChannel("wrong", ch.ID))
 	require.NoError(t, m.DeleteMirrorChannel("acme-backup", ch.ID))
-	_, total, err = m.ListMirrorChannels(dao.DefaultPagination(0, 20))
+	_, total, err = m.ListMirrorChannels(repo.DefaultPagination(0, 20))
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, total)
 }
 
 // TestMirrorChannelCreateValidation 入参校验（不落库）。
 func TestMirrorChannelCreateValidation(t *testing.T) {
-	m, repoDAO, _ := setupMirrorServiceTest(t)
+	m, repoRepo, _ := setupMirrorServiceTest(t)
 	ctx := context.Background()
-	require.NoError(t, repoDAO.Create(&model.Repo{Key: "k/n/r", Name: "n", Platform: "github"}))
+	require.NoError(t, repoRepo.Create(&model.Repo{Key: "k/n/r", Name: "n", Platform: "github"}))
 
 	targets := []MirrorTargetInput{{Remote: "origin", RepoURL: "https://x/y.git"}}
 
@@ -166,9 +166,9 @@ func TestMirrorChannelCreateValidation(t *testing.T) {
 // 还要盯住「钉扎信息不能丢」:它一旦丢失(没落库 / 标记成不持久),
 // 就等于重启后悄悄退化成不校验 —— 比没有这个功能更危险。
 func TestMirrorTargetSSHPinningRoundTrip(t *testing.T) {
-	m, repoDAO, db := setupMirrorServiceTest(t)
+	m, repoRepo, db := setupMirrorServiceTest(t)
 	ctx := context.Background()
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "github/acme/app", Name: "app", Platform: "github",
 		PlatformOwner: "acme", PlatformRepo: "app",
 		CloneURL: "https://github.com/acme/app.git",
@@ -265,12 +265,12 @@ func TestCompileScrubRulesAllowlist(t *testing.T) {
 // TestMirrorChannelCreate_RejectsTargetSameAsSource 自毁预检(服务层):
 // 目标 URL 与源仓库同址(名字不同、URL 相同的错配)在建通道时就拒绝。
 func TestMirrorChannelCreate_RejectsTargetSameAsSource(t *testing.T) {
-	m, repoDAO, _ := setupMirrorServiceTest(t)
+	m, repoRepo, _ := setupMirrorServiceTest(t)
 	ctx := context.Background()
 
 	src := filepath.Join(t.TempDir(), "src")
 	makeHistoryRepo(t, src, map[string]string{"go.mod": "module example.com/src\n"})
-	require.NoError(t, repoDAO.Create(&model.Repo{
+	require.NoError(t, repoRepo.Create(&model.Repo{
 		Key: "internal/src", Name: "src", Platform: "github",
 		CloneURL: src, Status: model.RepoStatusActive,
 	}))

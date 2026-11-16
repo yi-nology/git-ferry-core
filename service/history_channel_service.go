@@ -22,12 +22,12 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/mirror/history"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"github.com/yi-nology/go-git-platform/auth/credential"
 	"github.com/yi-nology/go-git-platform/gitbackend"
 )
@@ -47,10 +47,10 @@ import (
 //     目标树的既有提交原样保留。
 type HistoryService struct {
 	svc       *Service
-	channels  *dao.HistoryChannelDAO
-	targets   *dao.HistoryTargetDAO
-	runs      *dao.HistoryRunDAO
-	overrides *dao.HistoryOverrideDAO
+	channels  *repo.HistoryChannelRepo
+	targets   *repo.HistoryTargetRepo
+	runs      *repo.HistoryRunRepo
+	overrides *repo.HistoryOverrideRepo
 	backend   gitbackend.GitBackend
 	cm        *credential.CryptoManager
 	// locks 保证同一通道的进程内互斥(移植/推送/回滚不可并发)。
@@ -101,10 +101,10 @@ func NewHistoryService(svc *Service, db *gorm.DB) (*HistoryService, error) {
 	}
 	h := &HistoryService{
 		svc:        svc,
-		channels:   dao.NewHistoryChannelDAO(db),
-		targets:    dao.NewHistoryTargetDAO(db),
-		runs:       dao.NewHistoryRunDAO(db),
-		overrides:  dao.NewHistoryOverrideDAO(db),
+		channels:   repo.NewHistoryChannelRepo(db),
+		targets:    repo.NewHistoryTargetRepo(db),
+		runs:       repo.NewHistoryRunRepo(db),
+		overrides:  repo.NewHistoryOverrideRepo(db),
 		backend:    backend,
 		cm:         cm,
 		locks:      syncx.NewKeyedGate(1),
@@ -345,7 +345,7 @@ func (h *HistoryService) updateHistoryChannel(id uint, in HistoryChannelInput) (
 
 // ListHistoryChannels 列出通道。
 func (h *HistoryService) ListHistoryChannels(_ context.Context, offset, limit int) ([]*HistoryChannelDTO, int64, error) {
-	channels, total, err := h.channels.FindAll(dao.Pagination{Offset: offset, Limit: limit})
+	channels, total, err := h.channels.FindAll(repo.Pagination{Offset: offset, Limit: limit})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1160,7 +1160,7 @@ func (h *HistoryService) checkPushDivergence(ctx context.Context, run *model.His
 
 // ListHistoryRuns 列出通道的执行记录。
 func (h *HistoryService) ListHistoryRuns(_ context.Context, channelID uint, offset, limit int) ([]*HistoryRunDTO, int64, error) {
-	runs, total, err := h.runs.FindByChannel(channelID, dao.Pagination{Offset: offset, Limit: limit})
+	runs, total, err := h.runs.FindByChannel(channelID, repo.Pagination{Offset: offset, Limit: limit})
 	if err != nil {
 		return nil, 0, err
 	}

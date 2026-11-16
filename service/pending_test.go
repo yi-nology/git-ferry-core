@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // newPendingTestService 造一个只够测"触发被拒/待补跑记账"的服务(不碰 executor)。
@@ -27,21 +27,21 @@ func newPendingTestService(t *testing.T, key string) (*Service, func()) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	taskDAO := dao.NewSyncTaskDAO(db)
-	runDAO := dao.NewSyncRunDAO(db)
-	runStepDAO := dao.NewSyncRunStepDAO(db)
-	repoDAO, err := dao.NewRepoDAO(db)
+	taskRepo := repo.NewSyncTaskRepo(db)
+	runRepo := repo.NewSyncRunRepo(db)
+	runStepRepo := repo.NewSyncRunStepRepo(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
 
 	svc := &Service{
-		tasks:   NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO),
+		tasks:   NewTaskService(taskRepo, runRepo, runStepRepo, repoRepo),
 		guard:   newLocalGuard(2),
-		pending: dao.NewPendingTriggerDAO(db),
-		jobs:    dao.NewExecutionJobDAO(db),
+		pending: repo.NewPendingTriggerRepo(db),
+		jobs:    repo.NewExecutionJobRepo(db),
 		bgCtx:   context.Background(),
 		config:  &model.Config{},
 	}
-	require.NoError(t, taskDAO.Create(&model.SyncTask{
+	require.NoError(t, taskRepo.Create(&model.SyncTask{
 		Key: key, Name: "pending", Enabled: true, SourceBranch: "main", TargetBranch: "main",
 	}))
 

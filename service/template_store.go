@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/yi-nology/git-ferry-core/dao"
+	"github.com/yi-nology/git-ferry-core/repo"
 	"github.com/yi-nology/git-ferry-core/tpl"
 )
 
@@ -23,11 +23,11 @@ type TemplateStore interface {
 
 // dbTemplateStore 表 backing 的模板库（表 templates）。
 type dbTemplateStore struct {
-	dao *dao.TemplateDAO
+	repo *repo.TemplateRepo
 }
 
 func (s *dbTemplateStore) List() []tpl.Template {
-	list, err := s.dao.All()
+	list, err := s.repo.All()
 	if err != nil {
 		slog.Error("template list failed", "error", err)
 		return []tpl.Template{}
@@ -49,7 +49,7 @@ func (s *dbTemplateStore) ListByTag(tag string) []tpl.Template {
 }
 
 func (s *dbTemplateStore) Get(id string) (*tpl.Template, error) {
-	t, err := s.dao.Get(id)
+	t, err := s.repo.Get(id)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (s *dbTemplateStore) Upsert(t *tpl.Template) (*tpl.Template, error) {
 		t.ID = fmt.Sprintf("tpl-%d", time.Now().UnixNano())
 	}
 	now := time.Now()
-	existing, err := s.dao.Get(t.ID)
+	existing, err := s.repo.Get(t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (s *dbTemplateStore) Upsert(t *tpl.Template) (*tpl.Template, error) {
 	} else {
 		t.CreatedAt, t.UpdatedAt = now, now
 	}
-	if err := s.dao.Save(t); err != nil {
+	if err := s.repo.Save(t); err != nil {
 		return nil, err
 	}
 	out := *t
@@ -84,7 +84,7 @@ func (s *dbTemplateStore) Upsert(t *tpl.Template) (*tpl.Template, error) {
 }
 
 func (s *dbTemplateStore) Delete(id string) error {
-	ok, err := s.dao.Delete(id)
+	ok, err := s.repo.Delete(id)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func (s *dbTemplateStore) Delete(id string) error {
 }
 
 func (s *dbTemplateStore) Resolve(id string) (tpl.Spec, []string, error) {
-	list, err := s.dao.All()
+	list, err := s.repo.All()
 	if err != nil {
 		return tpl.Spec{}, nil, err
 	}

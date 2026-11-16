@@ -11,10 +11,10 @@ import (
 	"github.com/oekit/concurrency/async"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/robfig/cron/v3"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
@@ -35,19 +35,19 @@ type Service struct {
 	approvals     *ForcePushStore
 	retryTracker  *RetryTracker
 	// pending 待补跑 webhook 触发的持久化存储(pending_triggers 表,见 pending.go)。
-	pending *dao.PendingTriggerDAO
+	pending *repo.PendingTriggerRepo
 	// outbox 事务外发盒(outbox_events 表,见 events.go):运行完成事件
 	// 与 run 落库同事务写入,派发器保证通知至少送达一次。
-	outbox *dao.OutboxEventDAO
+	outbox *repo.OutboxEventRepo
 	// jobs 持久化执行队列(execution_jobs 表,见 queue.go);instanceID 为
 	// lease 属主标识。仅 durable_queue=true 时启用。
-	jobs       *dao.ExecutionJobDAO
+	jobs       *repo.ExecutionJobRepo
 	instanceID string
 	// reconciles 对账结果存储(reconcile_results,见 reconcile.go);
 	// 仅 reconcile_interval_hours>0 时启用。
-	reconciles *dao.ReconcileDAO
+	reconciles *repo.ReconcileRepo
 	// recovery 恢复点索引(recovery_points,见 recovery.go)。
-	recovery *dao.RecoveryPointDAO
+	recovery *repo.RecoveryPointRepo
 	// driftSubs 对账漂移订阅者(见 events.go;壳层接告警渠道)。
 	driftSubs       []driftSubscriber
 	driftSubID      uint64
@@ -94,22 +94,22 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	if err := ensureTempDir(cfg.Git.TempDir); err != nil {
 		return nil, err
 	}
-	daos, err := initDAOs(db)
+	repos, err := initRepos(db)
 	if err != nil {
 		return nil, err
 	}
 
-	repoService := NewRepoService(daos.repo, daos.platform, daos.provider)
-	taskService := NewTaskService(daos.task, daos.run, daos.runStep, daos.repo)
-	webhookService := NewWebhookService(daos.rule, daos.event, daos.repo)
-	platformService := NewPlatformService(daos.platform, daos.repo, daos.provider)
-	opLogService := NewOperationLogService(daos.opLog)
+	repoService := NewRepoService(repos.repo, repos.platform, repos.provider)
+	taskService := NewTaskService(repos.task, repos.run, repos.runStep, repos.repo)
+	webhookService := NewWebhookService(repos.rule, repos.event, repos.repo)
+	platformService := NewPlatformService(repos.platform, repos.repo, repos.provider)
+	opLogService := NewOperationLogService(repos.opLog)
 	// provider 生命周期钩子随实例走(WithProviderHooks),构造 provider 时带上。
 	repoService.hooks = so.providerHooks
 	platformService.hooks = so.providerHooks
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	daos.provider.StartJanitor(bgCtx, 10*time.Minute)
+	repos.provider.StartJanitor(bgCtx, 10*time.Minute)
 
 	svc := &Service{
 		config:        cfg,
@@ -126,12 +126,12 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		cronEntryIDs: make(map[string]cron.EntryID),
 		bgCtx:        bgCtx,
 		bgCancel:     bgCancel,
-		pending:      daos.pending,
-		outbox:       daos.outbox,
-		jobs:         daos.jobs,
+		pending:      repos.pending,
+		outbox:       repos.outbox,
+		jobs:         repos.jobs,
 		instanceID:   newInstanceID(),
-		reconciles:   daos.reconcile,
-		recovery:     daos.recovery,
+		reconciles:   repos.reconcile,
+		recovery:     repos.recovery,
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -151,16 +151,16 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	svc.guard = guard
 
 	// 同步策略模板库：表存储（templates）；旧 data/templates.json 仅作历史迁移源。
-	svc.templates = &dbTemplateStore{dao: daos.template}
+	svc.templates = &dbTemplateStore{repo: repos.template}
 
 	// force-push 审批：表存储（force_push_approvals）。
-	svc.approvals = NewForcePushStore(daos.approv)
+	svc.approvals = NewForcePushStore(repos.approv)
 	svc.retryTracker = NewRetryTracker(0)
 	// 重试预算按「连续 auto_retry 链」从 DB 派生:重启不丢、多实例一致。
-	svc.retryTracker.SetChainStats(daos.run.AutoRetryChainStats)
+	svc.retryTracker.SetChainStats(repos.run.AutoRetryChainStats)
 
 	// outbox 接线:运行完成与 outbox 事件同事务落库(见 TaskService.CompleteRun*)。
-	taskService.outbox = daos.outbox
+	taskService.outbox = repos.outbox
 
 	exec, err := executor.NewExecutor(svc)
 	if err != nil {
@@ -525,7 +525,7 @@ func (s *Service) RecordOperation(ctx context.Context, entry *model.OperationLog
 }
 
 // ListOperations 按过滤条件分页返回审计日志。
-func (s *Service) ListOperations(ctx context.Context, offset, limit int, filter *dao.OperationLogFilter) ([]*model.OperationLog, int64, error) {
+func (s *Service) ListOperations(ctx context.Context, offset, limit int, filter *repo.OperationLogFilter) ([]*model.OperationLog, int64, error) {
 	return s.opLogs.List(ctx, offset, limit, filter)
 }
 

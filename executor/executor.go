@@ -39,7 +39,7 @@ type PlatformProvider interface {
 }
 
 // Service is the interface the executor depends on.
-// It exposes only the operations the executor needs — no DAO leakage.
+// It exposes only the operations the executor needs — no Repo leakage.
 type Service interface {
 	GetTempDir(taskKey string) string
 	GetConfig() *model.Config

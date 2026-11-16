@@ -15,8 +15,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -25,7 +25,7 @@ import (
 
 // ===== 测试基建 =====
 
-// newMetadataServiceFixture 构造带 sqlite DAO 的 Service（BackupMetadata /
+// newMetadataServiceFixture 构造带 sqlite Repo 的 Service（BackupMetadata /
 // RestoreMetadata 的 DB 查询路径用）；backupDir 直接注入 Sync 配置。
 func newMetadataServiceFixture(t *testing.T, backupDir string) (*Service, *gorm.DB) {
 	t.Helper()
@@ -34,16 +34,16 @@ func newMetadataServiceFixture(t *testing.T, backupDir string) (*Service, *gorm.
 	require.NoError(t, err, "open test db")
 	require.NoError(t, db.AutoMigrate(&model.Repo{}, &model.Platform{}), "migrate")
 
-	repoDAO, err := dao.NewRepoDAO(db)
+	repoRepo, err := repo.NewRepoRepo(db)
 	require.NoError(t, err)
-	platformDAO, err := dao.NewPlatformDAO(db)
+	platformRepo, err := repo.NewPlatformRepo(db)
 	require.NoError(t, err)
 	mgr := sdkrt.NewManager(0)
 
 	svc := &Service{
 		config:    &Config{Sync: model.SyncConfig{BackupDir: backupDir}},
-		repos:     NewRepoService(repoDAO, platformDAO, mgr),
-		platforms: NewPlatformService(platformDAO, repoDAO, mgr),
+		repos:     NewRepoService(repoRepo, platformRepo, mgr),
+		platforms: NewPlatformService(platformRepo, repoRepo, mgr),
 	}
 	return svc, db
 }

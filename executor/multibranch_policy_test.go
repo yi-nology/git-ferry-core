@@ -155,7 +155,7 @@ func TestPush_MultiBranch_EmptyPolicy_TreatedAsBlock(t *testing.T) {
 // 回归背景(P1,本轮自查发现):判定时放行按**具体分支**记
 // (checkDivergenceForBranch → IsForcePushApproved(taskKey, b, sha)),
 // 而消费点用 task.TargetBranch —— 多分支任务里那是 glob("release/*")⇒
-// DAO 的 WHERE task_key=? AND branch=? 匹配不到任何行 ⇒ found=false ⇒
+// Repo 的 WHERE task_key=? AND branch=? 匹配不到任何行 ⇒ found=false ⇒
 // **放行既不被消费、也不报错**,approved 一直挂着 ⇒
 // "一次性放行"对多分支退化成常驻后门(同一次授权可反复覆盖)。
 func TestPush_MultiBranch_ApprovalIsConsumed(t *testing.T) {

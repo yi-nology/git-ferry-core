@@ -165,7 +165,7 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 			tasks = append(tasks, t)
 		}
 	} else {
-		// 任务列表有上限(dao 侧钳到 200)⇒ 被截断的部分**如实报"未检查"**,
+		// 任务列表有上限(repo 侧钳到 200)⇒ 被截断的部分**如实报"未检查"**,
 		// 不能让人以为"全部都查过了、没问题"。
 		list, total, err := s.ListTasks(ctx, "", 0, 0)
 		if err != nil {

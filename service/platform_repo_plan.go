@@ -90,17 +90,17 @@ func applyMetaUpdate(existing *model.Repo, repo *sdkmodel.PlatformRepo,
 func (s *PlatformService) persistRepoPlan(plan *repoUpsertPlan) int {
 	count := 0
 	if len(plan.ToUpdate) > 0 {
-		if err := s.repoDAO.BatchUpdateRepoMeta(plan.ToUpdate); err != nil {
+		if err := s.repoRepo.BatchUpdateRepoMeta(plan.ToUpdate); err != nil {
 			slog.Error("sync repo: batch update repo meta failed", "error", err, "count", len(plan.ToUpdate))
 		} else {
 			count += len(plan.ToUpdate)
 		}
 	}
 	if len(plan.ToCreate) > 0 {
-		if err := s.repoDAO.BatchCreate(plan.ToCreate, 100); err != nil {
+		if err := s.repoRepo.BatchCreate(plan.ToCreate, 100); err != nil {
 			slog.Error("sync repo: batch create failed", "error", err, "count", len(plan.ToCreate))
 			for _, r := range plan.ToCreate {
-				if err := s.repoDAO.Create(r); err != nil {
+				if err := s.repoRepo.Create(r); err != nil {
 					slog.Error("sync repo: single create failed", "repo", r.Key, "error", err)
 				} else {
 					count++

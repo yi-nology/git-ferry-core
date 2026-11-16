@@ -11,7 +11,7 @@ import (
 )
 
 // TestNewService_WiresAllStores 全链路接线回归:
-// NewService 必须把 DAO 装配到 Service 的每个存储字段。
+// NewService 必须把 Repo 装配到 Service 的每个存储字段。
 //
 // 回归背景(真实事故,随 v0.36.0 发布):svc.outbox 从未在构造函数赋值 ⇒
 // 进程内 outbox 派发器空转(有 nil 守卫不 panic),事件只落库不重投、
@@ -30,12 +30,12 @@ func TestNewService_WiresAllStores(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Stop()
 
-	assert.NotNil(t, svc.outbox, "outbox DAO 必须接线(构造函数赋值)")
-	assert.NotNil(t, svc.pending, "pending DAO 必须接线")
-	assert.NotNil(t, svc.jobs, "execution jobs DAO 必须接线")
+	assert.NotNil(t, svc.outbox, "outbox Repo 必须接线(构造函数赋值)")
+	assert.NotNil(t, svc.pending, "pending Repo 必须接线")
+	assert.NotNil(t, svc.jobs, "execution jobs Repo 必须接线")
 	assert.NotEmpty(t, svc.instanceID, "lease 属主标识必须生成")
-	assert.NotNil(t, svc.reconciles, "reconcile DAO 必须接线")
-	assert.NotNil(t, svc.recovery, "recovery DAO 必须接线")
+	assert.NotNil(t, svc.reconciles, "reconcile Repo 必须接线")
+	assert.NotNil(t, svc.recovery, "recovery Repo 必须接线")
 	assert.NotNil(t, svc.executor.Recovery, "executor 必须注入恢复点记录器")
 	assert.NotNil(t, svc.templates, "templates store 必须接线")
 	assert.NotNil(t, svc.approvals, "force-push approvals 必须接线")

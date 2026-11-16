@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repo"
 )
 
 // ===== 策略即代码(P3):全量导出与回放 =====
@@ -12,7 +12,7 @@ import (
 // ExportTaskPolicies 全部任务(含禁用)的策略导出——确定性 JSON,
 // 按 key 升序,可进 git 做版本化变更(策略走 PR 审阅)。
 func (s *Service) ExportTaskPolicies(_ context.Context) (string, error) {
-	tasks, _, err := s.tasks.taskDAO.FindAll(dao.DefaultPagination(0, 10000))
+	tasks, _, err := s.tasks.taskRepo.FindAll(repo.DefaultPagination(0, 10000))
 	if err != nil {
 		return "", err
 	}
