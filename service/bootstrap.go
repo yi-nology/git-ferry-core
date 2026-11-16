@@ -26,6 +26,8 @@ type appDAOs struct {
 	pending   *dao.PendingTriggerDAO
 	outbox    *dao.OutboxEventDAO
 	jobs      *dao.ExecutionJobDAO
+	retry     *dao.RetryScheduleDAO
+	migration *dao.MigrationMappingDAO
 	reconcile *dao.ReconcileDAO
 	recovery  *dao.RecoveryPointDAO
 	provider  *sdkrt.Manager
@@ -70,6 +72,8 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 		pending:   dao.NewPendingTriggerDAO(db),
 		outbox:    dao.NewOutboxEventDAO(db),
 		jobs:      dao.NewExecutionJobDAO(db),
+		retry:     dao.NewRetryScheduleDAO(db),
+		migration: dao.NewMigrationMappingDAO(db),
 		reconcile: dao.NewReconcileDAO(db),
 		recovery:  dao.NewRecoveryPointDAO(db),
 		provider:  sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(64)),

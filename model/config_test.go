@@ -344,3 +344,153 @@ sync:
 		t.Errorf("negative max must pass as unlimited, got: %v", err)
 	}
 }
+
+// TestValidateDeploymentMode 部署模式硬约束(#42):显式 distributed/worker
+// 不满足组合必须拒绝启动并指名缺项;standalone/零配置保持兼容。
+func TestValidateDeploymentMode(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+	base := func(mode string) *Config {
+		return &Config{Mode: mode, Database: DatabaseConfig{Driver: DriverMySQL, DSN: "u:p@tcp(db)/x"}}
+	}
+
+	cases := []struct {
+		name    string
+		cfg     *Config
+		wantErr string // 空 = 必须通过
+	}{
+		{"zero config = standalone", &Config{}, ""},
+		{"standalone default", base(DeployModeStandalone), ""},
+		{"unknown mode", base("cluster"), "unknown mode"},
+		{
+			"distributed valid",
+			func() *Config {
+				c := base(DeployModeDistributed)
+				c.Redis.Addr = "redis:6379"
+				c.Sync.DurableQueue = true
+				c.Sync.MirrorLockFailClosed = true
+				c.Sync.ExecuteJobs = boolPtr(false)
+				return c
+			}(),
+			"",
+		},
+		{
+			"distributed sqlite rejected",
+			func() *Config {
+				c := base(DeployModeDistributed)
+				c.Database.Driver = DriverSQLite
+				c.Redis.Addr = "redis:6379"
+				c.Sync.DurableQueue = true
+				c.Sync.MirrorLockFailClosed = true
+				return c
+			}(),
+			"database.driver must be mysql",
+		},
+		{
+			"distributed missing queue/redis/fail-closed",
+			base(DeployModeDistributed),
+			"sync.durable_queue=true",
+		},
+		{
+			"worker valid (execute_jobs unset defaults true)",
+			func() *Config {
+				c := base(DeployModeWorker)
+				c.Sync.DurableQueue = true
+				return c
+			}(),
+			"",
+		},
+		{
+			"worker without queue rejected",
+			base(DeployModeWorker),
+			"sync.durable_queue=true",
+		},
+		{
+			"worker execute_jobs=false rejected",
+			func() *Config {
+				c := base(DeployModeWorker)
+				c.Sync.DurableQueue = true
+				c.Sync.ExecuteJobs = boolPtr(false)
+				return c
+			}(),
+			"sync.execute_jobs must not be false",
+		},
+		{
+			"execute_jobs without durable queue rejected",
+			func() *Config {
+				c := base(DeployModeStandalone)
+				c.Sync.ExecuteJobs = boolPtr(false)
+				return c
+			}(),
+			"sync.execute_jobs is only meaningful",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.ValidateDeploymentMode()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q must contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestLoadConfig_DistributedRejected LoadConfig 路径同样 fail-fast:
+// 多副本声明但配置不完整 ⇒ 启动前报错(不是运行期偶发双执行)。
+func TestLoadConfig_DistributedRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+mode: distributed
+database:
+  driver: sqlite
+  dsn: test.db
+sync:
+  durable_queue: false
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("distributed with sqlite/no queue/redis must be rejected")
+	}
+	for _, want := range []string{"database.driver must be mysql", "sync.durable_queue=true", "redis.addr", "mirror_lock_fail_closed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name missing requirement %q, got: %v", want, err)
+		}
+	}
+}
+
+// TestLoadConfig_ExecuteJobsNilPreserved 未配置 execute_jobs 时必须是 nil
+// (默认执行),不得被 envconfig 物化成 false——否则 durable_queue 模式下
+// 所有实例都会静默变成「只入队不执行」。
+func TestLoadConfig_ExecuteJobsNilPreserved(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+database:
+  driver: sqlite
+  dsn: test.db
+sync:
+  durable_queue: true
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Sync.ExecuteJobs != nil {
+		t.Fatalf("execute_jobs unset must stay nil, got %v", *cfg.Sync.ExecuteJobs)
+	}
+}

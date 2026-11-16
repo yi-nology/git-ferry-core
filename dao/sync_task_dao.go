@@ -32,12 +32,55 @@ func (d *SyncTaskDAO) FindAllEnabled() ([]*model.SyncTask, error) {
 	return tasks, err
 }
 
+// SeedNextFire 为尚未排程的任务播种 next_fire_at(#40)。
+// 条件 next_fire_at IS NULL ⇒ 多实例同时启动只有一个写入者;
+// 播种不触发执行(下一次到点才触发),避免升级/重启瞬间全量误跑。
+func (d *SyncTaskDAO) SeedNextFire(key string, next time.Time) (bool, error) {
+	res := d.db.Model(&model.SyncTask{}).
+		Where("`key` = ? AND enabled = ? AND cron IS NOT NULL AND cron <> ? AND next_fire_at IS NULL",
+			key, true, "").
+		Update("next_fire_at", next)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ClaimDueFire 抢占一次到点触发(#40):条件更新 next_fire_at 到下一次
+// 触发时间;只有 RowsAffected=1 的实例负责触发。条件自带
+// next_fire_at <= now 的重新复核 ⇒ 多实例并发扫描时单一胜者,
+// 且持有者退出后任意实例下一轮都能接手(不需要 leader election)。
+func (d *SyncTaskDAO) ClaimDueFire(key string, now, next time.Time) (bool, error) {
+	res := d.db.Model(&model.SyncTask{}).
+		Where("`key` = ? AND enabled = ? AND cron IS NOT NULL AND cron <> ? AND next_fire_at IS NOT NULL AND next_fire_at <= ?",
+			key, true, "", now).
+		Update("next_fire_at", next)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// ResetNextFire 清空排程(cron/启用状态变更后由调度器重新播种)。
+func (d *SyncTaskDAO) ResetNextFire(key string) error {
+	return d.db.Model(&model.SyncTask{}).
+		Where("`key` = ?", key).
+		Update("next_fire_at", nil).Error
+}
+
 func (d *SyncTaskDAO) Create(task *model.SyncTask) error {
 	return d.db.Create(task).Error
 }
 
+// Update 更新任务配置。
+//
+// **必须 Omit next_fire_at**:该列是共享调度器的事实源,由
+// SeedNextFire/ClaimDueFire 条件更新推进;RemoveCronJob 另有显式
+// ResetNextFire。#40 引入该列后,若这里用整行 Save,一个普通的改名
+// 请求会把执行开始时读到的旧 next_fire_at 写回,导致同一到点周期
+// 重复触发(或把已推进的排程倒退)。
 func (d *SyncTaskDAO) Update(task *model.SyncTask) error {
-	return d.db.Save(task).Error
+	return d.db.Omit("next_fire_at").Save(task).Error
 }
 
 // UpdateLastRun 只更新"最近一次执行"这两个字段。

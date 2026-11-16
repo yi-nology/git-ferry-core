@@ -10,7 +10,6 @@ import (
 
 	"github.com/oekit/concurrency/async"
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
@@ -43,26 +42,34 @@ type Service struct {
 	// lease 属主标识。仅 durable_queue=true 时启用。
 	jobs       *dao.ExecutionJobDAO
 	instanceID string
+	// retrySchedules 延迟重跑排程(retry_schedules,见 retry_schedule.go);
+	// 冷却期判定落库,到点由本实例或其它实例认领触发(#39)。
+	retrySchedules *dao.RetryScheduleDAO
+	// migrationMappings 元数据迁移的源→目标身份映射(#41);
+	// 标题不再作为身份键,重复执行按映射断点续迁。
+	migrationMappings *dao.MigrationMappingDAO
 	// reconciles 对账结果存储(reconcile_results,见 reconcile.go);
 	// 仅 reconcile_interval_hours>0 时启用。
 	reconciles *dao.ReconcileDAO
 	// recovery 恢复点索引(recovery_points,见 recovery.go)。
 	recovery *dao.RecoveryPointDAO
 	// driftSubs 对账漂移订阅者(见 events.go;壳层接告警渠道)。
-	driftSubs       []driftSubscriber
-	driftSubID      uint64
-	driftSubMu      sync.Mutex
-	runSubs         []runSubscriber
-	runSubID        uint64
-	runSubMu        sync.Mutex
-	repos           *RepoService
-	tasks           *TaskService
-	webhooks        *WebhookService
-	platforms       *PlatformService
-	opLogs          *OperationLogService
-	cron            *cron.Cron
-	cronEntryIDs    map[string]cron.EntryID
-	cronMu          sync.RWMutex
+	driftSubs  []driftSubscriber
+	driftSubID uint64
+	driftSubMu sync.Mutex
+	runSubs    []runSubscriber
+	runSubID   uint64
+	runSubMu   sync.Mutex
+	repos      *RepoService
+	tasks      *TaskService
+	webhooks   *WebhookService
+	platforms  *PlatformService
+	opLogs     *OperationLogService
+	// cron 共享调度状态:DB 的 sync_tasks.next_fire_at 是唯一事实源,
+	// 本地只保留「循环是否已启动」与取消函数(#40)。
+	cronStarted     bool
+	cronCancel      context.CancelFunc
+	cronMu          sync.Mutex
 	executor        *executor.Executor
 	mirror          *MirrorService
 	history         *HistoryService
@@ -76,6 +83,27 @@ type Service struct {
 }
 
 func NewService(cfg *Config, opts ...Option) (*Service, error) {
+	if cfg == nil {
+		return nil, oekiterrors.New("service: config must not be nil")
+	}
+	// 部署模式 fail-fast:显式 distributed/worker 的硬约束不满足时
+	// 拒绝启动(LocalConfig 路径已在 Config.Validate 里校验过;
+	// 壳层程序化构造 Config 也走同一口径)。
+	if err := cfg.ValidateDeploymentMode(); err != nil {
+		return nil, err
+	}
+	// 启动自检日志:mode / 关键开关 / 副本假设,便于运维核对。
+	slog.Info("deployment mode",
+		"mode", cfg.DeploymentMode(),
+		"durable_queue", cfg.Sync.DurableQueue,
+		"execute_jobs", cfg.Sync.ExecuteJobs == nil || *cfg.Sync.ExecuteJobs,
+		"mirror_lock_fail_closed", cfg.Sync.MirrorLockFailClosed,
+		"redis_configured", cfg.Redis.Addr != "",
+		"replicas_assumption", map[string]string{
+			model.DeployModeStandalone:  "1 (single instance)",
+			model.DeployModeDistributed: ">=1 (shared MySQL/Redis, queue + fail-closed locks)",
+			model.DeployModeWorker:      ">=1 (queue consumers, no management API by shell convention)",
+		}[cfg.DeploymentMode()])
 	so := &serviceOptions{}
 	for _, opt := range opts {
 		opt(so)
@@ -112,26 +140,25 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	daos.provider.StartJanitor(bgCtx, 10*time.Minute)
 
 	svc := &Service{
-		config:        cfg,
-		db:            db,
-		ownsDB:        ownsDB,
-		providerHooks: so.providerHooks,
-		repos:         repoService,
-		tasks:         taskService,
-		webhooks:      webhookService,
-		platforms:     platformService,
-		opLogs:        opLogService,
-		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
-		bgCtx:        bgCtx,
-		bgCancel:     bgCancel,
-		pending:      daos.pending,
-		outbox:       daos.outbox,
-		jobs:         daos.jobs,
-		instanceID:   newInstanceID(),
-		reconciles:   daos.reconcile,
-		recovery:     daos.recovery,
+		config:            cfg,
+		db:                db,
+		ownsDB:            ownsDB,
+		providerHooks:     so.providerHooks,
+		repos:             repoService,
+		tasks:             taskService,
+		webhooks:          webhookService,
+		platforms:         platformService,
+		opLogs:            opLogService,
+		bgCtx:             bgCtx,
+		bgCancel:          bgCancel,
+		pending:           daos.pending,
+		outbox:            daos.outbox,
+		jobs:              daos.jobs,
+		retrySchedules:    daos.retry,
+		migrationMappings: daos.migration,
+		instanceID:        newInstanceID(),
+		reconciles:        daos.reconcile,
+		recovery:          daos.recovery,
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -158,6 +185,9 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	svc.retryTracker = NewRetryTracker(0)
 	// 重试预算按「连续 auto_retry 链」从 DB 派生:重启不丢、多实例一致。
 	svc.retryTracker.SetChainStats(daos.run.AutoRetryChainStats)
+	// #39 冷却期不吞预算:延后判定落 retry_schedules,由延迟重跑派发器
+	// 到点认领触发(重启/多实例都生效)。
+	svc.retryTracker.SetRetryScheduler(svc.scheduleDeferredRetry)
 
 	// outbox 接线:运行完成与 outbox 事件同事务落库(见 TaskService.CompleteRun*)。
 	taskService.outbox = daos.outbox
@@ -213,6 +243,14 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	async.GoSafe(func() {
 		defer svc.wg.Done()
 		svc.dispatchOutboxLoop()
+	})
+
+	// #39 延迟重跑派发器:retry_schedules 到点后由任意实例认领触发。
+	// 不依赖本地定时器 ⇒ 重启后延迟重试仍生效,多实例单胜者。
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.retryDispatchLoop()
 	})
 
 	// P2 持久化执行队列:本实例负责执行时启动派发器与 reaper;

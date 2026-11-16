@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -35,8 +36,9 @@ func TestEnsureSchema_FreshInstallBaseline(t *testing.T) {
 	require.NoError(t, db.Order("version").Find(&rows).Error)
 	// baseline + v2(execution_jobs) + v3(reconcile_results) + v4(recovery_points)
 	// + v5(policy_snapshot) + v6(defer_count) + v7/v8/v9(generation coalescing
-	// 三步走) + v10(lease_version)
-	require.Len(t, rows, 10)
+	// 三步走) + v10(lease_version) + v11(next_fire_at) + v12(retry_schedules)
+	// + v13(migration_mappings)
+	require.Len(t, rows, 13)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
 	assert.Equal(t, uint64(2), rows[1].Version)
 	assert.Equal(t, uint64(3), rows[2].Version)
@@ -58,11 +60,14 @@ func TestEnsureSchema_FreshInstallBaseline(t *testing.T) {
 	assert.True(t, db.Migrator().HasIndex(&ExecutionJob{}, "uk_execution_jobs_active_slot"),
 		"v7 迁移必须建活动槽唯一索引")
 	assert.True(t, db.Migrator().HasColumn(&ExecutionJob{}, "lease_version"), "v10 迁移必须加 lease_version 列")
+	assert.True(t, db.Migrator().HasColumn(&SyncTask{}, "next_fire_at"), "v11 迁移必须加 next_fire_at 列")
+	assert.True(t, db.Migrator().HasTable(&RetrySchedule{}), "v12 迁移必须建 retry_schedules")
+	assert.True(t, db.Migrator().HasTable(&MigrationMapping{}), "v13 迁移必须建 migration_mappings")
 
 	// 二次启动幂等:不再记录、不再 AutoMigrate 也不报错。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 10, "已应用版本只能记录一次")
+	assert.Len(t, rows, 13, "已应用版本只能记录一次")
 }
 
 // TestEnsureSchema_LegacyConverge 存量库(无 schema_migrations,只有部分旧表):
@@ -86,8 +91,8 @@ func TestEnsureSchema_LegacyConverge(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	// baseline + v2..v10 在存量库上补建
-	require.Len(t, rows, 10)
+	// baseline + v2..v13 在存量库上补建
+	require.Len(t, rows, 13)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
 	assert.True(t, db.Migrator().HasTable(&ExecutionJob{}), "存量库必须经 v2 迁移补建 execution_jobs")
 	assert.True(t, db.Migrator().HasTable(&ReconcileRecord{}), "存量库必须经 v3 迁移补建 reconcile_results")
@@ -96,6 +101,9 @@ func TestEnsureSchema_LegacyConverge(t *testing.T) {
 	assert.True(t, db.Migrator().HasColumn(&ExecutionJob{}, "defer_count"), "存量库必须经 v6 迁移加 defer_count")
 	assert.True(t, db.Migrator().HasTable(&ExecutionTaskState{}), "存量库必须经 v7 迁移补建 execution_task_states")
 	assert.True(t, db.Migrator().HasColumn(&ExecutionJob{}, "lease_version"), "存量库必须经 v10 迁移加 lease_version")
+	assert.True(t, db.Migrator().HasColumn(&SyncTask{}, "next_fire_at"), "存量库必须经 v11 迁移加 next_fire_at")
+	assert.True(t, db.Migrator().HasTable(&RetrySchedule{}), "存量库必须经 v12 迁移补建 retry_schedules")
+	assert.True(t, db.Migrator().HasTable(&MigrationMapping{}), "存量库必须经 v13 迁移补建 migration_mappings")
 }
 
 // TestEnsureSchema_AppliesPendingMigrations baseline 之后只补跑未应用的显式迁移,
@@ -128,14 +136,14 @@ func TestEnsureSchema_AppliesPendingMigrations(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	require.Len(t, rows, 12, "baseline + 真实v2..v10 + 测试v90001/v90002 都应记录")
-	assert.Equal(t, uint64(90001), rows[10].Version)
-	assert.Equal(t, uint64(90002), rows[11].Version)
+	require.Len(t, rows, 15, "baseline + 真实v2..v13 + 测试v90001/v90002 都应记录")
+	assert.Equal(t, uint64(90001), rows[13].Version)
+	assert.Equal(t, uint64(90002), rows[14].Version)
 
 	// 重复启动:v2/v3 不得重放(幂等;重放 ALTER TABLE 会炸,天然可验)。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 12, "已应用迁移不得重复记录/重复执行")
+	assert.Len(t, rows, 15, "已应用迁移不得重复记录/重复执行")
 }
 
 // TestEnsureSchema_MigrationFailureStops 迁移失败:该版本不记录,
@@ -162,7 +170,7 @@ func TestEnsureSchema_MigrationFailureStops(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 10, "失败的迁移不得记录版本(baseline+真实v2..v10 在)")
+	assert.Len(t, rows, 13, "失败的迁移不得记录版本(baseline+真实v2..v13 在)")
 	assert.False(t, db.Migrator().HasIndex(&SyncRun{}, "idx_mig_after"),
 		"失败迁移之后的版本不得继续执行(顺序性)")
 }
@@ -241,7 +249,7 @@ func TestEnsureSchema_V7BackfillsGenerationCoalescing(t *testing.T) {
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	var rows []SchemaMigration
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 10, "重复启动不得重放迁移")
+	assert.Len(t, rows, 13, "重复启动不得重放迁移")
 }
 
 // columnExists sqlite pragma 查列(跨方言测试辅助)。
@@ -272,4 +280,34 @@ func TestRecordMigration_Idempotent(t *testing.T) {
 	var n int64
 	require.NoError(t, db.Model(&SchemaMigration{}).Count(&n).Error)
 	assert.Equal(t, int64(1), n)
+}
+
+// TestEnsureSchema_MySQLAdvisoryLockWrapsAllDDL #43 回归:
+// MySQL 路径必须把**全部 DDL(含版本表自身)包进 RunWithAdvisoryLock
+// 的回调**,而不是在锁外/池里另发 GET_LOCK/RELEASE_LOCK——后者会在
+// 另一条池连接上解锁,锁只能等连接关闭才释放。
+// 用 sqlite 引擎 + 伪造 driver 参数验证调用形态;真正的同连接语义由
+// gormx.RunWithAdvisoryLock(db.Connection/*sql.Conn) 保证。
+func TestEnsureSchema_MySQLAdvisoryLockWrapsAllDDL(t *testing.T) {
+	db := sqliteFileDB(t, filepath.Join(t.TempDir(), "locked.db"))
+
+	orig := runWithSchemaAdvisoryLock
+	defer func() { runWithSchemaAdvisoryLock = orig }()
+
+	called := 0
+	runWithSchemaAdvisoryLock = func(_ context.Context, raw *gorm.DB, key int64, fn func(*gorm.DB) error) error {
+		called++
+		assert.Equal(t, schemaMigrateLockKey(), key, "锁键必须稳定(FNV-1a 业务键)")
+		assert.False(t, raw.Migrator().HasTable(&SchemaMigration{}),
+			"版本表 AutoMigrate 也必须在互斥区内(锁外 DDL 会与迁移抢表锁)")
+		return fn(raw)
+	}
+
+	require.NoError(t, ensureSchema(db, DriverMySQL))
+	assert.Equal(t, 1, called, "MySQL 路径必须且只能走一次 advisory lock 包裹")
+	assert.True(t, db.Migrator().HasTable(&SchemaMigration{}))
+
+	var rows []SchemaMigration
+	require.NoError(t, db.Find(&rows).Error)
+	assert.Len(t, rows, 13, "锁回调内必须完成 baseline + v2..v13")
 }

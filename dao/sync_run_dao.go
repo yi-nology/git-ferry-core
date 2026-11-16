@@ -201,3 +201,20 @@ func (d *SyncRunDAO) AutoRetryChainStats(taskKey string, runID uint, runIsRetry 
 	}
 	return count, lastEnd, nil
 }
+
+// RetryChainRoot 返回包含 runID 的重试链链头(区间内最后的非 auto_retry
+// 运行)。runID 本身就是链头时返回自身;查不到时回退 runID——
+// 排程表要记 root_run_id 供审计/预算核对(#39),不能留 0 让链身份丢失。
+func (d *SyncRunDAO) RetryChainRoot(taskKey string, runID uint) (uint, error) {
+	var root uint
+	err := d.db.Model(&model.SyncRun{}).
+		Where("task_key = ? AND id <= ? AND trigger_source <> ?", taskKey, runID, model.TriggerAutoRetry).
+		Select("COALESCE(MAX(id), 0)").Scan(&root).Error
+	if err != nil {
+		return 0, err
+	}
+	if root == 0 {
+		root = runID
+	}
+	return root, nil
+}

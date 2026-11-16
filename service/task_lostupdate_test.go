@@ -19,7 +19,8 @@ import (
 //
 // 正确语义:回写只碰它自己拥有的两列(last_run_at / last_status)。
 func TestUpdateTaskLastRun_DoesNotRevertConcurrentChanges(t *testing.T) {
-	svc, db := setupCronTestService(t)
+	db := setupCronTestDB(t)
+	svc := setupCronTestService(t, db)
 
 	created, err := svc.tasks.CreateTask(t.Context(), &model.CreateTaskRequest{
 		Name: "lost-update", SourceRepoKey: "src/repo", TargetRepoKey: "dst/repo",
@@ -65,7 +66,7 @@ func TestUpdateTaskLastRun_DoesNotRevertConcurrentChanges(t *testing.T) {
 // (core 侧 "req.Cron != ” ⇒ 不修改")⇒ 一旦设了 cron 就再也改不掉,
 // 只能删任务重建。改成 optional string(nil=不改 / 空串=清空)后才修好。
 func TestUpdateTask_CronCanBeCleared(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+	svc := setupCronTestService(t, setupCronTestDB(t))
 
 	created, err := svc.tasks.CreateTask(t.Context(), &model.CreateTaskRequest{
 		Name: "cron-clear", SourceRepoKey: "src/repo", TargetRepoKey: "dst/repo",
@@ -108,7 +109,7 @@ func TestUpdateTask_CronCanBeCleared(t *testing.T) {
 // 回归背景:它们是普通 string,空串与"没传"不可区分 ⇒ 一旦设过就再也改不回去
 // (只能删任务重建)。与之前修好的 Cron 同一类问题。
 func TestUpdateTask_CanClearFields(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+	svc := setupCronTestService(t, setupCronTestDB(t))
 
 	policy := "block"
 	include := "release/*"

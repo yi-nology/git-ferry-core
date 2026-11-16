@@ -132,6 +132,40 @@ var migrations = []Migration{
 				"lease_version": "integer NOT NULL DEFAULT 0",
 			})
 		}},
+	// v11 (2026-11-17, #40):sync_tasks.next_fire_at —— cron 调度的
+	// 数据库事实源。各实例不再维护本地 robfig 表:调度器只做
+	// 「算下次时间 + 条件更新抢占」,跨实例一致,持有者退出后任意实例
+	// 在下一轮扫描即可接手。显式 ALTER ADD(不触发整表重建)。
+	{Version: 11, Name: "add next_fire_at to sync_tasks (shared cron schedule)",
+		Apply: func(tx *gorm.DB) error {
+			if err := addTableColumnsIfMissing(tx, TableSyncTasks, &SyncTask{}, map[string]string{
+				"next_fire_at": "datetime",
+			}); err != nil {
+				return err
+			}
+			// 存量库补索引(新装库 AutoMigrate 已按模型 tag 建过)。
+			if !tx.Migrator().HasIndex(&SyncTask{}, "idx_sync_tasks_next_fire_at") {
+				if err := tx.Exec("CREATE INDEX idx_sync_tasks_next_fire_at ON " +
+					TableSyncTasks + " (next_fire_at)").Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+	// v12 (2026-11-17, #39):retry_schedules —— 冷却期延迟重跑排程。
+	// run_id 唯一;派发器按 next_attempt_at 条件认领,进程重启/多实例一致。
+	// 冷却只推迟不消耗预算,预算仍按 sync_runs 的 auto_retry 链计。
+	{Version: 12, Name: "create retry_schedules (durable delayed auto-retry)",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&RetrySchedule{})
+		}},
+	// v13 (2026-11-17, #41):migration_mappings —— Issue/PR 迁移的
+	// 源对象→目标对象持久化映射。身份键是平台/仓库/类型/源编号,
+	// 标题不参与查重(同标题不再归并),支持断点续迁。
+	{Version: 13, Name: "create migration_mappings (stable metadata migration identity)",
+		Apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&MigrationMapping{})
+		}},
 }
 
 // activeSlotIndexName execution_jobs 活动槽唯一索引(每任务至多一条
@@ -221,11 +255,18 @@ func migrateV8CoalescingSchema(tx *gorm.DB) error {
 // 列型 DDL 与 gorm 对同模型加列的输出形态一致(MySQL/sqlite 均兼容,
 // 反引号标识符两种后端都接受)。
 func addColumnsIfMissing(tx *gorm.DB, cols map[string]string) error {
+	return addTableColumnsIfMissing(tx, TableExecutionJobs, &ExecutionJob{}, cols)
+}
+
+// addTableColumnsIfMissing 对任意模型表显式补列(纯增量 ALTER ADD):
+// 用于所有「存量表加列」迁移,避免 AutoMigrate 的整表重建把既有列数据
+// 重置(见 v8 注)。HasColumn 按模型 schema 判幂等,重试安全。
+func addTableColumnsIfMissing(tx *gorm.DB, table string, modelValue any, cols map[string]string) error {
 	for col, def := range cols {
-		if tx.Migrator().HasColumn(&ExecutionJob{}, col) {
+		if tx.Migrator().HasColumn(modelValue, col) {
 			continue
 		}
-		if err := tx.Exec("ALTER TABLE `" + TableExecutionJobs + "` ADD `" + col + "` " + def).Error; err != nil {
+		if err := tx.Exec("ALTER TABLE `" + table + "` ADD `" + col + "` " + def).Error; err != nil {
 			return err
 		}
 	}
@@ -264,6 +305,11 @@ func migrateV9BackfillCoalescing(tx *gorm.DB) error {
 	return nil
 }
 
+// runWithSchemaAdvisoryLock 迁移咨询锁入口(测试可替换以验证调用形态)。
+// 生产实现是 gormx.RunWithAdvisoryLock:db.Connection() 把拿锁→迁移→
+// 解锁钉在同一条 *sql.Conn 上(#43)。
+var runWithSchemaAdvisoryLock = gormx.RunWithAdvisoryLock
+
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。
 //
 // 多实例串行化:MySQL 走 gormx.RunWithAdvisoryLock——GET_LOCK/RELEASE_LOCK
@@ -273,19 +319,29 @@ func migrateV9BackfillCoalescing(tx *gorm.DB) error {
 // 会读到旧快照并把它写回(迁移数据被静默回滚)。整个收敛包进一个事务
 // (sqlite DDL 可事务),迁移 SQL 全部落到同一条连接,代价是整个 schema
 // 收敛原子提交(sqlite 单写者,无并发收益可牺牲)。
+//
+// #43:MySQL 的 GET_LOCK/RELEASE_LOCK 是**连接级**的,而 *sql.DB 是连接池
+// —— 两次 Exec 不保证落到同一物理连接,RELEASE_LOCK 会在另一条连接上
+// 静默返回 0,锁只能等持锁连接归还池/关闭才释放(池 lifetime 分钟级)。
+// gormx.RunWithAdvisoryLock 用 db.Connection() 把拿锁→迁移→解锁钉在
+// 同一条 *sql.Conn 上,本函数不自行执行任何跨连接锁语句。
+//
+// 版本表 AutoMigrate 也放进互斥区:它是 DDL,多副本并发首启同样可能与
+// 迁移 DDL 抢表锁。全量 schema 收敛(含版本表)是一个原子单元。
 func ensureSchema(db *gorm.DB, driver string) error {
-	// 版本表自身幂等建表(先于锁,锁不需要它)。
-	if err := db.AutoMigrate(&SchemaMigration{}); err != nil {
-		return err
+	locked := func(tx *gorm.DB) error {
+		// 版本表自身幂等建表(在互斥区内:DDL 不跨连接/不并发)。
+		if err := tx.AutoMigrate(&SchemaMigration{}); err != nil {
+			return err
+		}
+		return ensureSchemaLocked(tx)
 	}
 	if driver != DriverMySQL {
-		return db.Transaction(func(tx *gorm.DB) error {
-			return ensureSchemaLocked(tx)
-		})
+		return db.Transaction(locked)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), schemaMigrateLockTimeout)
 	defer cancel()
-	return gormx.RunWithAdvisoryLock(ctx, db, schemaMigrateLockKey(), ensureSchemaLocked)
+	return runWithSchemaAdvisoryLock(ctx, db, schemaMigrateLockKey(), locked)
 }
 
 // ensureSchemaLocked 在迁移互斥区内执行版本收敛。传入的 db 是**持锁/钉住

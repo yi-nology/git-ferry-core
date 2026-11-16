@@ -74,6 +74,12 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 		}
 	} else {
 		s.removeCronJob(task.Key)
+		if !task.Enabled && s.retrySchedules != nil {
+			// 禁用期间不应继续自动重跑(cron/手动都会拒绝执行)。
+			if _, cerr := s.retrySchedules.CancelForTask(task.Key, ErrTaskDisabled); cerr != nil {
+				slog.Warn("update task: cancel retry schedules failed", "taskKey", task.Key, "error", cerr)
+			}
+		}
 	}
 
 	return task, nil
@@ -81,6 +87,15 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 
 func (s *Service) DeleteTask(ctx context.Context, key string) error {
 	s.removeCronJob(key)
+	// 任务删除后,已排程的延迟重跑没有意义:关闭待触发排程,
+	// 防止调度器把已删任务反复拉起(#39)。
+	if s.retrySchedules != nil {
+		if n, err := s.retrySchedules.CancelForTask(key, ErrTaskNotFound); err != nil {
+			slog.Warn("delete task: cancel retry schedules failed", "taskKey", key, "error", err)
+		} else if n > 0 {
+			slog.Info("delete task: cancelled pending retry schedules", "taskKey", key, "count", n)
+		}
+	}
 	if err := s.tasks.DeleteTask(ctx, key); err != nil {
 		return err
 	}

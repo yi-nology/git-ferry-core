@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/oekit/pkg/errors"
 	"github.com/sethvargo/go-envconfig"
@@ -12,6 +13,10 @@ import (
 )
 
 type Config struct {
+	// Mode 显式部署模式(见 DeployMode* 常量):
+	// 空 = standalone(零配置兼容,当前行为不变);
+	// 显式声明 distributed/worker 后按该模式的硬约束校验,不满足即拒绝启动。
+	Mode      string          `yaml:"mode" env:"GIT_SYNC_MODE"`
 	Server    ServerConfig    `yaml:"server"`
 	Database  DatabaseConfig  `yaml:"database"`
 	Redis     RedisConfig     `yaml:"redis"`
@@ -21,6 +26,19 @@ type Config struct {
 	Log       LogConfig       `yaml:"log"`
 	Templates TemplatesConfig `yaml:"templates"`
 }
+
+// 部署模式(Config.Mode)。
+const (
+	// DeployModeStandalone 单实例:sqlite/MySQL 均可;durable_queue 任意;
+	// execute_jobs 默认 true(显式 false 无语义,拒绝)。
+	DeployModeStandalone = "standalone"
+	// DeployModeDistributed 多副本:必须 MySQL + durable_queue=true +
+	// Redis 已配置 + mirror_lock_fail_closed=true(见 ValidateDeploymentMode)。
+	DeployModeDistributed = "distributed"
+	// DeployModeWorker 纯执行角色:durable_queue=true 且 execute_jobs!=false;
+	// 不暴露管理 API 属壳层约束,core 只能校验队列/执行开关。
+	DeployModeWorker = "worker"
+)
 
 // TemplatesConfig 同步策略模板库（JSON 文件存储，壳层原本直接持有；下沉到 core 统一管理）。
 type TemplatesConfig struct {
@@ -161,7 +179,11 @@ type SyncConfig struct {
 	// ExecuteJobs 本实例是否执行队列任务:nil/true=入队+派发执行(API/Worker 合一);
 	// false=只入队不执行(纯 API/调度实例,配合独立 Worker 进程)。
 	// 仅 DurableQueue=true 时有意义。
-	ExecuteJobs *bool `yaml:"execute_jobs" env:"GIT_SYNC_EXECUTE_JOBS"`
+	//
+	// **noinit 不可省略**:envconfig 默认会把未设置的指针字段物化成
+	// 零值指针(false)——那样 YAML 里不写 execute_jobs 也会被当成显式
+	// false,既改变默认行为,也让「显式配置」无法与「未配置」区分(#42)。
+	ExecuteJobs *bool `yaml:"execute_jobs" env:"GIT_SYNC_EXECUTE_JOBS,noinit"`
 	// MirrorLockFailClosed 镜像跨实例锁的 Redis 异常策略:
 	// false(默认,单实例友好)= 获取锁遇非竞争类错误(Redis 抖动)时降级为
 	// 仅进程内互斥,不阻断镜像任务(可用性优先,接受双实例短暂并发窗口);
@@ -306,5 +328,77 @@ func (c *Config) Validate() error {
 	if c.Webhook.RateLimit > MaxWebhookRateLimit {
 		c.Webhook.RateLimit = MaxWebhookRateLimit
 	}
-	return nil
+	// 部署模式一致性:配置错误必须在启动时拒绝,而不是运行期以
+	// 「偶发双执行/双发布」表现(#42)。
+	return c.ValidateDeploymentMode()
+}
+
+// DeploymentMode 返回生效的部署模式(空 = standalone)。
+func (c *Config) DeploymentMode() string {
+	if c == nil || c.Mode == "" {
+		return DeployModeStandalone
+	}
+	return c.Mode
+}
+
+// ValidateDeploymentMode 校验部署模式与其硬约束(#42)。
+//
+// 关键原则:
+//   - 零配置兼容:mode 缺省 = standalone,不改变现有行为;
+//   - 显式声明 distributed/worker 后**不再降级** —— 缺 MySQL、缺队列、
+//     缺 Redis 或 fail-closed 关闭都直接拒绝启动,错误信息明确指出缺哪一项
+//     以及为什么(多副本下这些开关是「不双执行/不双发布」的前提);
+//   - execute_jobs 只在 durable_queue=true 时有意义,显式设置却未开队列
+//     ⇒ 配置误导,拒绝启动。
+func (c *Config) ValidateDeploymentMode() error {
+	if c == nil {
+		return nil
+	}
+	mode := c.Mode
+	if mode == "" {
+		mode = DeployModeStandalone
+	}
+	// 角色开关与队列模式必须一致(否则 execute_jobs 是静默 no-op,
+	// 运维以为限制了执行者,实际每个实例都在派发)。
+	if !c.Sync.DurableQueue && c.Sync.ExecuteJobs != nil {
+		return errors.New("invalid deployment config: sync.execute_jobs is only meaningful when sync.durable_queue=true (currently durable_queue=false, so execute_jobs is a no-op and misleads operators)")
+	}
+
+	switch mode {
+	case DeployModeStandalone:
+		return nil
+	case DeployModeDistributed:
+		var missing []string
+		if c.Database.Driver != DriverMySQL {
+			missing = append(missing, fmt.Sprintf("database.driver must be mysql (got %q; shared SQLite cannot provide cross-replica locking/queue semantics)", c.Database.Driver))
+		}
+		if !c.Sync.DurableQueue {
+			missing = append(missing, "sync.durable_queue=true is required (multiple replicas must dedupe/lease through the shared queue)")
+		}
+		if c.Redis.Addr == "" {
+			missing = append(missing, "redis.addr is required (cross-instance execution/mirror locks need a shared Redis)")
+		}
+		if !c.Sync.MirrorLockFailClosed {
+			missing = append(missing, "sync.mirror_lock_fail_closed=true is required (when lock mutual exclusion cannot be proven, replicas must refuse to enter the mirror critical section)")
+		}
+		if len(missing) > 0 {
+			return errors.New("invalid deployment config for mode=distributed: " + strings.Join(missing, "; "))
+		}
+		return nil
+	case DeployModeWorker:
+		var missing []string
+		if !c.Sync.DurableQueue {
+			missing = append(missing, "sync.durable_queue=true is required (worker role only consumes the durable queue)")
+		}
+		if c.Sync.ExecuteJobs != nil && !*c.Sync.ExecuteJobs {
+			missing = append(missing, "sync.execute_jobs must not be false in mode=worker (otherwise the worker executes nothing)")
+		}
+		if len(missing) > 0 {
+			return errors.New("invalid deployment config for mode=worker: " + strings.Join(missing, "; "))
+		}
+		return nil
+	default:
+		return errors.New(fmt.Sprintf("invalid deployment config: unknown mode %q (supported: %s, %s, %s)",
+			c.Mode, DeployModeStandalone, DeployModeDistributed, DeployModeWorker))
+	}
 }

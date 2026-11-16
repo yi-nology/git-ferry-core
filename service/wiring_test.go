@@ -33,6 +33,8 @@ func TestNewService_WiresAllStores(t *testing.T) {
 	assert.NotNil(t, svc.outbox, "outbox DAO 必须接线(构造函数赋值)")
 	assert.NotNil(t, svc.pending, "pending DAO 必须接线")
 	assert.NotNil(t, svc.jobs, "execution jobs DAO 必须接线")
+	assert.NotNil(t, svc.retrySchedules, "retry_schedules DAO 必须接线(#39)")
+	assert.NotNil(t, svc.migrationMappings, "migration_mappings DAO 必须接线(#41)")
 	assert.NotEmpty(t, svc.instanceID, "lease 属主标识必须生成")
 	assert.NotNil(t, svc.reconciles, "reconcile DAO 必须接线")
 	assert.NotNil(t, svc.recovery, "recovery DAO 必须接线")
@@ -50,6 +52,21 @@ func TestNewService_WiresAllStores(t *testing.T) {
 	require.NotNil(t, tr)
 	tr.mu.Lock()
 	hasChain := tr.chain != nil
+	hasScheduler := tr.schedule != nil
 	tr.mu.Unlock()
 	assert.True(t, hasChain, "RetryTracker.chain 必须接线(重试预算按 DB 派生)")
+	assert.True(t, hasScheduler, "RetryTracker.schedule 必须接线(冷却期延迟重跑落库,#39)")
+}
+
+// TestNewService_RejectsInvalidDeploymentMode 部署模式错误必须启动时拒绝
+// (#42),而不是运行期以双执行暴露。
+func TestNewService_RejectsInvalidDeploymentMode(t *testing.T) {
+	cfg := &model.Config{
+		Mode:     model.DeployModeDistributed,
+		Database: model.DatabaseConfig{Driver: model.DriverSQLite, DSN: filepath.Join(t.TempDir(), "bad.db")},
+		Git:      model.GitConfig{TempDir: t.TempDir()},
+	}
+	_, err := NewService(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database.driver must be mysql")
 }

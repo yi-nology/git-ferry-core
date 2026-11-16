@@ -132,6 +132,8 @@ const (
 	TableOutboxEvents        = "outbox_events"
 	TableExecutionJobs       = "execution_jobs"
 	TableExecutionTaskStates = "execution_task_states"
+	TableRetrySchedules      = "retry_schedules"
+	TableMigrationMappings   = "migration_mappings"
 	TableReconcileResults    = "reconcile_results"
 	TableRecoveryPoints      = "recovery_points"
 )
