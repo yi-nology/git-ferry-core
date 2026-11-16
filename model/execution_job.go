@@ -15,7 +15,8 @@ const (
 //
 // 触发不再直接执行,而是先入队;派发器按 lease 认领执行 —— 实例崩溃/
 // K8s 驱逐后,lease 过期由 reaper 放回 pending,其它实例安全接管;
-// 同一任务同时最多一条 pending/claimed 作业(入队 WHERE NOT EXISTS 去重),
+// 同一任务同时最多一条 pending/claimed 作业:ActiveTaskKey 唯一索引
+// 是数据库级活动槽约束,入队走 ON CONFLICT DO NOTHING 原子去重,
 // 重复触发(并发 webhook)自动合并 ⇒ 不会重复发布。
 type ExecutionJob struct {
 	ID      uint   `json:"id" gorm:"primaryKey"`
@@ -24,6 +25,11 @@ type ExecutionJob struct {
 	// WebhookEventID 触发对应的 webhook 事件(非 webhook 触发为 nil)。
 	WebhookEventID *uint  `json:"webhookEventId"`
 	Status         string `json:"status" gorm:"size:20;not null;index"`
+	// ActiveTaskKey 活动槽:非空 = 该任务当前有 pending/claimed 作业。
+	// 唯一索引保证「每任务至多一条活动作业」由数据库约束兜底(不再依赖
+	// INSERT ... WHERE NOT EXISTS 的语句原子性);作业完成/判毒丸时置 NULL。
+	// 唯一索引允许多个 NULL(MySQL/SQLite 同语义),历史作业不占用槽位。
+	ActiveTaskKey *string `json:"-" gorm:"size:128;uniqueIndex:uk_execution_jobs_active_slot"`
 	// Attempt 已认领执行次数(reaper 每次接管 +1);超 MaxJobAttempts 判失败(毒丸)。
 	// 只记「lease 过期被接管」——崩溃/驱逐的迹象;良性繁忙退避(Reschedule)
 	// 不得烧此预算,否则任务偶尔被占几次就被误判毒丸丢弃。

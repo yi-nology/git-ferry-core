@@ -102,6 +102,20 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&ExecutionJob{})
 		}},
+	// v7 (2026-11-17):execution_jobs.active_task_key —— 数据库级活动槽。
+	// 旧版靠 INSERT ... WHERE NOT EXISTS 去重;改为唯一索引后,入队走
+	// ON CONFLICT DO NOTHING,约束本身保证「每任务至多一条活动作业」。
+	// 回填存量 pending/claimed 行(否则它们在完成前不占用槽位)。
+	{Version: 7, Name: "add active_task_key to execution_jobs (unique active slot)",
+		Apply: func(tx *gorm.DB) error {
+			if err := tx.AutoMigrate(&ExecutionJob{}); err != nil {
+				return err
+			}
+			return tx.Model(&ExecutionJob{}).
+				Where("status IN ? AND active_task_key IS NULL",
+					[]string{JobStatusPending, JobStatusClaimed}).
+				Update("active_task_key", gorm.Expr("task_key")).Error
+		}},
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。

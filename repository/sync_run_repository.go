@@ -161,7 +161,7 @@ func (d *SyncRunRepository) AutoRetryChainStats(taskKey string, runID uint, runI
 		// 上一个非 auto_retry 运行的 ID(0 = 链前没有边界,从头算)
 		err := d.db.Model(&model.SyncRun{}).
 			Where("task_key = ? AND id < ? AND trigger_source <> ?", taskKey, runID, model.TriggerAutoRetry).
-			Select("COALESCE(MAX(id), 0)").Scan(&anchor).Error
+			Select("id").Order("id DESC").Limit(1).Scan(&anchor).Error
 		if err != nil {
 			return 0, time.Time{}, err
 		}
@@ -175,7 +175,7 @@ func (d *SyncRunRepository) AutoRetryChainStats(taskKey string, runID uint, runI
 		var next uint
 		err := d.db.Model(&model.SyncRun{}).
 			Where("task_key = ? AND id > ? AND trigger_source <> ?", taskKey, runID, model.TriggerAutoRetry).
-			Select("COALESCE(MIN(id), 0)").Scan(&next).Error
+			Select("id").Order("id ASC").Limit(1).Scan(&next).Error
 		if err != nil {
 			return 0, time.Time{}, err
 		}

@@ -71,6 +71,22 @@
   平台/仓库密文解密失败按存量明文读取、`executor/crypt.go` 旧密文格式、
   schema baseline 存量收敛。
 
+### Changed（手写 SQL 收编——execution_jobs 活动槽唯一约束）
+
+- `ExecutionJobRepository.Enqueue` 不再执行手写
+  `INSERT ... SELECT ... WHERE NOT EXISTS`：`execution_jobs` 新增
+  `active_task_key` 唯一索引（数据库级活动槽），入队改
+  `clause.OnConflict{DoNothing}`，由唯一约束保证「每任务至多一条
+  pending/claimed 作业」；`Complete` 与毒丸分支置 NULL 释放槽位。
+- schema **v7** 迁移：加列 + 唯一索引 + 回填存量 pending/claimed 行。
+  **破坏性变更（滚动升级）**：旧版本不写 `active_task_key`，新旧混跑
+  窗口去重失效——与上一节迁移锁变更一起，先停旧副本再启新副本。
+- 移除 `enqueueJobSQL` 及其语句文本测试（反引号钉死测试随裸 SQL 一并删除）；
+  `AutoRetryChainStats` 的 `COALESCE(MAX/MIN(id), 0)` 改用 GORM
+  `Order + Limit + Scan` 构建器。
+- 其余 SQL 片段均为 GORM 构建器形态（`CountByStatus` 的 `count(*)`
+  聚合、列投影、`gorm.Expr` 原子自增），无字符串拼接、无用户输入。
+
 ## [v0.50.0] - 2026-11-17
 
 ### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）

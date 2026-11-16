@@ -35,7 +35,7 @@ func TestEnsureSchema_FreshInstallBaseline(t *testing.T) {
 	require.NoError(t, db.Order("version").Find(&rows).Error)
 	// baseline + v2(execution_jobs) + v3(reconcile_results) + v4(recovery_points)
 	// + v5(policy_snapshot) + v6(defer_count)
-	require.Len(t, rows, 6)
+	require.Len(t, rows, 7)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
 	assert.Equal(t, uint64(2), rows[1].Version)
 	assert.Equal(t, uint64(3), rows[2].Version)
@@ -51,7 +51,7 @@ func TestEnsureSchema_FreshInstallBaseline(t *testing.T) {
 	// 二次启动幂等:不再记录、不再 AutoMigrate 也不报错。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 6, "已应用版本只能记录一次")
+	assert.Len(t, rows, 7, "已应用版本只能记录一次")
 }
 
 // TestEnsureSchema_LegacyConverge 存量库(无 schema_migrations,只有部分旧表):
@@ -76,7 +76,7 @@ func TestEnsureSchema_LegacyConverge(t *testing.T) {
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
 	// baseline + v2 + v3 + v4 + v5 + v6 在存量库上补建
-	require.Len(t, rows, 6)
+	require.Len(t, rows, 7)
 	assert.Equal(t, BaselineVersion, rows[0].Version)
 	assert.True(t, db.Migrator().HasTable(&ExecutionJob{}), "存量库必须经 v2 迁移补建 execution_jobs")
 	assert.True(t, db.Migrator().HasTable(&ReconcileRecord{}), "存量库必须经 v3 迁移补建 reconcile_results")
@@ -115,13 +115,13 @@ func TestEnsureSchema_AppliesPendingMigrations(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Order("version").Find(&rows).Error)
-	require.Len(t, rows, 8, "baseline + 真实v2..v6 + 测试v90001/v90002 都应记录")
-	assert.Equal(t, uint64(90002), rows[7].Version)
+	require.Len(t, rows, 9, "baseline + 真实v2..v7 + 测试v90001/v90002 都应记录")
+	assert.Equal(t, uint64(90002), rows[8].Version)
 
 	// 重复启动:v2/v3 不得重放(幂等;重放 ALTER TABLE 会炸,天然可验)。
 	require.NoError(t, ensureSchema(db, DriverSQLite))
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 8, "已应用迁移不得重复记录/重复执行")
+	assert.Len(t, rows, 9, "已应用迁移不得重复记录/重复执行")
 }
 
 // TestEnsureSchema_MigrationFailureStops 迁移失败:该版本不记录,
@@ -148,7 +148,7 @@ func TestEnsureSchema_MigrationFailureStops(t *testing.T) {
 
 	var rows []SchemaMigration
 	require.NoError(t, db.Find(&rows).Error)
-	assert.Len(t, rows, 6, "失败的迁移不得记录版本(baseline+真实v2..v6 在)")
+	assert.Len(t, rows, 7, "失败的迁移不得记录版本(baseline+真实v2..v7 在)")
 	assert.False(t, db.Migrator().HasIndex(&SyncRun{}, "idx_mig_after"),
 		"失败迁移之后的版本不得继续执行(顺序性)")
 }

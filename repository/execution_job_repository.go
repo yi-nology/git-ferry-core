@@ -7,6 +7,7 @@ import (
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrLeaseLost 失锁哨兵:条件更新(续租/完成/退避重排)0 行命中 —— 作业已
@@ -27,35 +28,24 @@ func NewExecutionJobRepository(db *gorm.DB) *ExecutionJobRepository {
 // Enqueue 入队(同任务去重):同一 task_key 已有 pending/claimed 作业时
 // 合并(返回 enqueued=false)——并发 webhook 重复触发不会重复发布。
 //
-// 用 INSERT ... SELECT ... WHERE NOT EXISTS 把「检查+插入」收敛为单条
-// 原子语句(MySQL/sqlite 均支持),多实例并发入队也只有一个胜出。
-//
-// 列名一律反引号包裹:`trigger` 是 MySQL 保留字,裸写会 1064 语法错误
-// (sqlite 宽容保留字作标识符,单测全绿也测不出来);sqlite 同样接受
-// 反引号引用标识符,一条语句两种后端通用。
+// 去重由数据库唯一约束(active_task_key 活动槽)保证:插入冲突即
+// ON CONFLICT DO NOTHING,多实例并发入队也只有一个胜出。
+// 不再手写 INSERT ... WHERE NOT EXISTS。
 func (d *ExecutionJobRepository) Enqueue(taskKey, trigger string, webhookEventID *uint) (enqueued bool, err error) {
-	var weID any
-	if webhookEventID != nil {
-		weID = *webhookEventID
+	active := taskKey
+	job := &model.ExecutionJob{
+		TaskKey:        taskKey,
+		Trigger:        trigger,
+		WebhookEventID: webhookEventID,
+		Status:         model.JobStatusPending,
+		ActiveTaskKey:  &active,
+		QueuedAt:       time.Now(),
 	}
-	res := d.db.Exec(enqueueJobSQL(),
-		taskKey, trigger, weID, model.JobStatusPending, time.Now(), taskKey)
+	res := d.db.Clauses(clause.OnConflict{DoNothing: true}).Create(job)
 	if res.Error != nil {
 		return false, res.Error
 	}
 	return res.RowsAffected == 1, nil
-}
-
-// enqueueJobSQL 单语句原子入队(INSERT ... SELECT ... WHERE NOT EXISTS)。
-// 独立成函数供测试钉住语句文本:`trigger` 等 MySQL 保留字必须反引号包裹。
-func enqueueJobSQL() string {
-	return "INSERT INTO execution_jobs\n" +
-		"(task_key, `trigger`, webhook_event_id, status, attempt, defer_count, queued_at)\n" +
-		"SELECT ?, ?, ?, ?, 0, 0, ?\n" +
-		"WHERE NOT EXISTS (\n" +
-		"\tSELECT 1 FROM execution_jobs\n" +
-		"\tWHERE task_key = ? AND status IN ('pending', 'claimed')\n" +
-		")"
 }
 
 // ListPendingIDs 取待认领作业 ID(按入队序 = 因果序)。
@@ -152,10 +142,11 @@ func (d *ExecutionJobRepository) Complete(id uint, owner string, runID uint, exe
 	res := d.db.Model(&model.ExecutionJob{}).
 		Where("id = ? AND owner = ?", id, owner).
 		Updates(map[string]any{
-			"status":      status,
-			"run_id":      runID,
-			"error":       errMsg,
-			"finished_at": time.Now(),
+			"status":          status,
+			"run_id":          runID,
+			"error":           errMsg,
+			"finished_at":     time.Now(),
+			"active_task_key": nil,
 		})
 	if res.Error != nil {
 		return res.Error
@@ -181,10 +172,11 @@ func (d *ExecutionJobRepository) RequeueExpired(now time.Time) (requeued, poison
 			res := d.db.Model(&model.ExecutionJob{}).
 				Where("id = ? AND status = ?", expired[i].ID, model.JobStatusClaimed).
 				Updates(map[string]any{
-					"status":      model.JobStatusFailed,
-					"attempt":     attempt,
-					"error":       "max attempts exceeded (lease expired repeatedly)",
-					"finished_at": time.Now(),
+					"status":          model.JobStatusFailed,
+					"attempt":         attempt,
+					"error":           "max attempts exceeded (lease expired repeatedly)",
+					"finished_at":     time.Now(),
+					"active_task_key": nil,
 				})
 			if res.Error != nil {
 				return requeued, poisoned, res.Error

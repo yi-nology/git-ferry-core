@@ -145,23 +145,28 @@ func TestExecutionJob_Complete(t *testing.T) {
 	assert.Equal(t, model.JobStatusClaimed, job.Status, "非 owner 的 Complete 不得生效")
 }
 
-// TestExecutionJob_EnqueueSQLQuotesTrigger 入队裸 SQL 的列名必须反引号包裹:
-// `trigger` 是 MySQL 保留字,裸写在 MySQL 下每条 INSERT 都 1064 语法错误
-// (sqlite 宽容保留字作标识符,既有单测全绿测不出来)。钉住语句文本,
-// 防止方言坑回归(#12)。
-func TestExecutionJob_EnqueueSQLQuotesTrigger(t *testing.T) {
+// TestExecutionJob_ActiveSlotReleasedOnComplete 活动槽契约:
+// 作业完成(成功/失败/毒丸)后 active_task_key 置 NULL,同任务可再次入队。
+// 唯一索引(uk_execution_jobs_active_slot)保证每任务至多一条活动作业。
+func TestExecutionJob_ActiveSlotReleasedOnComplete(t *testing.T) {
 	d := setupJobTestDB(t)
 
-	// 功能面:sqlite(接受反引号标识符)入队语义不回归
-	enq, err := d.Enqueue("task-quote", model.TriggerWebhook, nil)
+	enq, err := d.Enqueue("task-a", model.TriggerWebhook, nil)
 	require.NoError(t, err)
-	assert.True(t, enq)
+	require.True(t, enq)
 
-	// 语句面:enqueue 使用的裸 SQL 不含裸写的 trigger 列
-	sql := enqueueJobSQL()
-	assert.Contains(t, sql, "`trigger`", "trigger 列必须反引号包裹(MySQL 保留字)")
-	assert.NotRegexp(t, `(?m)[^`+"`"+`]trigger[,)]`, sql,
-		"不得出现未加引号的 trigger 列名")
+	ids, err := d.ListPendingIDs(1)
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	ok, err := d.Claim(ids[0], "inst-A", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, d.Complete(ids[0], "inst-A", 42, nil))
+
+	enq, err = d.Enqueue("task-a", model.TriggerWebhook, nil)
+	require.NoError(t, err)
+	assert.True(t, enq, "作业完成后同任务必须能再次入队")
 }
 
 // TestExecutionJob_RenewLeaseLost 失锁哨兵(#14):
