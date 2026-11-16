@@ -33,7 +33,16 @@ type ExecutionJobDAO struct {
 }
 
 func NewExecutionJobDAO(db *gorm.DB) *ExecutionJobDAO {
-	return &ExecutionJobDAO{db: db, lockingReads: db.Dialector.Name() == "mysql"}
+	return &ExecutionJobDAO{db: db, lockingReads: isMySQLDialect(db)}
+}
+
+// isMySQLDialect 报告连接的方言是否 MySQL:FOR UPDATE 锁定读只有 MySQL 支持
+// (sqlite 单写者天然串行,不支持该语法)。显式过一道局部变量而不直接
+// db.Dialector.Name() —— 嵌入字段链上直呼会被 staticcheck QF1008 要求
+// 消去嵌入选择器,而 db.Name() 把「方言名」藏得太深。
+func isMySQLDialect(db *gorm.DB) bool {
+	dialector := db.Dialector
+	return dialector != nil && dialector.Name() == "mysql"
 }
 
 // enqueueJobSQL 单语句入队(INSERT ... SELECT ... WHERE NOT EXISTS)。
