@@ -120,19 +120,20 @@ const (
 
 // Table name constants
 const (
-	TableRepos            = "repos"
-	TableSyncTasks        = "sync_tasks"
-	TableSyncRuns         = "sync_runs"
-	TableSyncRunSteps     = "sync_run_steps"
-	TableWebhookRules     = "webhook_rules"
-	TableWebhookRuleTasks = "webhook_rule_tasks"
-	TableWebhookEvents    = "webhook_events"
-	TableOperationLogs    = "operation_logs"
-	TablePendingTriggers  = "pending_triggers"
-	TableOutboxEvents     = "outbox_events"
-	TableExecutionJobs    = "execution_jobs"
-	TableReconcileResults = "reconcile_results"
-	TableRecoveryPoints   = "recovery_points"
+	TableRepos               = "repos"
+	TableSyncTasks           = "sync_tasks"
+	TableSyncRuns            = "sync_runs"
+	TableSyncRunSteps        = "sync_run_steps"
+	TableWebhookRules        = "webhook_rules"
+	TableWebhookRuleTasks    = "webhook_rule_tasks"
+	TableWebhookEvents       = "webhook_events"
+	TableOperationLogs       = "operation_logs"
+	TablePendingTriggers     = "pending_triggers"
+	TableOutboxEvents        = "outbox_events"
+	TableExecutionJobs       = "execution_jobs"
+	TableExecutionTaskStates = "execution_task_states"
+	TableReconcileResults    = "reconcile_results"
+	TableRecoveryPoints      = "recovery_points"
 )
 
 // Model default value constants

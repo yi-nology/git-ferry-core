@@ -102,6 +102,111 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&ExecutionJob{})
 		}},
+	// v7 (2026-11-17, #36):generation-based coalescing —— 任务级状态行
+	// execution_task_states + execution_jobs.generation/active_key。
+	// ActiveKey 的唯一索引(每任务至多一个活动作业的硬保证)**不在模型 tag
+	// 上登记**:baseline/v2 的 AutoMigrate 会先于本迁移建索引,而存量库里
+	// 同任务多条活动作业(旧 WHERE NOT EXISTS 在 MySQL RR 下的竞态遗留)
+	// 会让唯一索引建立失败 ⇒ 必须先去重再显式建索引(顺序不可换)。
+	{Version: 7, Name: "execution task states + job generation/active slot (generation coalescing)",
+		Apply: migrateV7GenerationCoalescing},
+}
+
+// activeSlotIndexName execution_jobs 活动槽唯一索引(每任务至多一条
+// pending/claimed 作业的数据库级硬保证,#36)。
+const activeSlotIndexName = "uk_execution_jobs_active_slot"
+
+// migrateV7GenerationCoalescing #36 的存量库升级路径(见 migrations v7 注):
+//  1. 同任务多条活动作业去重(只保留一条,其余判 failed)——唯一索引的先行条件;
+//  2. AutoMigrate 补 execution_task_states 表与 execution_jobs 的
+//     generation/active_key 列(模型 tag 无唯一索引,此处安全);
+//  3. 显式建活动槽唯一索引(幂等:迁移失败重试时跳过已存在的索引);
+//  4. 回填:存量活动作业 generation=1、active_key=task_key,任务状态行
+//     desired=1/completed=0/active_job_id=该作业 —— 已代次化,收尾 CAS
+//     语义无缝接管(不会为升级前的合并丢弃补跑,那部分已丢失无从恢复)。
+func migrateV7GenerationCoalescing(tx *gorm.DB) error {
+	activeStatuses := []string{JobStatusPending, JobStatusClaimed}
+	hasJobs := tx.Migrator().HasTable("execution_jobs")
+
+	// 1) 活动作业去重(claimed 优先保留——它可能有 worker 在跑;同态取更早 id)。
+	if hasJobs {
+		var actives []ExecutionJob
+		if err := tx.Where("status IN ?", activeStatuses).Order("id").Find(&actives).Error; err != nil {
+			return err
+		}
+		keep := make(map[string]uint, len(actives))
+		var dupes []uint
+		for i := range actives {
+			j := actives[i]
+			curID, ok := keep[j.TaskKey]
+			if !ok {
+				keep[j.TaskKey] = j.ID
+				continue
+			}
+			var cur ExecutionJob
+			for k := range actives {
+				if actives[k].ID == curID {
+					cur = actives[k]
+					break
+				}
+			}
+			replace := cur.Status != JobStatusClaimed && j.Status == JobStatusClaimed
+			if replace {
+				dupes = append(dupes, cur.ID)
+				keep[j.TaskKey] = j.ID
+			} else {
+				dupes = append(dupes, j.ID)
+			}
+		}
+		if len(dupes) > 0 {
+			if err := tx.Model(&ExecutionJob{}).Where("id IN ?", dupes).Updates(map[string]any{
+				"status":      JobStatusFailed,
+				"error":       "deduplicated by migration v7 (multiple active jobs per task)",
+				"finished_at": time.Now(),
+			}).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	// 2) 补表/补列(模型 tag 无唯一索引,先于步骤 3 不会踩存量重复)。
+	if err := tx.AutoMigrate(&ExecutionJob{}, &ExecutionTaskState{}); err != nil {
+		return err
+	}
+
+	// 3) 活动槽唯一索引(显式建;幂等)。
+	if !tx.Migrator().HasIndex(&ExecutionJob{}, activeSlotIndexName) {
+		if err := tx.Exec("CREATE UNIQUE INDEX " + activeSlotIndexName +
+			" ON " + TableExecutionJobs + " (active_key)").Error; err != nil {
+			return err
+		}
+	}
+
+	// 4) 回填存量活动作业的代次与活动槽。
+	if hasJobs {
+		var actives []ExecutionJob
+		if err := tx.Where("status IN ?", activeStatuses).Order("id").Find(&actives).Error; err != nil {
+			return err
+		}
+		for i := range actives {
+			j := actives[i]
+			if err := tx.Model(&ExecutionJob{}).Where("id = ?", j.ID).Updates(map[string]any{
+				"generation": 1,
+				"active_key": j.TaskKey,
+			}).Error; err != nil {
+				return err
+			}
+			id := j.ID
+			st := ExecutionTaskState{TaskKey: j.TaskKey, DesiredGeneration: 1, ActiveJobID: &id}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "task_key"}},
+				DoNothing: true,
+			}).Create(&st).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ensureSchema 启动时的 schema 收敛入口(见文件头策略)。

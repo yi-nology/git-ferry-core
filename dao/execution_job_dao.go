@@ -7,6 +7,7 @@ import (
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrLeaseLost 失锁哨兵:条件更新(续租/完成/退避重排)0 行命中 —— 作业已
@@ -16,46 +17,118 @@ import (
 var ErrLeaseLost = errors.New("execution job lease lost: no longer owned by this instance")
 
 // ExecutionJobDAO 持久化执行队列(见 model.ExecutionJob)。
+//
+// #36 generation coalescing:每任务一条状态行(model.ExecutionTaskState)
+// 记 desired/completed 代次与活动槽;入队在**同一事务**里递增 desired ——
+// 执行中到达的触发即使被合并,也以代次形式留痕,作业收尾 CAS 发现
+// completed < desired 必须再入追赶作业 ⇒ 被合并的触发不丢。
 type ExecutionJobDAO struct {
 	db *gorm.DB
+	// lockingReads MySQL 方言下用 SELECT ... FOR UPDATE 锁定读状态行:
+	// REPEATABLE READ 的快照读看不到并发事务的代次递增,不锁定读会让两个
+	// 并发入队都判「活动槽空闲」而双插(唯一索引能拦住,但整个事务回滚、
+	// 触发方报错)。锁定读把同任务的并发入队串行化在状态行上。
+	// sqlite 单写者天然串行(整库一写锁),且不支持 FOR UPDATE 语法。
+	lockingReads bool
 }
 
 func NewExecutionJobDAO(db *gorm.DB) *ExecutionJobDAO {
-	return &ExecutionJobDAO{db: db}
+	return &ExecutionJobDAO{db: db, lockingReads: db.Dialector.Name() == "mysql"}
 }
 
-// Enqueue 入队(同任务去重):同一 task_key 已有 pending/claimed 作业时
-// 合并(返回 enqueued=false)——并发 webhook 重复触发不会重复发布。
+// enqueueJobSQL 单语句入队(INSERT ... SELECT ... WHERE NOT EXISTS)。
+// **仅快路径,不作为唯一保证**(#36):「每任务至多一个活动作业」由
+// active_key 唯一索引(migration v7)与状态行账本共同保证;独立成函数供
+// 测试钉住语句文本:`trigger` 等 MySQL 保留字必须反引号包裹。
+func enqueueJobSQL() string {
+	return "INSERT INTO execution_jobs\n" +
+		"(task_key, `trigger`, webhook_event_id, status, attempt, defer_count, generation, active_key, queued_at)\n" +
+		"SELECT ?, ?, ?, ?, 0, 0, ?, ?, ?\n" +
+		"WHERE NOT EXISTS (\n" +
+		"\tSELECT 1 FROM execution_jobs\n" +
+		"\tWHERE task_key = ? AND active_key IS NOT NULL\n" +
+		")"
+}
+
+// Enqueue 入队(#36 generation coalescing):
 //
-// 用 INSERT ... SELECT ... WHERE NOT EXISTS 把「检查+插入」收敛为单条
-// 原子语句(MySQL/sqlite 均支持),多实例并发入队也只有一个胜出。
-//
-// 列名一律反引号包裹:`trigger` 是 MySQL 保留字,裸写会 1064 语法错误
-// (sqlite 宽容保留字作标识符,单测全绿也测不出来);sqlite 同样接受
-// 反引号引用标识符,一条语句两种后端通用。
+//  1. 同事务把任务状态行的 desired_generation +1 —— **每次触发都递增**,
+//     包括将被合并的这次:合并不再等于丢弃,代次就是待办承接标记;
+//  2. 活动槽空闲 ⇒ 插入携带 generation 的作业并占槽(WHERE NOT EXISTS 仅
+//     快路径;active_key 唯一索引兜底并发竞态,竞态插入失败=整体回滚=
+//     触发方报错重试,at-least-once);
+//  3. 活动槽被占 ⇒ 合并(返回 enqueued=false),代次已递增,作业收尾 CAS
+//     据此补跑 —— 执行中连发 N 次 webhook 最终全部被承接,最后一次触发
+//     对应的提交一定被执行。
 func (d *ExecutionJobDAO) Enqueue(taskKey, trigger string, webhookEventID *uint) (enqueued bool, err error) {
 	var weID any
 	if webhookEventID != nil {
 		weID = *webhookEventID
 	}
-	res := d.db.Exec(enqueueJobSQL(),
-		taskKey, trigger, weID, model.JobStatusPending, time.Now(), taskKey)
-	if res.Error != nil {
-		return false, res.Error
-	}
-	return res.RowsAffected == 1, nil
-}
+	err = d.db.Transaction(func(tx *gorm.DB) error {
+		// (1) 同事务代次递增(upsert;首次受理 desired=1)。
+		st := model.ExecutionTaskState{TaskKey: taskKey, DesiredGeneration: 1}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "task_key"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"desired_generation": gorm.Expr("desired_generation + 1"),
+				"updated_at":         time.Now(),
+			}),
+		}).Create(&st).Error; err != nil {
+			return err
+		}
 
-// enqueueJobSQL 单语句原子入队(INSERT ... SELECT ... WHERE NOT EXISTS)。
-// 独立成函数供测试钉住语句文本:`trigger` 等 MySQL 保留字必须反引号包裹。
-func enqueueJobSQL() string {
-	return "INSERT INTO execution_jobs\n" +
-		"(task_key, `trigger`, webhook_event_id, status, attempt, defer_count, queued_at)\n" +
-		"SELECT ?, ?, ?, ?, 0, 0, ?\n" +
-		"WHERE NOT EXISTS (\n" +
-		"\tSELECT 1 FROM execution_jobs\n" +
-		"\tWHERE task_key = ? AND status IN ('pending', 'claimed')\n" +
-		")"
+		// (2) 锁定读状态行(见 lockingReads 注):代次与活动槽一致快照。
+		var state model.ExecutionTaskState
+		q := tx.Where("task_key = ?", taskKey)
+		if d.lockingReads {
+			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := q.First(&state).Error; err != nil {
+			return err
+		}
+
+		// (3) 活动槽被占 ⇒ 合并(不重复发布);待办承接 = 步骤 (1) 的代次递增。
+		if state.ActiveJobID != nil {
+			enqueued = false
+			return nil
+		}
+
+		// (4) 活动槽空闲 ⇒ 插入携带代次的作业(WHERE NOT EXISTS 快路径)。
+		res := tx.Exec(enqueueJobSQL(),
+			taskKey, trigger, weID, model.JobStatusPending,
+			state.DesiredGeneration, taskKey, time.Now(), taskKey)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			// 快路径见到活动槽而状态行说空闲(账本与作业表不一致):
+			// 不插作业,按合并处理 —— 在跑作业的收尾 CAS 会据代次补跑。
+			enqueued = false
+			return nil
+		}
+
+		// (5) 占活动槽(指向刚插入的作业;唯一索引保证只有一条可指)。
+		var jobID uint
+		if err := tx.Raw("SELECT id FROM execution_jobs WHERE active_key = ?",
+			taskKey).Scan(&jobID).Error; err != nil {
+			return err
+		}
+		if jobID == 0 {
+			return errors.New("execution_jobs: active slot insert vanished unexpectedly")
+		}
+		if err := tx.Model(&model.ExecutionTaskState{}).
+			Where("task_key = ? AND active_job_id IS NULL", taskKey).
+			Update("active_job_id", jobID).Error; err != nil {
+			return err
+		}
+		enqueued = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return enqueued, nil
 }
 
 // ListPendingIDs 取待认领作业 ID(按入队序 = 因果序)。
@@ -140,8 +213,11 @@ func (d *ExecutionJobDAO) Reschedule(id uint, owner string, delay time.Duration)
 	return nil
 }
 
-// Complete 完成作业:写终态与运行记录 ID。仅属主可写;
-// 0 行命中 ⇒ ErrLeaseLost(此前静默返回 nil,旧 worker 无感继续跑,脑裂)。
+// Complete 完成作业:写终态与运行记录 ID,并在**同一事务**里结算代次账本
+// (#36):上推 completed_generation、释放活动槽,若 completed < desired
+// 则再入一个追赶作业 —— 被合并进这次执行的触发不丢。
+// 仅属主可写;0 行命中 ⇒ ErrLeaseLost(此前静默返回 nil,旧 worker 无感
+// 继续跑,脑裂)。
 func (d *ExecutionJobDAO) Complete(id uint, owner string, runID uint, execErr error) error {
 	status := model.JobStatusSucceeded
 	errMsg := ""
@@ -149,26 +225,99 @@ func (d *ExecutionJobDAO) Complete(id uint, owner string, runID uint, execErr er
 		status = model.JobStatusFailed
 		errMsg = execErr.Error()
 	}
-	res := d.db.Model(&model.ExecutionJob{}).
-		Where("id = ? AND owner = ?", id, owner).
-		Updates(map[string]any{
-			"status":      status,
-			"run_id":      runID,
-			"error":       errMsg,
-			"finished_at": time.Now(),
-		})
+	return d.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.ExecutionJob{}).
+			Where("id = ? AND owner = ?", id, owner).
+			Updates(map[string]any{
+				"status":      status,
+				"run_id":      runID,
+				"error":       errMsg,
+				"finished_at": time.Now(),
+				"active_key":  nil,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrLeaseLost
+		}
+		var job model.ExecutionJob
+		if err := tx.First(&job, id).Error; err != nil {
+			return err
+		}
+		return d.settleCompletedGeneration(tx, &job)
+	})
+}
+
+// settleCompletedGeneration 作业**执行完**(成功或失败,执行真实发生过)的
+// 代次结算(#36,调用方必须在事务内):completed_generation CAS 上推 →
+// 释放活动槽 → completed < desired ⇒ **必须**再入一个追赶作业。
+//
+// 追赶作业 generation=最新 desired,继承 task_key 与 trigger —— 重建语义
+// 不丢;被合并的多个 webhook_event_id 无法对应到具体事件,置 nil,与
+// pending_trigger 补跑路径口径一致。
+func (d *ExecutionJobDAO) settleCompletedGeneration(tx *gorm.DB, job *model.ExecutionJob) error {
+	// 代次上推:仅当本作业携带的代次更新(CAS,幂等)。
+	if err := tx.Model(&model.ExecutionTaskState{}).
+		Where("task_key = ? AND completed_generation < ?", job.TaskKey, job.Generation).
+		Update("completed_generation", job.Generation).Error; err != nil {
+		return err
+	}
+	return d.releaseSlotAndCatchUp(tx, job)
+}
+
+// releaseSlotAndCatchUp 释放状态行活动槽并在仍有未消费代次时补追赶作业
+// (#36,调用方必须在事务内)。毒丸路径(作业从未执行)也走这里——
+// 它**不上推 completed_generation**:代次没被消费,追赶作业必须承接。
+func (d *ExecutionJobDAO) releaseSlotAndCatchUp(tx *gorm.DB, job *model.ExecutionJob) error {
+	// 释放活动槽:仅当仍指向本作业(防误伤接管方新占的槽)。
+	res := tx.Model(&model.ExecutionTaskState{}).
+		Where("task_key = ? AND active_job_id = ?", job.TaskKey, job.ID).
+		Update("active_job_id", nil)
 	if res.Error != nil {
 		return res.Error
 	}
 	if res.RowsAffected == 0 {
-		return ErrLeaseLost
+		// 槽不指向本作业(账本异常):不补追赶,避免双槽双执行。
+		return nil
 	}
-	return nil
+	// 追赶判断(锁定读:与并发入队的代次递增交错时取最新值,防漏判)。
+	var state model.ExecutionTaskState
+	q := tx.Where("task_key = ?", job.TaskKey)
+	if d.lockingReads {
+		q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := q.First(&state).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // 无状态行(理论上不可达):无事可结
+		}
+		return err
+	}
+	if state.CompletedGeneration >= state.DesiredGeneration {
+		return nil // 全部代次已覆盖,无需追赶
+	}
+	next := model.ExecutionJob{
+		TaskKey:    job.TaskKey,
+		Trigger:    job.Trigger,
+		Status:     model.JobStatusPending,
+		Generation: state.DesiredGeneration,
+		ActiveKey:  &job.TaskKey,
+		QueuedAt:   time.Now(),
+	}
+	if err := tx.Create(&next).Error; err != nil {
+		return err
+	}
+	return tx.Model(&model.ExecutionTaskState{}).
+		Where("task_key = ? AND active_job_id IS NULL", job.TaskKey).
+		Update("active_job_id", next.ID).Error
 }
 
 // RequeueExpired 接管过期租约(reaper):claimed 且 lease_until 已过 ⇒
 // 放回 pending(attempt+1);attempt 超限 ⇒ 判 failed(毒丸)。
 // 返回 (重放条数, 毒丸条数, 错误)。
+//
+// 毒丸作业从未执行完 ⇒ 它携带的代次未消费:判毒丸的**同一事务**里释放
+// 活动槽并补追赶作业(#36),否则执行中被合并的触发会随毒丸一起蒸发。
 func (d *ExecutionJobDAO) RequeueExpired(now time.Time) (requeued, poisoned int64, err error) {
 	var expired []model.ExecutionJob
 	if err := d.db.Where("status = ? AND lease_until IS NOT NULL AND lease_until < ?",
@@ -178,18 +327,30 @@ func (d *ExecutionJobDAO) RequeueExpired(now time.Time) (requeued, poisoned int6
 	for i := range expired {
 		attempt := expired[i].Attempt + 1
 		if attempt > model.MaxJobAttempts {
-			res := d.db.Model(&model.ExecutionJob{}).
-				Where("id = ? AND status = ?", expired[i].ID, model.JobStatusClaimed).
-				Updates(map[string]any{
-					"status":      model.JobStatusFailed,
-					"attempt":     attempt,
-					"error":       "max attempts exceeded (lease expired repeatedly)",
-					"finished_at": time.Now(),
-				})
-			if res.Error != nil {
-				return requeued, poisoned, res.Error
+			var hit int64
+			if err := d.db.Transaction(func(tx *gorm.DB) error {
+				res := tx.Model(&model.ExecutionJob{}).
+					Where("id = ? AND status = ?", expired[i].ID, model.JobStatusClaimed).
+					Updates(map[string]any{
+						"status":      model.JobStatusFailed,
+						"attempt":     attempt,
+						"error":       "max attempts exceeded (lease expired repeatedly)",
+						"finished_at": time.Now(),
+						"active_key":  nil,
+					})
+				if res.Error != nil {
+					return res.Error
+				}
+				hit = res.RowsAffected
+				if hit != 1 {
+					return nil
+				}
+				job := expired[i]
+				return d.releaseSlotAndCatchUp(tx, &job)
+			}); err != nil {
+				return requeued, poisoned, err
 			}
-			poisoned += res.RowsAffected
+			poisoned += hit
 			continue
 		}
 		res := d.db.Model(&model.ExecutionJob{}).

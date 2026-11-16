@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+### Fixed（durable_queue 数据丢失面之三单，本段随 #36/#37/#38 分 commit 追加）
+
+- **#36 [durable_queue] 执行中到达的触发被合并丢弃**（generation-based
+  coalescing）:旧入队 `INSERT ... WHERE NOT EXISTS` 把作业 claimed 期间的
+  新提交当作「重复触发」合并丢弃且不记任何待办 ⇒ 作业收尾后同步空窗无上限
+  （低频仓库/纯手动触发场景新提交只能等下一次 webhook/cron）。修复:新增
+  任务级状态行 `execution_task_states`（每 task_key 一行:desired/completed
+  代次 + active_job_id 活动槽），每次触发在**同一事务**里递增
+  `desired_generation`——被合并 ≠ 丢弃，代次即待办承接标记；作业携带
+  `generation`，收尾在同一事务里 CAS 上推 `completed_generation`、释放活动槽，
+  `completed < desired` 时**必须**再入追赶作业（继承 task_key/trigger，携带
+  最新代次）——执行中连发 N 次 webhook 全部被承接，最后一次触发对应的提交
+  一定被执行，且合并语义保持（N 次执行中触发合并为 1 次追赶，不放大执行
+  次数）。活动槽另由 `execution_jobs.active_key` 唯一索引
+  （`uk_execution_jobs_active_slot`）表达数据库级硬保证（MySQL RR 下
+  `WHERE NOT EXISTS` 不保证严格单胜出）；入队对状态行做锁定读
+  （MySQL `FOR UPDATE`，sqlite 单写者天然串行）串行化同任务并发入队。
+  **与 pending_triggers 的关系**（非两套待办机制）:pending_triggers 服务
+  直跑模式（guard 撞忙补偿），状态行代次服务队列模式（入队合并）——
+  `durable_queue=true` 时触发走 enqueueTaskRun，到不了 guard 撞忙分支,
+  两路径互斥各管一种模式。
+  **迁移要求（v7，向后兼容）**:存量库升级自动执行——同任务重复活动作业
+  去重（多余判 failed，保留 claimed 优先）、补
+  `execution_task_states` 表与 `execution_jobs.generation/active_key` 列、
+  建活动槽唯一索引、回填存量活动作业（generation=1、active_key=task_key、
+  状态行 desired=1/活动槽指向存活作业）。唯一索引**不挂在模型 tag**（必须
+  晚于去重建立，否则存量重复会让迁移失败）;新装库经 baseline+v7 同样生效。
+  升级前已被旧实现丢弃的触发无从恢复。
+
 ### Changed（oekit 基础设施收编第一轮——gormx / redisx）
 
 - **gormx v0.12.1 接管 DB 基础设施**:

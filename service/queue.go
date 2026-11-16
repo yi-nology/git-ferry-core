@@ -61,7 +61,9 @@ func (s *Service) executesJobs() bool {
 	return s.config.Sync.ExecuteJobs == nil || *s.config.Sync.ExecuteJobs
 }
 
-// enqueueTaskRun 队列模式的触发入口:入队(同任务合并语义)。
+// enqueueTaskRun 队列模式的触发入口:入队(generation coalescing 合并语义)。
+// 被合并 ≠ 丢弃:每次触发都在状态行递增 desired_generation(#36),
+// 作业收尾 CAS 发现 completed < desired 会再入追赶作业承接。
 func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) error {
 	if s.jobs == nil {
 		// fail-closed:队列开启但 DAO 没接线(裸构造)——拒绝而不是静默直跑,
@@ -75,7 +77,7 @@ func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) 
 	if enqueued {
 		slog.Info("执行任务已入队", "task", taskKey, "trigger", trigger)
 	} else {
-		slog.Info("触发已合并:任务已有待执行作业", "task", taskKey, "trigger", trigger)
+		slog.Info("触发已合并:任务已有活动作业,代次已递增(收尾补跑承接)", "task", taskKey, "trigger", trigger)
 	}
 	return nil
 }

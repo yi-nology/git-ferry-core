@@ -2,10 +2,12 @@ package dao
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/oekit/pkg/ptrx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -17,11 +19,23 @@ func setupJobTestDB(t *testing.T) *ExecutionJobDAO {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.ExecutionJob{}))
+	require.NoError(t, db.AutoMigrate(&model.ExecutionJob{}, &model.ExecutionTaskState{}))
+	// 活动槽唯一索引与生产对齐(migration v7 显式建,模型 tag 无索引——
+	// 见 migrate.go v7 注:索引必须晚于存量去重建立)。
+	require.NoError(t, db.Exec(
+		"CREATE UNIQUE INDEX IF NOT EXISTS uk_execution_jobs_active_slot ON execution_jobs (active_key)").Error)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	return NewExecutionJobDAO(db)
+}
+
+// taskState 读某任务的队列状态行(测试断言代次账本用)。
+func taskState(t *testing.T, d *ExecutionJobDAO, taskKey string) *model.ExecutionTaskState {
+	t.Helper()
+	var st model.ExecutionTaskState
+	require.NoError(t, d.db.Where("task_key = ?", taskKey).First(&st).Error)
+	return &st
 }
 
 // TestExecutionJob_EnqueueDedupes 同任务并发/重复触发合并:
@@ -143,6 +157,160 @@ func TestExecutionJob_Complete(t *testing.T) {
 		"非 owner 的 Complete 必须返回失锁哨兵(此前静默返回 nil,调用方无感)")
 	job, _ = d.FindByID(bID)
 	assert.Equal(t, model.JobStatusClaimed, job.Status, "非 owner 的 Complete 不得生效")
+}
+
+// TestExecutionJob_CoalescedDuringExecutionGetsCatchUpJob 执行中到达的触发不得被
+// 合并丢弃(#36):作业 claimed 期间新提交的 webhook 触发按合并语义不重复发布,
+// 但必须有「待办承接」——作业收尾时若仍有未消费的触发代次,必须再入一个追赶
+// 作业,最后一次触发对应的提交一定被执行。
+//
+// 回归背景(P0,同步空窗无上限):旧实现 claimed 期间的触发被 WHERE NOT EXISTS
+// 合并丢弃且不记任何待办 ⇒ 作业 succeeded 后 pending=0,新提交只能等下一次
+// webhook/cron。本用例去掉收尾承接即变红。
+func TestExecutionJob_CoalescedDuringExecutionGetsCatchUpJob(t *testing.T) {
+	d := setupJobTestDB(t)
+
+	enq, err := d.Enqueue("task-a", model.TriggerWebhook, nil)
+	require.NoError(t, err)
+	require.True(t, enq)
+	ids, err := d.ListPendingIDs(10)
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	ok, err := d.Claim(ids[0], "worker-A", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// 执行中连发 N 次 webhook:合并语义(不重复发布),但不得丢
+	for i := 0; i < 5; i++ {
+		enq, err = d.Enqueue("task-a", model.TriggerWebhook, nil)
+		require.NoError(t, err)
+		assert.False(t, enq, "执行中到达的触发按合并语义不重复发布")
+	}
+
+	require.NoError(t, d.Complete(ids[0], "worker-A", 42, nil))
+
+	// 收尾后必须有追赶作业承接(否则被合并的触发永久丢失)
+	pending, err := d.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), pending, "执行中被合并的触发必须在收尾时再入作业承接(#36)")
+
+	// 追赶作业携带最新代次,收尾 CAS 已把已覆盖代次上推
+	st := taskState(t, d, "task-a")
+	assert.Equal(t, int64(6), st.DesiredGeneration, "N=5 次执行中触发 + 首次受理 = 6 个代次")
+	assert.Equal(t, int64(1), st.CompletedGeneration, "首次作业覆盖代次 1")
+	ids2, err := d.ListPendingIDs(10)
+	require.NoError(t, err)
+	require.Len(t, ids2, 1)
+	job2, err := d.FindByID(ids2[0])
+	require.NoError(t, err)
+	assert.Equal(t, int64(6), job2.Generation, "追赶作业必须携带最新代次(最后一次触发对应的提交一定被执行)")
+	require.NotNil(t, st.ActiveJobID)
+	assert.Equal(t, ids2[0], *st.ActiveJobID, "状态行活动槽指向追赶作业")
+
+	// 追赶执行收尾:全部代次覆盖,不再产生新作业(收敛,不无限循环)
+	ok, err = d.Claim(ids2[0], "worker-A", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, d.Complete(ids2[0], "worker-A", 43, nil))
+	pending, err = d.CountPending()
+	require.NoError(t, err)
+	assert.Zero(t, pending, "代次追平后不得再入作业(合并语义:不放大执行次数)")
+	st = taskState(t, d, "task-a")
+	assert.Equal(t, int64(6), st.CompletedGeneration)
+	assert.Nil(t, st.ActiveJobID, "活动槽必须随收尾释放")
+
+	// 合并语义总量:1 次初始执行 + 1 次追赶执行承接全部 5 次执行中触发
+	var total int64
+	require.NoError(t, d.db.Model(&model.ExecutionJob{}).Where("task_key = ?", "task-a").Count(&total).Error)
+	assert.Equal(t, int64(2), total, "执行中连发 N 次触发合并为 1 次追赶作业,不得放大执行次数")
+}
+
+// TestExecutionJob_PoisonedJobStillCatchesUp 毒丸作业的代次未消费:
+// reaper 判毒丸时必须在同一事务里释放活动槽并补追赶作业(#36),
+// 否则执行中被合并的触发随毒丸一起蒸发。
+func TestExecutionJob_PoisonedJobStillCatchesUp(t *testing.T) {
+	d := setupJobTestDB(t)
+	_, err := d.Enqueue("task-a", model.TriggerWebhook, nil)
+	require.NoError(t, err)
+	ids, _ := d.ListPendingIDs(1)
+	ok, _ := d.Claim(ids[0], "dead-worker", -time.Minute) // TTL 负数 ⇒ 立即过期
+	require.True(t, ok)
+	// 把接管预算烧到上限:再过期一次即毒丸
+	require.NoError(t, d.db.Model(&model.ExecutionJob{}).Where("id = ?", ids[0]).
+		Update("attempt", model.MaxJobAttempts).Error)
+
+	_, poisoned, err := d.RequeueExpired(time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), poisoned)
+
+	// 毒丸了,但触发不能丢:追赶作业承接代次
+	pending, err := d.CountPending()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), pending, "毒丸作业的代次必须由追赶作业承接(#36)")
+	ids2, _ := d.ListPendingIDs(1)
+	require.Len(t, ids2, 1)
+	job2, _ := d.FindByID(ids2[0])
+	assert.Equal(t, int64(1), job2.Generation)
+	st := taskState(t, d, "task-a")
+	assert.Equal(t, int64(1), st.DesiredGeneration)
+	assert.Zero(t, st.CompletedGeneration, "毒丸作业的代次不得计入已覆盖")
+	require.NotNil(t, st.ActiveJobID)
+	assert.Equal(t, ids2[0], *st.ActiveJobID)
+}
+
+// TestExecutionJob_ConcurrentEnqueueSingleActiveSlot 并发入队单胜者:
+// 同任务并发触发,只有一条活动作业胜出,其余按合并承接(代次累计)。
+// -race 下并发跑;活动槽唯一索引兜底锁定读之外的任何竞态。
+func TestExecutionJob_ConcurrentEnqueueSingleActiveSlot(t *testing.T) {
+	d := setupJobTestDB(t)
+
+	const n = 10
+	var wg sync.WaitGroup
+	results := make([]bool, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			enq, err := d.Enqueue("task-race", model.TriggerWebhook, nil)
+			require.NoError(t, err)
+			results[idx] = enq
+		}(i)
+	}
+	wg.Wait()
+
+	var total int64
+	require.NoError(t, d.db.Model(&model.ExecutionJob{}).Where("task_key = ?", "task-race").Count(&total).Error)
+	assert.Equal(t, int64(1), total, "并发入队只允许一条活动作业(单胜者)")
+
+	wins := 0
+	for _, ok := range results {
+		if ok {
+			wins++
+		}
+	}
+	assert.Equal(t, 1, wins, "恰好一次入队胜出")
+
+	st := taskState(t, d, "task-race")
+	assert.Equal(t, int64(n), st.DesiredGeneration, "每次触发都递增代次,合并的不丢")
+	require.NotNil(t, st.ActiveJobID)
+}
+
+// TestExecutionJob_ActiveSlotUniqueIndex 活动槽唯一索引是硬保证:
+// 绕过状态行直接插第二条活动作业必须被唯一索引拒绝(防任何账本/竞态
+// 缺陷造成同任务双活动作业、双执行)。
+func TestExecutionJob_ActiveSlotUniqueIndex(t *testing.T) {
+	d := setupJobTestDB(t)
+	_, err := d.Enqueue("task-a", model.TriggerWebhook, nil)
+	require.NoError(t, err)
+
+	dup := model.ExecutionJob{
+		TaskKey: "task-a", Trigger: model.TriggerWebhook,
+		Status: model.JobStatusPending, Generation: 1,
+		ActiveKey: ptrx.Of("task-a"), QueuedAt: time.Now(),
+	}
+	err = d.db.Create(&dup).Error
+	require.Error(t, err, "第二条活动作业必须被 uk_execution_jobs_active_slot 拒绝")
 }
 
 // TestExecutionJob_EnqueueSQLQuotesTrigger 入队裸 SQL 的列名必须反引号包裹:

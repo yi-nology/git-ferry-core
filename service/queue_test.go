@@ -21,7 +21,7 @@ func newQueueTestService(t *testing.T, key string, cfg *model.Config) *Service {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{},
-		&model.Repo{}, &model.PendingTrigger{}, &model.ExecutionJob{}))
+		&model.Repo{}, &model.PendingTrigger{}, &model.ExecutionJob{}, &model.ExecutionTaskState{}))
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)

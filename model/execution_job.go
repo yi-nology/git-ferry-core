@@ -15,8 +15,9 @@ const (
 //
 // 触发不再直接执行,而是先入队;派发器按 lease 认领执行 —— 实例崩溃/
 // K8s 驱逐后,lease 过期由 reaper 放回 pending,其它实例安全接管;
-// 同一任务同时最多一条 pending/claimed 作业(入队 WHERE NOT EXISTS 去重),
-// 重复触发(并发 webhook)自动合并 ⇒ 不会重复发布。
+// 同一任务同时最多一条 pending/claimed 作业(活动槽,见 ActiveKey +
+// ExecutionTaskState),执行中到达的重复触发以代次形式承接
+// (generation coalescing,#36)⇒ 不会重复发布,也不会被合并丢弃。
 type ExecutionJob struct {
 	ID      uint   `json:"id" gorm:"primaryKey"`
 	TaskKey string `json:"taskKey" gorm:"size:128;not null;index"`
@@ -24,6 +25,14 @@ type ExecutionJob struct {
 	// WebhookEventID 触发对应的 webhook 事件(非 webhook 触发为 nil)。
 	WebhookEventID *uint  `json:"webhookEventId"`
 	Status         string `json:"status" gorm:"size:20;not null;index"`
+	// Generation 受理时的触发代次(= 状态行 DesiredGeneration 的当时值,
+	// #36)。收尾 CAS 据此上推 CompletedGeneration;追赶作业携带最新代次。
+	Generation int64 `json:"generation" gorm:"not null;default:0"`
+	// ActiveKey 活动槽标记:pending/claimed 态 = task_key(每任务至多一条
+	// 活动作业,由唯一索引 uk_execution_jobs_active_slot 硬保证——MySQL RR
+	// 下并发事务的可见性不保证 WHERE NOT EXISTS 严格单胜出);终态 = NULL
+	// (唯一索引对多 NULL 宽容,MySQL/sqlite 行为一致)。由收尾/毒丸路径置空。
+	ActiveKey *string `json:"activeKey" gorm:"size:128"`
 	// Attempt 已认领执行次数(reaper 每次接管 +1);超 MaxJobAttempts 判失败(毒丸)。
 	// 只记「lease 过期被接管」——崩溃/驱逐的迹象;良性繁忙退避(Reschedule)
 	// 不得烧此预算,否则任务偶尔被占几次就被误判毒丸丢弃。
