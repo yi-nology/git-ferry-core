@@ -3,14 +3,65 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/yi-nology/git-ferry-core/model"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
+
+// fakeMappingStore 内存版迁移映射(#41):身份键四元组,标题不参与。
+type fakeMappingStore struct {
+	rows map[string]*model.MigrationMapping
+}
+
+func newFakeMappingStore() *fakeMappingStore {
+	return &fakeMappingStore{rows: map[string]*model.MigrationMapping{}}
+}
+
+func mappingKey(platform, repo, objType, number string) string {
+	return fmt.Sprintf("%s|%s|%s|%s", platform, repo, objType, number)
+}
+
+func (f *fakeMappingStore) Find(p, r, o, n string) (*model.MigrationMapping, error) {
+	m, ok := f.rows[mappingKey(p, r, o, n)]
+	if !ok {
+		return nil, nil
+	}
+	cp := *m
+	return &cp, nil
+}
+
+func (f *fakeMappingStore) CreatePending(m *model.MigrationMapping) (bool, error) {
+	k := mappingKey(m.SourcePlatform, m.SourceRepo, m.ObjectType, m.SourceNumber)
+	if _, ok := f.rows[k]; ok {
+		return false, nil
+	}
+	cp := *m
+	f.rows[k] = &cp
+	return true, nil
+}
+
+func (f *fakeMappingStore) Save(m *model.MigrationMapping) error {
+	cp := *m
+	f.rows[mappingKey(m.SourcePlatform, m.SourceRepo, m.ObjectType, m.SourceNumber)] = &cp
+	return nil
+}
+
+func (f *fakeMappingStore) MarkFailed(p, r, o, n string, cause error) error {
+	k := mappingKey(p, r, o, n)
+	if m, ok := f.rows[k]; ok {
+		m.Status = model.MigrationMappingFailed
+		if cause != nil {
+			m.LastError = cause.Error()
+		}
+	}
+	return nil
+}
 
 // fakeMigrator 可控的源/目标 provider(读写都走内存)。
 type fakeMigrator struct {
@@ -114,8 +165,8 @@ func TestMigrateIssues_WithCommentsAndClose(t *testing.T) {
 	tgt := &fakeMigrator{}
 	rep := &MetadataMigrateReport{Notes: metadataFidelityNotes}
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
-		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true, Comments: true}, rep))
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, nil,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true, Comments: true}, rep))
 
 	assert.Equal(t, 3, rep.SourceIssues)
 	assert.Equal(t, 2, rep.CreatedIssues, "IsPullRequest 的必须被过滤(PR 通道搬)")
@@ -134,8 +185,8 @@ func TestMigrateDryRun(t *testing.T) {
 	tgt := &fakeMigrator{}
 	rep := &MetadataMigrateReport{}
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
-		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true, DryRun: true}, rep))
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, nil,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true, DryRun: true}, rep))
 
 	assert.Empty(t, tgt.createdIs, "dry-run 不得写目标")
 	require.Len(t, rep.DryRunPlanned, 1)
@@ -143,20 +194,72 @@ func TestMigrateDryRun(t *testing.T) {
 	assert.Zero(t, rep.CreatedIssues)
 }
 
-// TestMigrateDryRun_ConvergePlan dry-run 必须能看见收敛面:目标已有
-// 同标题 ⇒ 计划标 converge:(此前目标列表被 dry-run 跳过,永远只报
-// create,计划失真)。
+// TestMigrateDryRun_ConvergePlan dry-run 依据持久化映射看到收敛面:
+// 源 #1 已映射到目标 #9 ⇒ 计划标 converge:(不再靠目标侧标题猜)。
 func TestMigrateDryRun_ConvergePlan(t *testing.T) {
 	src := &fakeMigrator{issues: []*sdkmodel.Issue{{Number: "1", Title: "t1"}}}
-	tgt := &fakeMigrator{issues: []*sdkmodel.Issue{{Number: "9", Title: "t1"}}}
+	tgt := &fakeMigrator{}
+	maps := newFakeMappingStore()
+	require.NoError(t, maps.Save(&model.MigrationMapping{
+		SourcePlatform: "srcplat", SourceRepo: "so/sr", ObjectType: model.MigrationObjectIssue,
+		SourceNumber: "1", TargetPlatform: "tgtplat", TargetRepo: "to/tr", TargetNumber: "9",
+		Status: model.MigrationMappingMigrated,
+	}))
 	rep := &MetadataMigrateReport{}
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
-		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true, DryRun: true}, rep))
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, maps,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true, DryRun: true}, rep))
 
 	require.Len(t, rep.DryRunPlanned, 1)
 	assert.Contains(t, rep.DryRunPlanned[0], "converge: t1")
 	assert.Empty(t, tgt.createdIs, "dry-run 不得写目标")
+}
+
+// TestMigrateSameTitleDistinctSources 同标题的两个源 Issue 不得归并:
+// 身份键是源编号 ⇒ 各创建一个目标对象、各写一条映射(#41)。
+func TestMigrateSameTitleDistinctSources(t *testing.T) {
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{
+		{Number: "1", Title: "same title", Body: "first"},
+		{Number: "2", Title: "same title", Body: "second"},
+	}}
+	tgt := &fakeMigrator{}
+	maps := newFakeMappingStore()
+	rep := &MetadataMigrateReport{}
+
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, maps,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+
+	assert.Equal(t, 2, rep.CreatedIssues, "同标题必须各自创建,不得归并")
+	require.Len(t, tgt.createdIs, 2)
+	assert.Equal(t, []string{"same title", "same title"}, []string{tgt.createdIs[0].Title, tgt.createdIs[1].Title})
+	require.Len(t, maps.rows, 2, "每个源编号一条映射(不按标题)")
+	m1, err := maps.Find("srcplat", "so/sr", model.MigrationObjectIssue, "1")
+	require.NoError(t, err)
+	require.NotNil(t, m1)
+	assert.NotEmpty(t, m1.TargetNumber)
+	assert.Equal(t, model.MigrationMappingMigrated, m1.Status)
+}
+
+// TestMigrateUnclosedPendingMappingIsReported 创建与回填之间崩溃留下的
+// pending 映射:显式报告并跳过创建(绝不静默再建一份),断点可见。
+func TestMigrateUnclosedPendingMappingIsReported(t *testing.T) {
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{{Number: "1", Title: "half"}}}
+	tgt := &fakeMigrator{}
+	maps := newFakeMappingStore()
+	_, err := maps.CreatePending(&model.MigrationMapping{
+		SourcePlatform: "srcplat", SourceRepo: "so/sr", ObjectType: model.MigrationObjectIssue,
+		SourceNumber: "1", Status: model.MigrationMappingPending,
+	})
+	require.NoError(t, err)
+	rep := &MetadataMigrateReport{}
+
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, maps,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+
+	assert.Zero(t, rep.CreatedIssues, "未闭环映射不得重复创建")
+	assert.Equal(t, 1, rep.UnclosedMappings)
+	require.NotEmpty(t, rep.Errors)
+	assert.Contains(t, rep.Errors[0], "unclosed migration mapping")
 }
 
 // TestMigrateCreateFailureDoesNotAbort 单条失败不中断其余(完整报告)。
@@ -171,8 +274,8 @@ func TestMigrateCreateFailureDoesNotAbort(t *testing.T) {
 	// 这里用 failCreateIssue 恒失败验证:报告两条错误、不 panic。
 	tgt.failCreateIssue = true
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
-		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, nil,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
 	assert.Zero(t, rep.CreatedIssues)
 	assert.Len(t, rep.Errors, 2, "每条失败都要可见")
 }
@@ -248,26 +351,26 @@ func TestMetadataFidelityNotes(t *testing.T) {
 }
 
 // TestMigrateIssues_IdempotentConverge 幂等收敛(SDK 2B Ensure* 采用):
-// 目标已有同标题 issue ⇒ 不重复创建,EnsureIssueState/EnsureIssueLabels
-// 收敛;Unchanged/Updated 按 outcome 分类——迁移可安全重跑。
+// 持久化映射命中 ⇒ 不重复创建,EnsureIssueState/EnsureIssueLabels 收敛;
+// Unchanged/Updated 按 outcome 分类——迁移可安全重跑。
 func TestMigrateIssues_IdempotentConverge(t *testing.T) {
 	src := &fakeMigrator{issues: []*sdkmodel.Issue{
 		{Number: "1", Title: "已存在", State: sdkmodel.IssueStateClosed, Labels: []string{"bug"}},
 		{Number: "2", Title: "新建", State: sdkmodel.IssueStateOpen},
 	}}
-	tgt := &fakeMigrator{
-		// 目标已有「已存在」同标题 issue
-		issues: []*sdkmodel.Issue{
-			{Number: "9", Title: "已存在", State: sdkmodel.IssueStateOpen, Labels: []string{"old"}},
-		},
-		ensureStateOutcome: sdkrt.OutcomeUnchanged,
-	}
+	tgt := &fakeMigrator{ensureStateOutcome: sdkrt.OutcomeUnchanged}
+	maps := newFakeMappingStore()
+	require.NoError(t, maps.Save(&model.MigrationMapping{
+		SourcePlatform: "srcplat", SourceRepo: "so/sr", ObjectType: model.MigrationObjectIssue,
+		SourceNumber: "1", TargetPlatform: "tgtplat", TargetRepo: "to/tr", TargetNumber: "9",
+		Status: model.MigrationMappingMigrated,
+	}))
 	rep := &MetadataMigrateReport{}
 
-	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
-		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, maps,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
 
-	// 「已存在」走收敛:不重复创建 + Ensure 被调(状态 open→closed want)
+	// 「已存在」走映射收敛:不重复创建 + Ensure 被调(状态 open→closed want)
 	assert.Equal(t, 1, rep.CreatedIssues, "只有「新建」被创建")
 	assert.Equal(t, 1, rep.UnchangedIssues, "已达标 zero-write 计入 unchanged")
 	require.Len(t, tgt.ensuredState, 1, "收敛路径必须调 EnsureIssueState")
@@ -280,13 +383,16 @@ func TestMigrateIssues_UpdatedOutcome(t *testing.T) {
 	src := &fakeMigrator{issues: []*sdkmodel.Issue{
 		{Number: "1", Title: "t", State: sdkmodel.IssueStateClosed},
 	}}
-	tgt := &fakeMigrator{
-		issues:             []*sdkmodel.Issue{{Number: "9", Title: "t", State: sdkmodel.IssueStateOpen}},
-		ensureStateOutcome: sdkrt.OutcomeUpdated,
-	}
+	tgt := &fakeMigrator{ensureStateOutcome: sdkrt.OutcomeUpdated}
+	maps := newFakeMappingStore()
+	require.NoError(t, maps.Save(&model.MigrationMapping{
+		SourcePlatform: "srcplat", SourceRepo: "so/sr", ObjectType: model.MigrationObjectIssue,
+		SourceNumber: "1", TargetPlatform: "tgtplat", TargetRepo: "to/tr", TargetNumber: "9",
+		Status: model.MigrationMappingMigrated,
+	}))
 	rep := &MetadataMigrateReport{}
-	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
-		"so", "sr", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
+	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt, maps,
+		"srcplat", "so", "sr", "tgtplat", "to", "tr", 500, MetadataMigrateOptions{Issues: true}, rep))
 	assert.Equal(t, 1, rep.UpdatedIssues)
 	assert.Zero(t, rep.UnchangedIssues)
 	assert.Zero(t, rep.CreatedIssues, "收敛路径不得创建")
