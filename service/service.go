@@ -15,6 +15,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 )
@@ -487,12 +488,12 @@ func (s *Service) UpdatePlatformStatus(ctx context.Context, key, status, testRes
 }
 
 // TestPlatformConnection 测试平台连接
-func (s *Service) TestPlatformConnection(ctx context.Context, key string) (*sdkprov.TestConnectionResult, error) {
+func (s *Service) TestPlatformConnection(ctx context.Context, key string) (*sdkmodel.TestConnectionResult, error) {
 	return s.platforms.TestPlatformConnection(ctx, key)
 }
 
 // ListPlatformRepos 列出平台上的仓库
-func (s *Service) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkprov.PlatformRepo, error) {
+func (s *Service) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkmodel.PlatformRepo, error) {
 	return s.platforms.ListPlatformRepos(ctx, key, page, perPage)
 }
 

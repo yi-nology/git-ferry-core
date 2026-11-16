@@ -17,7 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -36,7 +38,7 @@ func newMetadataServiceFixture(t *testing.T, backupDir string) (*Service, *gorm.
 	require.NoError(t, err)
 	platformDAO, err := dao.NewPlatformDAO(db)
 	require.NoError(t, err)
-	mgr := sdkprov.NewManager(0)
+	mgr := sdkrt.NewManager(0)
 
 	svc := &Service{
 		config:    &Config{Sync: model.SyncConfig{BackupDir: backupDir}},
@@ -53,27 +55,27 @@ type fakeEngineProv struct {
 	caps sdkprov.CapabilitySet
 
 	// 备份采集侧
-	labels        []*sdkprov.IssueLabel
+	labels        []*sdkmodel.IssueLabel
 	labelsErr     error
-	milestones    []sdkprov.Milestone
+	milestones    []sdkmodel.Milestone
 	milestonesErr error
-	issues        []*sdkprov.Issue
+	issues        []*sdkmodel.Issue
 	issuesErr     error
-	comments      map[string][]*sdkprov.IssueComment
-	prs           []*sdkprov.ChangeRequest
+	comments      map[string][]*sdkmodel.IssueComment
+	prs           []*sdkmodel.ChangeRequest
 	prsErr        error
-	releases      []*sdkprov.ReleaseInfo
+	releases      []*sdkmodel.ReleaseInfo
 	releasesErr   error
 	archives      map[string][]byte
 	archiveErrs   map[string]error
-	gistPages     map[int][]*sdkprov.Gist
+	gistPages     map[int][]*sdkmodel.Gist
 	gistCalls     []int
 	assetData     map[int64][]byte
 	assetErrs     map[int64]error
 	assetCalls    []int64
 
 	// 回灌侧（existing = 目标仓已有，复用上面同名字段；created* = 本次写入记录）
-	existLabels      []*sdkprov.Label
+	existLabels      []*sdkmodel.Label
 	createdLabels    []string
 	updatedLabels    []string
 	createdMilestone []string
@@ -91,7 +93,7 @@ func (f *fakeEngineProv) Capabilities() sdkprov.CapabilitySet { return f.caps }
 
 // --- IssueManager ---
 
-func (f *fakeEngineProv) ListIssues(_ context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkprov.Issue, int, error) {
+func (f *fakeEngineProv) ListIssues(_ context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkmodel.Issue, int, error) {
 	if f.issuesErr != nil {
 		return nil, 0, f.issuesErr
 	}
@@ -110,45 +112,45 @@ func (f *fakeEngineProv) ListIssues(_ context.Context, opts sdkprov.ListIssuesOp
 	return f.issues[start:end], len(f.issues), nil
 }
 
-func (f *fakeEngineProv) ListIssueComments(_ context.Context, _, _, number string) ([]*sdkprov.IssueComment, error) {
+func (f *fakeEngineProv) ListIssueComments(_ context.Context, _, _, number string) ([]*sdkmodel.IssueComment, error) {
 	return f.comments[number], nil
 }
 
-func (f *fakeEngineProv) ListIssueLabels(_ context.Context, _, _ string) ([]*sdkprov.IssueLabel, error) {
+func (f *fakeEngineProv) ListIssueLabels(_ context.Context, _, _ string) ([]*sdkmodel.IssueLabel, error) {
 	if f.labelsErr != nil {
 		return nil, f.labelsErr
 	}
 	return f.labels, nil
 }
 
-func (f *fakeEngineProv) CreateIssue(_ context.Context, opts sdkprov.CreateIssueOptions) (*sdkprov.Issue, error) {
+func (f *fakeEngineProv) CreateIssue(_ context.Context, opts sdkprov.CreateIssueOptions) (*sdkmodel.Issue, error) {
 	if err := f.issueErrs[opts.Title]; err != nil {
 		return nil, err
 	}
 	f.createdIssues = append(f.createdIssues, opts)
-	return &sdkprov.Issue{Number: strconv.Itoa(len(f.createdIssues) + 100), Title: opts.Title}, nil
+	return &sdkmodel.Issue{Number: strconv.Itoa(len(f.createdIssues) + 100), Title: opts.Title}, nil
 }
 
-func (f *fakeEngineProv) CreateIssueComment(_ context.Context, _, _, _, body string) (*sdkprov.IssueComment, error) {
+func (f *fakeEngineProv) CreateIssueComment(_ context.Context, _, _, _, body string) (*sdkmodel.IssueComment, error) {
 	f.createdComments = append(f.createdComments, body)
-	return &sdkprov.IssueComment{Body: body}, nil
+	return &sdkmodel.IssueComment{Body: body}, nil
 }
 
-func (f *fakeEngineProv) CloseIssue(_ context.Context, _, _, number string) (*sdkprov.Issue, error) {
+func (f *fakeEngineProv) CloseIssue(_ context.Context, _, _, number string) (*sdkmodel.Issue, error) {
 	f.closedIssues = append(f.closedIssues, number)
-	return &sdkprov.Issue{Number: number, State: "closed"}, nil
+	return &sdkmodel.Issue{Number: number, State: "closed"}, nil
 }
 
-func (f *fakeEngineProv) GetIssue(context.Context, string, string, string) (*sdkprov.Issue, error) {
+func (f *fakeEngineProv) GetIssue(context.Context, string, string, string) (*sdkmodel.Issue, error) {
 	panic("fakeEngineProv: GetIssue not expected")
 }
-func (f *fakeEngineProv) UpdateIssue(context.Context, string, string, string, sdkprov.UpdateIssueOptions) (*sdkprov.Issue, error) {
+func (f *fakeEngineProv) UpdateIssue(context.Context, string, string, string, sdkprov.UpdateIssueOptions) (*sdkmodel.Issue, error) {
 	panic("fakeEngineProv: UpdateIssue not expected")
 }
-func (f *fakeEngineProv) ReopenIssue(context.Context, string, string, string) (*sdkprov.Issue, error) {
+func (f *fakeEngineProv) ReopenIssue(context.Context, string, string, string) (*sdkmodel.Issue, error) {
 	panic("fakeEngineProv: ReopenIssue not expected")
 }
-func (f *fakeEngineProv) UpdateIssueComment(context.Context, string, string, string, int64, string) (*sdkprov.IssueComment, error) {
+func (f *fakeEngineProv) UpdateIssueComment(context.Context, string, string, string, int64, string) (*sdkmodel.IssueComment, error) {
 	panic("fakeEngineProv: UpdateIssueComment not expected")
 }
 func (f *fakeEngineProv) DeleteIssueComment(context.Context, string, string, string, int64) error {
@@ -171,25 +173,25 @@ func (f *fakeEngineProv) RemoveIssueLabels(context.Context, string, string, stri
 
 // --- MilestoneManager ---
 
-func (f *fakeEngineProv) ListMilestones(_ context.Context, _, _ string, _ sdkprov.ListMilestonesOptions) ([]sdkprov.Milestone, error) {
+func (f *fakeEngineProv) ListMilestones(_ context.Context, _, _ string, _ sdkprov.ListMilestonesOptions) ([]sdkmodel.Milestone, error) {
 	if f.milestonesErr != nil {
 		return nil, f.milestonesErr
 	}
 	return f.milestones, nil
 }
 
-func (f *fakeEngineProv) CreateMilestone(_ context.Context, _, _ string, opts sdkprov.CreateMilestoneOptions) (*sdkprov.Milestone, error) {
+func (f *fakeEngineProv) CreateMilestone(_ context.Context, _, _ string, opts sdkprov.CreateMilestoneOptions) (*sdkmodel.Milestone, error) {
 	if err := f.milestoneErrs[opts.Title]; err != nil {
 		return nil, err
 	}
 	f.createdMilestone = append(f.createdMilestone, opts.Title)
-	return &sdkprov.Milestone{Title: opts.Title}, nil
+	return &sdkmodel.Milestone{Title: opts.Title}, nil
 }
 
-func (f *fakeEngineProv) GetMilestone(context.Context, string, string, string) (*sdkprov.Milestone, error) {
+func (f *fakeEngineProv) GetMilestone(context.Context, string, string, string) (*sdkmodel.Milestone, error) {
 	panic("fakeEngineProv: GetMilestone not expected")
 }
-func (f *fakeEngineProv) UpdateMilestone(context.Context, string, string, string, sdkprov.UpdateMilestoneOptions) (*sdkprov.Milestone, error) {
+func (f *fakeEngineProv) UpdateMilestone(context.Context, string, string, string, sdkprov.UpdateMilestoneOptions) (*sdkmodel.Milestone, error) {
 	panic("fakeEngineProv: UpdateMilestone not expected")
 }
 func (f *fakeEngineProv) DeleteMilestone(context.Context, string, string, string) error {
@@ -198,7 +200,7 @@ func (f *fakeEngineProv) DeleteMilestone(context.Context, string, string, string
 
 // --- ChangeRequestManager ---
 
-func (f *fakeEngineProv) ListCRs(_ context.Context, opts sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error) {
+func (f *fakeEngineProv) ListCRs(_ context.Context, opts sdkprov.ListCROptions) ([]*sdkmodel.ChangeRequest, *int, error) {
 	if f.prsErr != nil {
 		return nil, nil, f.prsErr
 	}
@@ -223,22 +225,22 @@ func (f *fakeEngineProv) ListCRs(_ context.Context, opts sdkprov.ListCROptions) 
 	return f.prs[start:end], &total, nil
 }
 
-func (f *fakeEngineProv) CreateCR(context.Context, sdkprov.CreateCROptions) (*sdkprov.ChangeRequest, error) {
+func (f *fakeEngineProv) CreateCR(context.Context, sdkprov.CreateCROptions) (*sdkmodel.ChangeRequest, error) {
 	panic("fakeEngineProv: CreateCR not expected")
 }
-func (f *fakeEngineProv) GetCR(context.Context, string, string, string) (*sdkprov.ChangeRequest, error) {
+func (f *fakeEngineProv) GetCR(context.Context, string, string, string) (*sdkmodel.ChangeRequest, error) {
 	panic("fakeEngineProv: GetCR not expected")
 }
-func (f *fakeEngineProv) MergeCR(context.Context, string, string, string, sdkprov.MergeCROptions) (*sdkprov.ChangeRequest, error) {
+func (f *fakeEngineProv) MergeCR(context.Context, string, string, string, sdkprov.MergeCROptions) (*sdkmodel.ChangeRequest, error) {
 	panic("fakeEngineProv: MergeCR not expected")
 }
-func (f *fakeEngineProv) CloseCR(context.Context, string, string, string) (*sdkprov.ChangeRequest, error) {
+func (f *fakeEngineProv) CloseCR(context.Context, string, string, string) (*sdkmodel.ChangeRequest, error) {
 	panic("fakeEngineProv: CloseCR not expected")
 }
-func (f *fakeEngineProv) ReopenCR(context.Context, string, string, string) (*sdkprov.ChangeRequest, error) {
+func (f *fakeEngineProv) ReopenCR(context.Context, string, string, string) (*sdkmodel.ChangeRequest, error) {
 	panic("fakeEngineProv: ReopenCR not expected")
 }
-func (f *fakeEngineProv) UpdateCR(context.Context, string, string, string, sdkprov.UpdateCROptions) (*sdkprov.ChangeRequest, error) {
+func (f *fakeEngineProv) UpdateCR(context.Context, string, string, string, sdkprov.UpdateCROptions) (*sdkmodel.ChangeRequest, error) {
 	panic("fakeEngineProv: UpdateCR not expected")
 }
 func (f *fakeEngineProv) UpdateCRLabels(context.Context, string, string, string, []string) error {
@@ -247,7 +249,7 @@ func (f *fakeEngineProv) UpdateCRLabels(context.Context, string, string, string,
 
 // --- ReleaseManager / ReleaseAssetManager ---
 
-func (f *fakeEngineProv) ListReleases(_ context.Context, _, _ string) ([]*sdkprov.ReleaseInfo, error) {
+func (f *fakeEngineProv) ListReleases(_ context.Context, _, _ string) ([]*sdkmodel.ReleaseInfo, error) {
 	if f.releasesErr != nil {
 		return nil, f.releasesErr
 	}
@@ -261,12 +263,12 @@ func (f *fakeEngineProv) GetArchive(_ context.Context, _, _, ref, _ string) ([]b
 	return f.archives[ref], nil
 }
 
-func (f *fakeEngineProv) CreateRelease(_ context.Context, _, _ string, opts sdkprov.CreateReleaseOptions) (*sdkprov.ReleaseInfo, error) {
+func (f *fakeEngineProv) CreateRelease(_ context.Context, _, _ string, opts sdkprov.CreateReleaseOptions) (*sdkmodel.ReleaseInfo, error) {
 	if err := f.releaseErrs[opts.TagName]; err != nil {
 		return nil, err
 	}
 	f.createdRelease = append(f.createdRelease, opts)
-	return &sdkprov.ReleaseInfo{TagName: opts.TagName}, nil
+	return &sdkmodel.ReleaseInfo{TagName: opts.TagName}, nil
 }
 
 func (f *fakeEngineProv) DownloadReleaseAsset(_ context.Context, _, _ string, assetID int64, w io.Writer) error {
@@ -278,13 +280,13 @@ func (f *fakeEngineProv) DownloadReleaseAsset(_ context.Context, _, _ string, as
 	return err
 }
 
-func (f *fakeEngineProv) ListTags(context.Context, string, string) ([]*sdkprov.TagInfo, error) {
+func (f *fakeEngineProv) ListTags(context.Context, string, string) ([]*sdkmodel.TagInfo, error) {
 	panic("fakeEngineProv: ListTags not expected")
 }
-func (f *fakeEngineProv) GetReleaseByTag(context.Context, string, string, string) (*sdkprov.ReleaseInfo, error) {
+func (f *fakeEngineProv) GetReleaseByTag(context.Context, string, string, string) (*sdkmodel.ReleaseInfo, error) {
 	panic("fakeEngineProv: GetReleaseByTag not expected")
 }
-func (f *fakeEngineProv) UpdateRelease(context.Context, string, string, string, sdkprov.UpdateReleaseOptions) (*sdkprov.ReleaseInfo, error) {
+func (f *fakeEngineProv) UpdateRelease(context.Context, string, string, string, sdkprov.UpdateReleaseOptions) (*sdkmodel.ReleaseInfo, error) {
 	panic("fakeEngineProv: UpdateRelease not expected")
 }
 func (f *fakeEngineProv) DeleteRelease(context.Context, string, string, string) error {
@@ -293,31 +295,31 @@ func (f *fakeEngineProv) DeleteRelease(context.Context, string, string, string) 
 
 // --- GistManager ---
 
-func (f *fakeEngineProv) ListMyGists(_ context.Context, page, _ int) ([]*sdkprov.Gist, error) {
+func (f *fakeEngineProv) ListMyGists(_ context.Context, page, _ int) ([]*sdkmodel.Gist, error) {
 	f.gistCalls = append(f.gistCalls, page)
 	return f.gistPages[page], nil
 }
 
 // --- LabelManager ---
 
-func (f *fakeEngineProv) ListLabels(_ context.Context, _, _ string, _ sdkprov.ListLabelsOptions) ([]*sdkprov.Label, error) {
+func (f *fakeEngineProv) ListLabels(_ context.Context, _, _ string, _ sdkprov.ListLabelsOptions) ([]*sdkmodel.Label, error) {
 	return f.existLabels, nil
 }
 
-func (f *fakeEngineProv) CreateLabel(_ context.Context, _, _ string, opts sdkprov.CreateLabelOptions) (*sdkprov.Label, error) {
+func (f *fakeEngineProv) CreateLabel(_ context.Context, _, _ string, opts sdkprov.CreateLabelOptions) (*sdkmodel.Label, error) {
 	if err := f.labelErrs[opts.Name]; err != nil {
 		return nil, err
 	}
 	f.createdLabels = append(f.createdLabels, opts.Name)
-	return &sdkprov.Label{Name: opts.Name, Color: opts.Color}, nil
+	return &sdkmodel.Label{Name: opts.Name, Color: opts.Color}, nil
 }
 
-func (f *fakeEngineProv) UpdateLabel(_ context.Context, _, _, name string, _ sdkprov.UpdateLabelOptions) (*sdkprov.Label, error) {
+func (f *fakeEngineProv) UpdateLabel(_ context.Context, _, _, name string, _ sdkprov.UpdateLabelOptions) (*sdkmodel.Label, error) {
 	if err := f.labelErrs[name]; err != nil {
 		return nil, err
 	}
 	f.updatedLabels = append(f.updatedLabels, name)
-	return &sdkprov.Label{Name: name}, nil
+	return &sdkmodel.Label{Name: name}, nil
 }
 
 func (f *fakeEngineProv) DeleteLabel(context.Context, string, string, string) error {
@@ -495,14 +497,14 @@ func TestCollectMetadataSnapshot_Full(t *testing.T) {
 	plat := &model.Platform{Type: model.PlatformTypeGitHub}
 	prov := &fakeEngineProv{
 		caps:       sdkprov.CapabilitySet{Gists: true, ReleaseAssets: true},
-		labels:     []*sdkprov.IssueLabel{{Name: "bug", Color: "f00"}},
-		milestones: []sdkprov.Milestone{{Title: "v1"}},
-		issues:     []*sdkprov.Issue{{Number: "1", Title: "i1", State: "open"}},
-		comments:   map[string][]*sdkprov.IssueComment{"1": {{Body: "hi"}}},
-		prs:        []*sdkprov.ChangeRequest{{Number: "7", Title: "p1", SourceBranch: "feat", TargetBranch: "main"}},
-		releases:   []*sdkprov.ReleaseInfo{{TagName: "rel/../v1", Assets: []*sdkprov.ReleaseAsset{{ID: 7, Name: "a/b.bin"}}}},
+		labels:     []*sdkmodel.IssueLabel{{Name: "bug", Color: "f00"}},
+		milestones: []sdkmodel.Milestone{{Title: "v1"}},
+		issues:     []*sdkmodel.Issue{{Number: "1", Title: "i1", State: "open"}},
+		comments:   map[string][]*sdkmodel.IssueComment{"1": {{Body: "hi"}}},
+		prs:        []*sdkmodel.ChangeRequest{{Number: "7", Title: "p1", SourceBranch: "feat", TargetBranch: "main"}},
+		releases:   []*sdkmodel.ReleaseInfo{{TagName: "rel/../v1", Assets: []*sdkmodel.ReleaseAsset{{ID: 7, Name: "a/b.bin"}}}},
 		archives:   map[string][]byte{"rel/../v1": []byte("arch")},
-		gistPages:  map[int][]*sdkprov.Gist{1: {{ID: "evil/../id"}}},
+		gistPages:  map[int][]*sdkmodel.Gist{1: {{ID: "evil/../id"}}},
 		assetData:  map[int64][]byte{7: []byte("payload")},
 	}
 
@@ -574,13 +576,13 @@ func TestCollectMetadataSnapshot_WarningsAndTruncate(t *testing.T) {
 	repo := &model.Repo{PlatformOwner: "acme", PlatformRepo: "app", Platform: model.PlatformTypeGitHub}
 	plat := &model.Platform{Type: model.PlatformTypeGitHub}
 	prov := &fakeEngineProv{
-		labels:    []*sdkprov.IssueLabel{{Name: "bug", Color: "f00"}},
+		labels:    []*sdkmodel.IssueLabel{{Name: "bug", Color: "f00"}},
 		labelsErr: errors.New("boom"),
-		prs: []*sdkprov.ChangeRequest{
+		prs: []*sdkmodel.ChangeRequest{
 			{Number: "1", Title: "p1"}, {Number: "2", Title: "p2"},
 		},
 		archiveErrs: map[string]error{"v9": errors.New("404")},
-		releases:    []*sdkprov.ReleaseInfo{{TagName: "v9"}},
+		releases:    []*sdkmodel.ReleaseInfo{{TagName: "v9"}},
 	}
 
 	res, err := svc.collectMetadataSnapshot(t.Context(), MetadataBackupOptions{
@@ -604,7 +606,7 @@ func TestCollectMetadataSnapshot_WarningsAndTruncate(t *testing.T) {
 	assert.True(t, res.Truncated)
 
 	// 能力门控：无 Gists/ReleaseAssets 能力时即使 Include* 打开也不调用、无 warning
-	prov2 := &fakeEngineProv{releases: []*sdkprov.ReleaseInfo{{TagName: "v1", Assets: []*sdkprov.ReleaseAsset{{ID: 1, Name: "a"}}}}}
+	prov2 := &fakeEngineProv{releases: []*sdkmodel.ReleaseInfo{{TagName: "v1", Assets: []*sdkmodel.ReleaseAsset{{ID: 1, Name: "a"}}}}}
 	res2, err := svc.collectMetadataSnapshot(t.Context(), MetadataBackupOptions{
 		RepoKey:       "r2",
 		IncludeAssets: true,
@@ -619,9 +621,9 @@ func TestCollectMetadataSnapshot_WarningsAndTruncate(t *testing.T) {
 }
 
 func TestListIssues_CapsAtMax(t *testing.T) {
-	issues := make([]*sdkprov.Issue, 0, 55)
+	issues := make([]*sdkmodel.Issue, 0, 55)
 	for i := 0; i < 55; i++ {
-		issues = append(issues, &sdkprov.Issue{Number: strconv.Itoa(i), Title: "t" + strconv.Itoa(i)})
+		issues = append(issues, &sdkmodel.Issue{Number: strconv.Itoa(i), Title: "t" + strconv.Itoa(i)})
 	}
 	prov := &fakeEngineProv{issues: issues}
 	repo := &model.Repo{PlatformOwner: "o", PlatformRepo: "r", Platform: model.PlatformTypeGitHub}

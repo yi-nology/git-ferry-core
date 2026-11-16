@@ -10,19 +10,21 @@ import (
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // PlatformService 平台服务
 type PlatformService struct {
 	platformDAO *dao.PlatformDAO
 	repoDAO     *dao.RepoDAO
-	providerMgr *sdkprov.Manager
+	providerMgr *sdkrt.Manager
 	hooks       *sdkprov.Hooks
 }
 
 // NewPlatformService 创建 PlatformService
-func NewPlatformService(platformDAO *dao.PlatformDAO, repoDAO *dao.RepoDAO, providerMgr *sdkprov.Manager) *PlatformService {
+func NewPlatformService(platformDAO *dao.PlatformDAO, repoDAO *dao.RepoDAO, providerMgr *sdkrt.Manager) *PlatformService {
 	return &PlatformService{
 		platformDAO: platformDAO,
 		repoDAO:     repoDAO,
@@ -71,7 +73,7 @@ func (s *PlatformService) UpdatePlatformStatus(ctx context.Context, key, status,
 }
 
 // TestPlatformConnection 测试平台连接
-func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string) (*sdkprov.TestConnectionResult, error) {
+func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string) (*sdkmodel.TestConnectionResult, error) {
 	platform, err := s.platformDAO.FindByKey(key)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query platform failed")
@@ -95,7 +97,7 @@ func (s *PlatformService) TestPlatformConnection(ctx context.Context, key string
 }
 
 // ListPlatformRepos 列出平台上的仓库
-func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkprov.PlatformRepo, error) {
+func (s *PlatformService) ListPlatformRepos(ctx context.Context, key, page, perPage string) ([]*sdkmodel.PlatformRepo, error) {
 	platform, err := s.platformDAO.FindByKey(key)
 	if err != nil {
 		return nil, oekiterrors.Wrap(err, "query platform failed")
@@ -167,7 +169,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 // FullName 缺失时回退 SDK Owner+Name。
 func splitRepoPath(fullName, sdkOwner, sdkName string) (owner, pathName string) {
 	if fullName != "" {
-		return sdkprov.SplitFullName(fullName)
+		return sdkrt.SplitFullName(fullName)
 	}
 	return sdkOwner, sdkName
 }

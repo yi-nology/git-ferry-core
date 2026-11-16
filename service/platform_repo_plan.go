@@ -4,7 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 )
 
 // repoUpsertPlan 平台仓库导入的增改计划(纯函数产物,便于单测)。
@@ -15,7 +15,7 @@ type repoUpsertPlan struct {
 
 // planRepoUpsert 比对平台仓库与本地存量,产出创建/更新计划。
 // 职责单一:只做 diff,不碰 DB。
-func planRepoUpsert(platform *model.Platform, repos []*sdkprov.PlatformRepo,
+func planRepoUpsert(platform *model.Platform, repos []*sdkmodel.PlatformRepo,
 	existingMap map[string]*model.Repo, filter *RepoImportFilter) *repoUpsertPlan {
 	plan := &repoUpsertPlan{}
 	for _, repo := range repos {
@@ -62,7 +62,7 @@ func planRepoUpsert(platform *model.Platform, repos []*sdkprov.PlatformRepo,
 	return plan
 }
 
-func needsMetaUpdate(existing *model.Repo, repo *sdkprov.PlatformRepo,
+func needsMetaUpdate(existing *model.Repo, repo *sdkmodel.PlatformRepo,
 	owner, pathName, cloneURL, sshURL string) bool {
 	return existing.CloneURL != cloneURL ||
 		existing.SSHURL != sshURL ||
@@ -72,7 +72,7 @@ func needsMetaUpdate(existing *model.Repo, repo *sdkprov.PlatformRepo,
 		(repo.DefaultBranch != "" && existing.DefaultBranch != repo.DefaultBranch)
 }
 
-func applyMetaUpdate(existing *model.Repo, repo *sdkprov.PlatformRepo,
+func applyMetaUpdate(existing *model.Repo, repo *sdkmodel.PlatformRepo,
 	owner, pathName, cloneURL, sshURL string) {
 	existing.CloneURL = cloneURL
 	existing.SSHURL = sshURL

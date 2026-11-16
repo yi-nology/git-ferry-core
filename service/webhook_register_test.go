@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	// 注册全部平台后端,使 NewProvider 在测试二进制中可用
+	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	_ "github.com/yi-nology/go-git-platform/backends/all"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	_ "github.com/yi-nology/go-git-platform/adapter/all"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -42,7 +43,7 @@ func setupRegisterTestService(t *testing.T, platformAPIURL string) (*Service, *g
 	platform := &model.Platform{
 		Key:    "gitea-test",
 		Name:   "Gitea Test",
-		Type:   string(sdkprov.PlatformGitea),
+		Type:   string(sdkmodel.PlatformGitea),
 		APIURL: platformAPIURL,
 	}
 	if err := db.Create(platform).Error; err != nil {
@@ -63,7 +64,7 @@ func setupRegisterTestService(t *testing.T, platformAPIURL string) (*Service, *g
 	}
 
 	svc := &Service{
-		repos: NewRepoService(repoDAO, platformDAO, sdkprov.NewManager(0)),
+		repos: NewRepoService(repoDAO, platformDAO, sdkrt.NewManager(0)),
 	}
 	return svc, db
 }

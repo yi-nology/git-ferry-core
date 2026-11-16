@@ -6,12 +6,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 )
 
 func TestPlanRepoUpsert_CreateAndUpdate(t *testing.T) {
 	plat := &model.Platform{ID: 1, Type: "github", InstanceURL: "github.com"}
-	repos := []*sdkprov.PlatformRepo{
+	repos := []*sdkmodel.PlatformRepo{
 		{FullName: "o/new", Name: "new", CloneURL: "https://github.com/o/new.git"},
 		{FullName: "o/old", Name: "old2", CloneURL: "https://github.com/o/old2.git"},
 	}
@@ -27,7 +27,7 @@ func TestPlanRepoUpsert_CreateAndUpdate(t *testing.T) {
 
 func TestPlanRepoUpsert_FilterSkips(t *testing.T) {
 	plat := &model.Platform{ID: 1, Type: "github"}
-	repos := []*sdkprov.PlatformRepo{
+	repos := []*sdkmodel.PlatformRepo{
 		{FullName: "o/a", Fork: true},
 		{FullName: "o/b"},
 	}

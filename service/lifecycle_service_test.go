@@ -14,8 +14,8 @@ import (
 	"gorm.io/gorm"
 
 	// 注册平台后端：测试构造 provider 时 registry 不能为空
-	_ "github.com/yi-nology/go-git-platform/backends/all"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	_ "github.com/yi-nology/go-git-platform/adapter/all"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -62,7 +62,7 @@ func setupLifecycleTest(t *testing.T) (*Service, *gorm.DB, func()) {
 	require.NoError(t, err)
 	platformDAO, err := dao.NewPlatformDAO(db)
 	require.NoError(t, err)
-	mgr := sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(8))
+	mgr := sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(8))
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},

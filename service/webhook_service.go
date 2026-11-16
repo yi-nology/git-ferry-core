@@ -11,7 +11,7 @@ import (
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
+	"github.com/yi-nology/go-git-platform/filter/branchfilter"
 )
 
 // WebhookService handles webhook-related operations.

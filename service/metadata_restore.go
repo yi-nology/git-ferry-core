@@ -13,6 +13,7 @@ import (
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -308,7 +309,7 @@ func readSnapshotJSON(dir, name string, v any) error {
 }
 
 func restoreLabels(ctx context.Context, t restoreTarget, dir string, stat *RestoreKindStat, result *RestoreResult) {
-	var labels []*sdkprov.IssueLabel
+	var labels []*sdkmodel.IssueLabel
 	if err := readSnapshotJSON(dir, "labels.json", &labels); err != nil {
 		result.Warnings = append(result.Warnings, "labels.json: "+err.Error())
 		return
@@ -406,7 +407,7 @@ func sameColor(a, b string) bool {
 }
 
 func restoreMilestones(ctx context.Context, t restoreTarget, dir string, stat *RestoreKindStat, result *RestoreResult) {
-	var ms []*sdkprov.Milestone
+	var ms []*sdkmodel.Milestone
 	if err := readSnapshotJSON(dir, "milestones.json", &ms); err != nil {
 		result.Warnings = append(result.Warnings, "milestones.json: "+err.Error())
 		return
@@ -465,7 +466,7 @@ func listExistingIssueTitles(ctx context.Context, im sdkprov.IssueManager, owner
 	page := 1
 	for {
 		items, _, err := im.ListIssues(ctx, sdkprov.ListIssuesOptions{
-			Owner: owner, Repo: repo, State: sdkprov.IssueState("all"),
+			Owner: owner, Repo: repo, State: sdkmodel.IssueState("all"),
 			Page: page, PerPage: perPage,
 		})
 		if err != nil {
@@ -508,7 +509,7 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 	result.Warnings = append(result.Warnings, dedupWarn...)
 
 	if asPR {
-		var prs []*sdkprov.ChangeRequest
+		var prs []*sdkmodel.ChangeRequest
 		if err := readSnapshotJSON(dir, "pull_requests.json", &prs); err != nil {
 			result.Warnings = append(result.Warnings, "pull_requests.json: "+err.Error())
 			return
@@ -547,7 +548,7 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 			_ = created
 			// **PR 的状态要跟着回灌**:已合并/已关闭的 PR 回灌成"开着的 issue",
 			// 看着像一条待处理的请求(issues 分支本来就处理了 closed 状态)。
-			if pr.State == sdkprov.CRStateMerged || pr.State == sdkprov.CRStateClosed {
+			if pr.State == sdkmodel.CRStateMerged || pr.State == sdkmodel.CRStateClosed {
 				if _, cerr := im.CloseIssue(ctx, t.owner, t.repo, created.Number); cerr != nil {
 					result.Warnings = append(result.Warnings, "close pr-as-issue "+pr.Title+": "+cerr.Error())
 				}
@@ -622,7 +623,7 @@ func issueBody(iss *issueRow) string {
 	return b.String()
 }
 
-func prBody(pr *sdkprov.ChangeRequest) string {
+func prBody(pr *sdkmodel.ChangeRequest) string {
 	var b strings.Builder
 	b.WriteString("<!-- gitferry-restore:pr -->\n")
 	b.WriteString("> 以 issue 形态从 PR 快照回灌（不创建真实 PR）\n\n")
@@ -632,7 +633,7 @@ func prBody(pr *sdkprov.ChangeRequest) string {
 }
 
 func restoreReleases(ctx context.Context, t restoreTarget, dir string, stat *RestoreKindStat, result *RestoreResult) {
-	var rels []*sdkprov.ReleaseInfo
+	var rels []*sdkmodel.ReleaseInfo
 	if err := readSnapshotJSON(dir, "releases.json", &rels); err != nil {
 		result.Warnings = append(result.Warnings, "releases.json: "+err.Error())
 		return

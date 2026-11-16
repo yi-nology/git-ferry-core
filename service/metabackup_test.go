@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -19,9 +20,9 @@ type fakeBackupProv struct {
 	sdkprov.Provider
 	caps sdkprov.CapabilitySet
 
-	gistPages  map[int][]*sdkprov.Gist
+	gistPages  map[int][]*sdkmodel.Gist
 	gistCalls  []int
-	releases   []*sdkprov.ReleaseInfo
+	releases   []*sdkmodel.ReleaseInfo
 	relCalls   int
 	assetData  map[int64][]byte
 	assetErr   map[int64]error
@@ -30,12 +31,12 @@ type fakeBackupProv struct {
 
 func (f *fakeBackupProv) Capabilities() sdkprov.CapabilitySet { return f.caps }
 
-func (f *fakeBackupProv) ListMyGists(_ context.Context, page, _ int) ([]*sdkprov.Gist, error) {
+func (f *fakeBackupProv) ListMyGists(_ context.Context, page, _ int) ([]*sdkmodel.Gist, error) {
 	f.gistCalls = append(f.gistCalls, page)
 	return f.gistPages[page], nil
 }
 
-func (f *fakeBackupProv) ListReleases(_ context.Context, _, _ string) ([]*sdkprov.ReleaseInfo, error) {
+func (f *fakeBackupProv) ListReleases(_ context.Context, _, _ string) ([]*sdkmodel.ReleaseInfo, error) {
 	f.relCalls++
 	return f.releases, nil
 }
@@ -52,20 +53,20 @@ func (f *fakeBackupProv) DownloadReleaseAsset(_ context.Context, _, _ string, as
 // TestBackupGists_PaginatesToMax 迁自原 githubapi 上限截断断言,并覆盖分页拉全:
 // maxGists=150 时应翻到第 2 页(原实现只拉 1 页 ≤100 却标 maxGists=200),截断 150。
 func TestBackupGists_PaginatesToMax(t *testing.T) {
-	page1 := make([]*sdkprov.Gist, 0, 100)
+	page1 := make([]*sdkmodel.Gist, 0, 100)
 	for i := 0; i < 100; i++ {
-		page1 = append(page1, &sdkprov.Gist{ID: fmt.Sprintf("p1-gist-%03d", i)})
+		page1 = append(page1, &sdkmodel.Gist{ID: fmt.Sprintf("p1-gist-%03d", i)})
 	}
-	page2 := make([]*sdkprov.Gist, 0, 100)
+	page2 := make([]*sdkmodel.Gist, 0, 100)
 	for i := 0; i < 100; i++ {
-		page2 = append(page2, &sdkprov.Gist{ID: fmt.Sprintf("p2-gist-%03d", i)})
+		page2 = append(page2, &sdkmodel.Gist{ID: fmt.Sprintf("p2-gist-%03d", i)})
 	}
 	// 路径不安全 ID:落盘文件名必须经清洗(原 githubapi 的路径清洗断言迁移点)
 	page2[0].ID = "evil/../id"
 
 	prov := &fakeBackupProv{
 		caps:      sdkprov.CapabilitySet{Gists: true},
-		gistPages: map[int][]*sdkprov.Gist{1: page1, 2: page2},
+		gistPages: map[int][]*sdkmodel.Gist{1: page1, 2: page2},
 	}
 	dest := t.TempDir()
 	svc := &Service{}
@@ -97,13 +98,13 @@ func TestBackupGists_DefaultMaxAndNoCapability(t *testing.T) {
 
 	// 默认上限 200:1 页 100 条 + 第 2 页 1 条(短页≠末页)→ 第 3 页观测到
 	// 空页才终止(v0.73 起空页终止语义,防服务端压缩页大小时提前停)
-	page1 := make([]*sdkprov.Gist, 100)
+	page1 := make([]*sdkmodel.Gist, 100)
 	for i := range page1 {
-		page1[i] = &sdkprov.Gist{ID: fmt.Sprintf("g-%03d", i)}
+		page1[i] = &sdkmodel.Gist{ID: fmt.Sprintf("g-%03d", i)}
 	}
 	prov2 := &fakeBackupProv{
 		caps:      sdkprov.CapabilitySet{Gists: true},
-		gistPages: map[int][]*sdkprov.Gist{1: page1, 2: {{ID: "last"}}},
+		gistPages: map[int][]*sdkmodel.Gist{1: page1, 2: {{ID: "last"}}},
 	}
 	count, _, err := svc.BackupGists(t.Context(), prov2, t.TempDir(), 0)
 	require.NoError(t, err)
@@ -119,9 +120,9 @@ func TestDownloadReleaseAssets_ReusesReleases(t *testing.T) {
 		caps:      sdkprov.CapabilitySet{ReleaseAssets: true},
 		assetData: map[int64][]byte{7: []byte("payload")},
 	}
-	releases := []*sdkprov.ReleaseInfo{{
+	releases := []*sdkmodel.ReleaseInfo{{
 		TagName: "rel/../v1",
-		Assets:  []*sdkprov.ReleaseAsset{{ID: 7, Name: "a/b.bin"}},
+		Assets:  []*sdkmodel.ReleaseAsset{{ID: 7, Name: "a/b.bin"}},
 	}}
 	dest := t.TempDir()
 	saved, warnings, err := svc.DownloadReleaseAssets(t.Context(), prov, "o", "r", releases, dest, 10)
@@ -141,9 +142,9 @@ func TestDownloadReleaseAssets_FetchAndCapAndWarn(t *testing.T) {
 		caps:      sdkprov.CapabilitySet{ReleaseAssets: true},
 		assetData: map[int64][]byte{1: []byte("one"), 2: []byte("two"), 3: []byte("three")},
 		assetErr:  map[int64]error{2: fmt.Errorf("boom")},
-		releases: []*sdkprov.ReleaseInfo{
-			{TagName: "v1", Assets: []*sdkprov.ReleaseAsset{{ID: 1, Name: "one.bin"}}},
-			{TagName: "v2", Assets: []*sdkprov.ReleaseAsset{{ID: 2, Name: "two.bin"}, {ID: 3, Name: "three.bin"}}},
+		releases: []*sdkmodel.ReleaseInfo{
+			{TagName: "v1", Assets: []*sdkmodel.ReleaseAsset{{ID: 1, Name: "one.bin"}}},
+			{TagName: "v2", Assets: []*sdkmodel.ReleaseAsset{{ID: 2, Name: "two.bin"}, {ID: 3, Name: "three.bin"}}},
 		},
 	}
 	dest := t.TempDir()
@@ -163,8 +164,8 @@ func TestDownloadReleaseAssets_FetchAndCapAndWarn(t *testing.T) {
 	prov2 := &fakeBackupProv{
 		caps:      sdkprov.CapabilitySet{ReleaseAssets: true},
 		assetData: map[int64][]byte{1: []byte("one"), 2: []byte("two"), 3: []byte("three")},
-		releases: []*sdkprov.ReleaseInfo{{
-			TagName: "v1", Assets: []*sdkprov.ReleaseAsset{{ID: 1, Name: "a"}, {ID: 2, Name: "b"}, {ID: 3, Name: "c"}},
+		releases: []*sdkmodel.ReleaseInfo{{
+			TagName: "v1", Assets: []*sdkmodel.ReleaseAsset{{ID: 1, Name: "a"}, {ID: 2, Name: "b"}, {ID: 3, Name: "c"}},
 		}},
 	}
 	saved2, _, err := svc.DownloadReleaseAssets(t.Context(), prov2, "o", "r", nil, t.TempDir(), 2)

@@ -3,7 +3,7 @@
 // 私钥只在响应中返回一次、不落库；调用方自行存入密钥管理。
 package deploykey
 
-import "github.com/yi-nology/go-git-platform/pkg/credential"
+import "github.com/yi-nology/go-git-platform/auth/credential"
 
 // Generate 生成 comment 标识的 Ed25519 部署密钥对。
 func Generate(comment string) (*credential.DeployKey, error) {

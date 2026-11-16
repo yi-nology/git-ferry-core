@@ -9,7 +9,9 @@ import (
 
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // 备份编排:平台取数(provider 可选能力)+ 本地落盘,metadata 快照与 gists 备份
@@ -28,17 +30,17 @@ func (s *Service) BackupGists(ctx context.Context, prov sdkprov.Provider, destDi
 	perPage := sdkprov.MaxPerPage
 	maxPages := (maxGists + perPage - 1) / perPage
 	// 空页终止 + 到 max 即 ErrStopIteration;预算 +1 页用于观测空页。
-	var gists []*sdkprov.Gist
+	var gists []*sdkmodel.Gist
 	truncated := false
-	err = sdkprov.EachBounded(ctx,
-		func(ctx context.Context, page int) ([]*sdkprov.Gist, error) {
+	err = sdkrt.EachBounded(ctx,
+		func(ctx context.Context, page int) ([]*sdkmodel.Gist, error) {
 			return gm.ListMyGists(ctx, page, perPage)
 		}, maxPages+1,
-		func(g *sdkprov.Gist) error {
+		func(g *sdkmodel.Gist) error {
 			if len(gists) >= maxGists {
 				// 截断留痕:到上限就停,必须说明"还有没拉到的"。
 				truncated = true
-				return sdkprov.ErrStopIteration
+				return sdkrt.ErrStopIteration
 			}
 			gists = append(gists, g)
 			return nil
@@ -77,7 +79,7 @@ func (s *Service) BackupGists(ctx context.Context, prov sdkprov.Provider, destDi
 // 文件名 tag__name(均经路径清洗),上限 maxAssets,warning 文案逐附件。
 // 平台不声明 ReleaseAssets 能力时报错。
 func (s *Service) DownloadReleaseAssets(ctx context.Context, prov sdkprov.Provider, owner, repo string,
-	releases []*sdkprov.ReleaseInfo, destDir string, maxAssets int) (saved, warnings []string, err error) {
+	releases []*sdkmodel.ReleaseInfo, destDir string, maxAssets int) (saved, warnings []string, err error) {
 	if !prov.Capabilities().ReleaseAssets {
 		return nil, nil, errors.New("platform does not support release assets")
 	}

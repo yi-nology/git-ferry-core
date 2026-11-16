@@ -11,7 +11,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/go-git-platform/pkg/branchfilter"
+	"github.com/yi-nology/go-git-platform/filter/branchfilter"
 )
 
 // webhookEventID 决定入库用的事件 ID,以及是否需要按 ID 去重。

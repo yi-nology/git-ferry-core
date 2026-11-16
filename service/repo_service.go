@@ -12,18 +12,19 @@ import (
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // RepoService handles repository-related operations.
 type RepoService struct {
 	repoDAO     *dao.RepoDAO
 	platformDAO *dao.PlatformDAO
-	providerMgr *sdkprov.Manager
+	providerMgr *sdkrt.Manager
 	hooks       *sdkprov.Hooks
 }
 
 // NewRepoService creates a new RepoService instance.
-func NewRepoService(repoDAO *dao.RepoDAO, platformDAO *dao.PlatformDAO, providerMgr *sdkprov.Manager) *RepoService {
+func NewRepoService(repoDAO *dao.RepoDAO, platformDAO *dao.PlatformDAO, providerMgr *sdkrt.Manager) *RepoService {
 	return &RepoService{
 		repoDAO:     repoDAO,
 		platformDAO: platformDAO,
@@ -56,7 +57,7 @@ func (rs *RepoService) GetRepo(ctx context.Context, key string) (*model.Repo, er
 // CreateRepo creates a new repository.
 func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequest) (*model.Repo, error) {
 	// Try to detect platform from URL
-	result, err := sdkprov.DetectPlatform(req.RemoteURL)
+	result, err := sdkrt.DetectPlatform(req.RemoteURL)
 	if err != nil && req.PlatformID == 0 {
 		// If detection fails and no platform_id provided, return error
 		if oekiterrors.Is(err, sdkprov.ErrPlatformNotSupported) {

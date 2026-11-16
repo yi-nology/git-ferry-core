@@ -8,7 +8,7 @@ import (
 	"github.com/oekit/pkg/cache"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/go-git-platform/githubapp"
+	"github.com/yi-nology/go-git-platform/auth/githubapp"
 )
 
 // ghAppTokenInner 缓存 installation token（有效期约 1h）。

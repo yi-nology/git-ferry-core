@@ -6,6 +6,7 @@ import (
 
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -95,7 +96,7 @@ func listPublicOrgRepos(ctx context.Context, s *Service, plat *model.Platform, o
 	}
 	perPage := sdkprov.MaxPerPage
 	maxPages := maxPublicOrgPages
-	publics := []*sdkprov.PlatformRepo{}
+	publics := []*sdkmodel.PlatformRepo{}
 	for page := 1; len(publics) < max && page <= maxPages; page++ {
 		batch, lerr := prov.ListRepos(ctx, sdkprov.ListRepoOptions{Owner: org, Page: page, PerPage: perPage})
 		if lerr != nil {
@@ -331,7 +332,7 @@ func RewriteRepoURL(raw, owner, repo string) string {
 // 以哨兵形式放 errors.go 归类，此处仅注释说明归属。
 
 // ListStarredRepos 拉取平台 starred 仓库（能力门控 + 分页拉到 max 条）。
-func (s *Service) ListStarredRepos(ctx context.Context, platformKey string, max int) ([]*sdkprov.PlatformRepo, error) {
+func (s *Service) ListStarredRepos(ctx context.Context, platformKey string, max int) ([]*sdkmodel.PlatformRepo, error) {
 	plat, err := s.GetPlatform(ctx, platformKey)
 	if err != nil || plat == nil {
 		return nil, ErrPlatformNotFound
@@ -347,7 +348,7 @@ func (s *Service) ListStarredRepos(ctx context.Context, platformKey string, max 
 
 	// 分页拉到 max 条为止(页不足一页即末页)。
 	perPage := sdkprov.MaxPerPage
-	starred := []*sdkprov.PlatformRepo{}
+	starred := []*sdkmodel.PlatformRepo{}
 	for page := 1; len(starred) < max; page++ {
 		batch, serr := sm.ListStarred(ctx, page, perPage)
 		if serr != nil {

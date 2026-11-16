@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -85,7 +85,7 @@ func TestDetectDrift_ComparesSourceWithTarget(t *testing.T) {
 	require.NoError(t, err)
 	platformDAO, err := dao.NewPlatformDAO(db)
 	require.NoError(t, err)
-	mgr := sdkprov.NewManager(30 * 1e9)
+	mgr := sdkrt.NewManager(30 * 1e9)
 
 	tempDir := filepath.Join(root, "tmp")
 	require.NoError(t, os.MkdirAll(tempDir, 0o750))
@@ -157,7 +157,7 @@ func TestDetectDrift_RespectsBudget(t *testing.T) {
 	require.NoError(t, err)
 	platformDAO, err := dao.NewPlatformDAO(db)
 	require.NoError(t, err)
-	mgr := sdkprov.NewManager(30 * 1e9)
+	mgr := sdkrt.NewManager(30 * 1e9)
 
 	svc := &Service{
 		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},

@@ -28,8 +28,8 @@ import (
 	"github.com/yi-nology/git-ferry-core/mirror"
 	"github.com/yi-nology/git-ferry-core/mirror/history"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/go-git-platform/auth/credential"
 	"github.com/yi-nology/go-git-platform/gitbackend"
-	"github.com/yi-nology/go-git-platform/pkg/credential"
 )
 
 // HistoryService 历史同步服务。

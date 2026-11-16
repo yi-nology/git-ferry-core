@@ -3,6 +3,7 @@ package model
 import (
 	"time"
 
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	"github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 )
@@ -41,15 +42,15 @@ func (Platform) TableName() string {
 	return "platforms"
 }
 
-// 平台类型常量:SDK 已注册平台直接复用 provider.Platform 常量(字符串值相同);
+// 平台类型常量:SDK 已注册平台直接复用 sdkmodel.Platform 常量(字符串值相同);
 // SDK 未注册的扩展类型保留本地定义。
 const (
-	PlatformTypeGitHub      = string(provider.PlatformGitHub)      // "github"
-	PlatformTypeGitLab      = string(provider.PlatformGitLab)      // "gitlab"
-	PlatformTypeGitea       = string(provider.PlatformGitea)       // "gitea"
-	PlatformTypeGitee       = string(provider.PlatformGitee)       // "gitee"
-	PlatformTypeGitCode     = string(provider.PlatformGitCode)     // "gitcode"
-	PlatformTypeTencentCode = string(provider.PlatformTencentCode) // "tencent_code"
+	PlatformTypeGitHub      = string(sdkmodel.PlatformGitHub)      // "github"
+	PlatformTypeGitLab      = string(sdkmodel.PlatformGitLab)      // "gitlab"
+	PlatformTypeGitea       = string(sdkmodel.PlatformGitea)       // "gitea"
+	PlatformTypeGitee       = string(sdkmodel.PlatformGitee)       // "gitee"
+	PlatformTypeGitCode     = string(sdkmodel.PlatformGitCode)     // "gitcode"
+	PlatformTypeTencentCode = string(sdkmodel.PlatformTencentCode) // "tencent_code"
 	// SDK 未注册的扩展类型
 	PlatformTypeAtomGit = "atomgit"
 	PlatformTypeCustom  = "custom"
@@ -64,7 +65,7 @@ const (
 // ValidPlatformType 检查平台类型是否合法:SDK 已注册平台 + 扩展白名单。
 // 替代旧的 ValidPlatformTypes 静态 map,与 SDK 注册表自动同步。
 func ValidPlatformType(t string) bool {
-	return provider.IsRegistered(provider.Platform(t)) || extensionPlatforms[t]
+	return provider.IsRegistered(sdkmodel.Platform(t)) || extensionPlatforms[t]
 }
 
 // extensionPlatforms SDK 未注册但业务支持的扩展平台。

@@ -8,7 +8,9 @@ import (
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // providerConfig 由平台记录构建 SDK provider 配置(token 可覆盖平台默认)。
@@ -17,7 +19,7 @@ import (
 func providerConfig(p *model.Platform, token string, hooks *sdkprov.Hooks) sdkprov.Config {
 	rc := sdkprov.DefaultRetryConfig()
 	return sdkprov.Config{
-		Platform:    sdkprov.Platform(p.Type),
+		Platform:    sdkmodel.Platform(p.Type),
 		BaseURL:     p.APIURL,
 		Token:       token,
 		SkipTLS:     p.SkipTLSVerify,
@@ -28,7 +30,7 @@ func providerConfig(p *model.Platform, token string, hooks *sdkprov.Hooks) sdkpr
 
 // providerFromManager 按 token 取 provider(统一走 Manager 缓存)。
 // tokenOverride 非空时优先;否则按平台解析(GitHub App installation token 感知)。
-func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride string, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
+func providerFromManager(mgr *sdkrt.Manager, p *model.Platform, tokenOverride string, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
 	if mgr == nil {
 		return nil, oekiterrors.New("provider manager is nil")
 	}
@@ -50,7 +52,7 @@ func providerFromManager(mgr *sdkprov.Manager, p *model.Platform, tokenOverride 
 // platformProvider 返回平台对应的 provider,统一经 Manager 缓存,
 // 替代散落各处的 Config+NewProvider 样板。
 // Token 优先取 GitHub App installation token(若配置),否则用 AccessToken。
-func platformProvider(mgr *sdkprov.Manager, p *model.Platform, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
+func platformProvider(mgr *sdkrt.Manager, p *model.Platform, hooks *sdkprov.Hooks) (sdkprov.Provider, error) {
 	return providerFromManager(mgr, p, "", hooks)
 }
 
@@ -86,7 +88,7 @@ type RepoImportFilter struct {
 }
 
 // Allow 判断仓库是否应导入。
-func (f *RepoImportFilter) Allow(r *sdkprov.PlatformRepo) bool {
+func (f *RepoImportFilter) Allow(r *sdkmodel.PlatformRepo) bool {
 	if f == nil {
 		return true
 	}
@@ -127,16 +129,16 @@ func (f *RepoImportFilter) Allow(r *sdkprov.PlatformRepo) bool {
 }
 
 // fetchAllPlatformRepos 按最大页大小循环翻页,拉取平台全部仓库。
-// 空页终止,复用平台 provider.CollectBounded(v0.73 起唯一分页面;
+// 空页终止,复用平台 runtime.CollectBounded(v0.73 起唯一分页面;
 // 短页≠末页——服务端可能把页大小压到请求值以下);maxPages 作为安全
 // 上限防止异常平台(忽略 page 参数)无限翻页,撞上限报 ErrPageBudgetExceeded
 // 而非静默截断。这里只保留按 CloneURL/FullName 的去重。
-func fetchAllPlatformRepos(ctx context.Context, provider sdkprov.Provider) ([]*sdkprov.PlatformRepo, error) {
+func fetchAllPlatformRepos(ctx context.Context, provider sdkprov.Provider) ([]*sdkmodel.PlatformRepo, error) {
 	const maxPages = 100
 	perPage := sdkprov.MaxPerPage
 
-	repos, err := sdkprov.CollectBounded(ctx,
-		func(ctx context.Context, page int) ([]*sdkprov.PlatformRepo, error) {
+	repos, err := sdkrt.CollectBounded(ctx,
+		func(ctx context.Context, page int) ([]*sdkmodel.PlatformRepo, error) {
 			return provider.ListRepos(ctx, sdkprov.ListRepoOptions{Page: page, PerPage: perPage})
 		}, maxPages)
 	if err != nil {
@@ -144,7 +146,7 @@ func fetchAllPlatformRepos(ctx context.Context, provider sdkprov.Provider) ([]*s
 	}
 
 	seen := make(map[string]struct{}, len(repos))
-	all := make([]*sdkprov.PlatformRepo, 0, len(repos))
+	all := make([]*sdkmodel.PlatformRepo, 0, len(repos))
 	for _, r := range repos {
 		id := r.CloneURL
 		if id == "" {

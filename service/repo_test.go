@@ -8,8 +8,9 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/go-git-platform/pkg/credential"
+	"github.com/yi-nology/go-git-platform/auth/credential"
 	"github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -44,7 +45,7 @@ func setupTestService(t *testing.T) (*Service, *gorm.DB) {
 		t.Fatalf("failed to create PlatformDAO: %v", err)
 	}
 
-	providerMgr := provider.NewManager(0)
+	providerMgr := sdkrt.NewManager(0)
 	repoService := NewRepoService(repoDAO, platformDAO, providerMgr)
 
 	svc := &Service{

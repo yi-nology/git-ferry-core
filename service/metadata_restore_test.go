@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -118,7 +119,7 @@ func TestIssueBodyHasRestoreMarker(t *testing.T) {
 }
 
 func TestPRBodyHasRestoreMarker(t *testing.T) {
-	b := prBody(&sdkprov.ChangeRequest{
+	b := prBody(&sdkmodel.ChangeRequest{
 		Number: "3", SourceBranch: "feat", TargetBranch: "main", Description: "desc",
 	})
 	for _, want := range []string{"gitferry-restore:pr", "feat", "main", "desc"} {
@@ -235,8 +236,8 @@ func TestRunRestore_CreateSkipFail(t *testing.T) {
 
 	// run A：overwrite=false —— 同名跳过、注入失败、未知 kind
 	prov := &fakeEngineProv{
-		existLabels: []*sdkprov.Label{{Name: "bug"}},
-		milestones:  []sdkprov.Milestone{{Title: "v1"}},
+		existLabels: []*sdkmodel.Label{{Name: "bug"}},
+		milestones:  []sdkmodel.Milestone{{Title: "v1"}},
 		labelErrs:   map[string]error{"feat": assert.AnError},
 		issueErrs:   map[string]error{"i3": assert.AnError},
 		releaseErrs: map[string]error{"v1": assert.AnError},
@@ -283,7 +284,7 @@ func TestRunRestore_CreateSkipFail(t *testing.T) {
 	assert.Empty(t, prOpts.Labels, "PR 回灌不带 labels")
 
 	// run B：overwrite=true —— 已存在 label 走更新而非跳过
-	prov2 := &fakeEngineProv{existLabels: []*sdkprov.Label{{Name: "bug"}}}
+	prov2 := &fakeEngineProv{existLabels: []*sdkmodel.Label{{Name: "bug"}}}
 	res2 := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", Overwrite: true, Kinds: []string{"labels"}},
 		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov2)
 	// 「更新」必须与「新建」分开记:原来把 update 记成 created ⇒ 报告说"新建了 2 条",
@@ -309,7 +310,7 @@ func TestRunRestore_OverwriteLabelColorHonest(t *testing.T) {
 	require.NoError(t, err)
 
 	// 目标侧:bug 颜色与快照一致(f00);feat 颜色被人工改成 00f
-	prov := &fakeEngineProv{existLabels: []*sdkprov.Label{
+	prov := &fakeEngineProv{existLabels: []*sdkmodel.Label{
 		{Name: "bug", Color: "f00"},
 		{Name: "feat", Color: "00f"},
 	}}
@@ -355,7 +356,7 @@ func TestRunRestore_OverwriteLabelColorDryRunVisible(t *testing.T) {
 	snap, err := loadMetadataSnapshot(snapDir)
 	require.NoError(t, err)
 
-	prov := &fakeEngineProv{existLabels: []*sdkprov.Label{{Name: "feat", Color: "00f"}}}
+	prov := &fakeEngineProv{existLabels: []*sdkmodel.Label{{Name: "feat", Color: "00f"}}}
 	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", Overwrite: true, DryRun: true, Kinds: []string{"labels"}},
 		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
 
@@ -401,7 +402,7 @@ type numberingProv struct {
 	numbers map[string]string
 }
 
-func (p *numberingProv) CreateIssue(ctx context.Context, opts sdkprov.CreateIssueOptions) (*sdkprov.Issue, error) {
+func (p *numberingProv) CreateIssue(ctx context.Context, opts sdkprov.CreateIssueOptions) (*sdkmodel.Issue, error) {
 	iss, err := p.fakeEngineProv.CreateIssue(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -460,7 +461,7 @@ func TestRunRestore_OverwriteUnsupportedWarns(t *testing.T) {
 
 	// 目标侧已有一个同名 milestone
 	prov := &fakeEngineProv{
-		milestones: []sdkprov.Milestone{{Number: "1", Title: "v1", State: "open"}},
+		milestones: []sdkmodel.Milestone{{Number: "1", Title: "v1", State: "open"}},
 	}
 	res := svc.runRestore(t.Context(), RestoreRequest{RepoKey: "r1", DryRun: false, Overwrite: true},
 		snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
@@ -491,9 +492,9 @@ func TestRunRestore_DedupSeesAllPages(t *testing.T) {
 	require.NoError(t, err)
 
 	// 目标侧:150 条 issue,第 120 条标题与快照同名(在第 2 页)
-	issues := make([]*sdkprov.Issue, 0, 150)
+	issues := make([]*sdkmodel.Issue, 0, 150)
 	for i := 1; i <= 150; i++ {
-		issues = append(issues, &sdkprov.Issue{
+		issues = append(issues, &sdkmodel.Issue{
 			Number: strconv.Itoa(i), Title: "target-issue-" + strconv.Itoa(i), State: "open",
 		})
 	}

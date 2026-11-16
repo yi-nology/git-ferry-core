@@ -9,6 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	"gorm.io/gorm"
 
@@ -22,20 +23,20 @@ type fakeQuerier struct {
 	cmpErr error
 }
 
-func (f *fakeQuerier) ListCommits(_ context.Context, owner, repo string, opts sdkprov.ListCommitsOptions) ([]*sdkprov.CommitInfo, error) {
+func (f *fakeQuerier) ListCommits(_ context.Context, owner, repo string, opts sdkprov.ListCommitsOptions) ([]*sdkmodel.CommitInfo, error) {
 	sha, ok := f.head[owner+"/"+repo+":"+opts.Branch]
 	if !ok {
 		return nil, nil // 分支不存在
 	}
-	return []*sdkprov.CommitInfo{{SHA: sha}}, nil
+	return []*sdkmodel.CommitInfo{{SHA: sha}}, nil
 }
 
-func (f *fakeQuerier) CompareCommits(_ context.Context, _, _, base, head string) (*sdkprov.CompareResult, error) {
+func (f *fakeQuerier) CompareCommits(_ context.Context, _, _, base, head string) (*sdkmodel.CompareResult, error) {
 	if f.cmpErr != nil {
 		return nil, f.cmpErr
 	}
 	// 简化语义:head="src:NN" base="tgt:MM" —— 从 sha 尾部数字推导 ahead/behind。
-	return &sdkprov.CompareResult{AheadBy: shaNum(head) - shaNum(base), BehindBy: 0}, nil
+	return &sdkmodel.CompareResult{AheadBy: shaNum(head) - shaNum(base), BehindBy: 0}, nil
 }
 
 // shaNum 从 "sha-7" 这类测试 sha 取数字。
@@ -91,10 +92,10 @@ func TestReconcileBranches(t *testing.T) {
 // fakeErrQuerier ListCommits 恒错(区分「查询失败」与「分支不存在」)。
 type fakeErrQuerier struct{ err error }
 
-func (f *fakeErrQuerier) ListCommits(context.Context, string, string, sdkprov.ListCommitsOptions) ([]*sdkprov.CommitInfo, error) {
+func (f *fakeErrQuerier) ListCommits(context.Context, string, string, sdkprov.ListCommitsOptions) ([]*sdkmodel.CommitInfo, error) {
 	return nil, f.err
 }
-func (f *fakeErrQuerier) CompareCommits(context.Context, string, string, string, string) (*sdkprov.CompareResult, error) {
+func (f *fakeErrQuerier) CompareCommits(context.Context, string, string, string, string) (*sdkmodel.CompareResult, error) {
 	return nil, f.err
 }
 

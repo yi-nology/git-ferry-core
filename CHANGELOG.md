@@ -2,6 +2,30 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）
+
+- **依赖升级**:go-git-platform v0.138.0 → **v0.143.0**。v0.141.0 为
+  **BREAKING** 文件排布重构（`provider` 拆为 `model` ← `provider` ←
+  `runtime` ← `adapter` 四层，无 shim、无别名过渡），本仓按
+  `docs/MIGRATION.md` 一次性迁移 42 文件:
+  - 实体 → `model`:Platform/Issue/ChangeRequest/IssueComment/IssueState/
+    CRState/Label/Milestone/ReleaseInfo/ReleaseAsset/Gist/CompareResult/
+    CommitInfo/TagInfo/PlatformRepo/PlatformWebhook/TestConnectionResult;
+  - 机器与哨兵 → `runtime`:Manager/NewManager/WithMaxSize/CollectBounded/
+    EachBounded/SplitFullName/DetectPlatform/EnsureIssueState/
+    EnsureIssueLabels/MutationOutcome(含 Outcome* 常量)/ErrStopIteration;
+  - 契约与全部 `XxxOptions`/`Hooks`/`CapabilitySet`/错误面留守 `provider`;
+  - 路径:`backends/all`→`adapter/all`、`pkg/credential`→`auth/credential`、
+    `pkg/branchfilter`→`filter/branchfilter`、`githubapp`→`auth/githubapp`。
+- **零行为变化**:仅包路径与符号归属调整，wire shape/API 语义不动;
+  v0.139/v0.140/v0.142/v0.143 的红利集中在 SDK 自身测试工程化
+  （四域覆盖门/巡检矩阵/异常注入/沙箱 E2E），消费面经 MVS 统一抬到
+  v0.143.0。
+- **验证**:`GOWORK=off GOFLAGS=-mod=readonly go build/vet`、
+  `go test -race ./...`、golangci-lint 全绿。
+
 ## [v0.49.0] - 2026-11-15
 
 ### Changed（SDK v0.138.0 升级 + draft 透传——迁移保真补全）

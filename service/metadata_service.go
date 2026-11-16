@@ -13,7 +13,9 @@ import (
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // 元数据备份引擎（壳 biz/handler/git_sync 的 MetadataBackup/ListMetadataBackups
@@ -405,9 +407,9 @@ func (s *Service) collectPullRequests(ctx context.Context, prov sdkprov.Provider
 	// 平台没有 "all" 这个过滤值(SDK 的 mapListState 只映射 open/closed),
 	// 所以分两次取再合并;closed 一侧在 GitHub/Gitea 上同时覆盖"已关闭"与"已合并"
 	// (合并态在数据模型里就是 state=closed + merged=true)。
-	var all []*sdkprov.ChangeRequest
+	var all []*sdkmodel.ChangeRequest
 	seen := map[string]bool{}
-	for _, st := range []sdkprov.CRState{sdkprov.CRStateOpened, sdkprov.CRStateClosed} {
+	for _, st := range []sdkmodel.CRState{sdkmodel.CRStateOpened, sdkmodel.CRStateClosed} {
 		prs, lerr := listCRs(ctx, cm, repo, st, maxItems)
 		if lerr != nil {
 			// 一侧失败要**告警**:静默少一半比报错更坏(快照看着是成功的)。
@@ -438,16 +440,16 @@ func (s *Service) collectPullRequests(ctx context.Context, prov sdkprov.Provider
 // 而 max_items 默认 500 —— 一次性 PerPage=max 会被截成 100 且只拿第 1 页,
 // 于是"上限 500"实际只拿到 100 条。
 func listCRs(ctx context.Context, cm sdkprov.ChangeRequestManager, repo *model.Repo,
-	state sdkprov.CRState, max int) ([]*sdkprov.ChangeRequest, error) {
+	state sdkmodel.CRState, max int) ([]*sdkmodel.ChangeRequest, error) {
 	const perPage = 50
 	// 页预算 = 拉满 max 所需页 +1 页空页观测(空页终止语义)。
 	maxPages := (max + perPage - 1) / perPage
 	if maxPages < 1 {
 		maxPages = 1
 	}
-	var batch []*sdkprov.ChangeRequest
-	err := sdkprov.EachBounded(ctx,
-		func(ctx context.Context, page int) ([]*sdkprov.ChangeRequest, error) {
+	var batch []*sdkmodel.ChangeRequest
+	err := sdkrt.EachBounded(ctx,
+		func(ctx context.Context, page int) ([]*sdkmodel.ChangeRequest, error) {
 			items, _, lerr := cm.ListCRs(ctx, sdkprov.ListCROptions{
 				Owner:   repo.PlatformOwner,
 				Repo:    repo.PlatformRepo,
@@ -457,9 +459,9 @@ func listCRs(ctx context.Context, cm sdkprov.ChangeRequestManager, repo *model.R
 			})
 			return items, lerr
 		}, maxPages+1,
-		func(pr *sdkprov.ChangeRequest) error {
+		func(pr *sdkmodel.ChangeRequest) error {
 			if len(batch) >= max {
-				return sdkprov.ErrStopIteration
+				return sdkrt.ErrStopIteration
 			}
 			batch = append(batch, pr)
 			return nil
@@ -471,7 +473,7 @@ func listCRs(ctx context.Context, cm sdkprov.ChangeRequestManager, repo *model.R
 }
 
 func (s *Service) collectReleases(ctx context.Context, prov sdkprov.Provider, repo *model.Repo,
-	include bool, maxItems int, snap *MetadataSnapshot) []*sdkprov.ReleaseInfo {
+	include bool, maxItems int, snap *MetadataSnapshot) []*sdkmodel.ReleaseInfo {
 	if !include {
 		return nil
 	}
@@ -493,7 +495,7 @@ func (s *Service) collectReleases(ctx context.Context, prov sdkprov.Provider, re
 }
 
 func (s *Service) downloadSourceArchives(ctx context.Context, prov sdkprov.Provider, repo *model.Repo,
-	releases []*sdkprov.ReleaseInfo, snapDir string, snap *MetadataSnapshot) {
+	releases []*sdkmodel.ReleaseInfo, snapDir string, snap *MetadataSnapshot) {
 	if len(releases) == 0 {
 		return
 	}
@@ -523,7 +525,7 @@ func (s *Service) downloadSourceArchives(ctx context.Context, prov sdkprov.Provi
 }
 
 func (s *Service) collectReleaseAssets(ctx context.Context, prov sdkprov.Provider, repo *model.Repo,
-	releases []*sdkprov.ReleaseInfo, snapDir string, maxAssets int, snap *MetadataSnapshot) {
+	releases []*sdkmodel.ReleaseInfo, snapDir string, maxAssets int, snap *MetadataSnapshot) {
 	assetDir := filepath.Join(snapDir, "release-assets")
 	// token 归 ProviderForPlatform 解析(repo token 优先,GitHub App 感知);
 	// 已收集的 releases 带 Assets 元数据则复用,不重复请求。
@@ -581,17 +583,17 @@ func writeSnapshotJSON(snap *MetadataSnapshot, snapDir string) error {
 
 // issueRow 导出用 issue 视图（issues.json 分片结构；JSON 标签与壳层一致）。
 type issueRow struct {
-	Number      string                  `json:"number"`
-	Title       string                  `json:"title"`
-	State       string                  `json:"state"`
-	Author      string                  `json:"author,omitempty"`
-	Labels      []string                `json:"labels,omitempty"`
-	Assignees   []string                `json:"assignees,omitempty"`
-	Body        string                  `json:"body,omitempty"`
-	WebURL      string                  `json:"web_url,omitempty"`
-	CreatedAt   string                  `json:"created_at"`
-	UpdatedAt   string                  `json:"updated_at"`
-	CommentList []*sdkprov.IssueComment `json:"comments,omitempty"`
+	Number      string                   `json:"number"`
+	Title       string                   `json:"title"`
+	State       string                   `json:"state"`
+	Author      string                   `json:"author,omitempty"`
+	Labels      []string                 `json:"labels,omitempty"`
+	Assignees   []string                 `json:"assignees,omitempty"`
+	Body        string                   `json:"body,omitempty"`
+	WebURL      string                   `json:"web_url,omitempty"`
+	CreatedAt   string                   `json:"created_at"`
+	UpdatedAt   string                   `json:"updated_at"`
+	CommentList []*sdkmodel.IssueComment `json:"comments,omitempty"`
 	// IsPullRequest 标记这条"issue"其实是 PR(平台的 issue 列表含 PR)。
 	// **不落进 JSON**:PR 在采集阶段就被剔除了,快照里不该出现。
 	IsPullRequest bool `json:"-"`
@@ -611,7 +613,7 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 		return nil, 0, 0, oekiterrors.New(fmt.Sprintf("platform %s does not support issue export", repo.Platform))
 	}
 	// 空 state 交平台默认(通常 open+closed 或 open)
-	st := sdkprov.IssueState(state)
+	st := sdkmodel.IssueState(state)
 	const perPage = 50
 	// 页预算 = 拉满扫描上限所需页 +1 页空页观测(空页终止语义);
 	// fn 内到扫描上限即 ErrStopIteration 提前收束。
@@ -623,11 +625,11 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 	if maxPages < 1 {
 		maxPages = 1
 	}
-	var batch []*sdkprov.Issue
+	var batch []*sdkmodel.Issue
 	scanned := 0
 	prSkipped := 0
-	err := sdkprov.EachBounded(ctx,
-		func(ctx context.Context, page int) ([]*sdkprov.Issue, error) {
+	err := sdkrt.EachBounded(ctx,
+		func(ctx context.Context, page int) ([]*sdkmodel.Issue, error) {
 			items, _, lerr := im.ListIssues(ctx, sdkprov.ListIssuesOptions{
 				Owner:   repo.PlatformOwner,
 				Repo:    repo.PlatformRepo,
@@ -640,7 +642,7 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 			})
 			return items, lerr
 		}, maxPages+1,
-		func(iss *sdkprov.Issue) error {
+		func(iss *sdkmodel.Issue) error {
 			scanned++
 			// **PR 不占 issue 的预算**:平台的 issue 列表端点(GitHub)把 PR 一起返回,
 			// 若让它们占额度,PR 多的仓里真实 issue 会被整批挤出预算(而快照看着是成功的)。
@@ -650,7 +652,7 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 				return nil
 			}
 			if len(batch) >= max {
-				return sdkprov.ErrStopIteration
+				return sdkrt.ErrStopIteration
 			}
 			batch = append(batch, iss)
 			return nil
@@ -665,7 +667,7 @@ func listIssues(ctx context.Context, p sdkprov.Provider, repo *model.Repo, state
 	return out, scanned, prSkipped, nil
 }
 
-func toIssueRow(iss *sdkprov.Issue) *issueRow {
+func toIssueRow(iss *sdkmodel.Issue) *issueRow {
 	author := ""
 	if iss.Author != nil {
 		author = iss.Author.Username

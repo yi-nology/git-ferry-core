@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	_ "github.com/yi-nology/go-git-platform/backends/all"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	_ "github.com/yi-nology/go-git-platform/adapter/all"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -35,7 +35,7 @@ func setupOrgBulkDB(t *testing.T) (*Service, *gorm.DB) {
 	require.NoError(t, err)
 	platformDAO, err := dao.NewPlatformDAO(db)
 	require.NoError(t, err)
-	mgr := sdkprov.NewManager(0)
+	mgr := sdkrt.NewManager(0)
 
 	svc := &Service{
 		config:    &Config{Git: model.GitConfig{TempDir: t.TempDir()}},

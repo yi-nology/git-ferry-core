@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
-	"github.com/yi-nology/go-git-platform/pkg/credential"
+	"github.com/yi-nology/go-git-platform/auth/credential"
 	"gorm.io/gorm"
 )
 

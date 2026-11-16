@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -26,33 +27,33 @@ import (
 // 否则测试会用一个"什么状态都给、一次给全"的假平台,把缺陷盖住。
 type stateFilterCRProv struct {
 	sdkprov.Provider
-	prs []*sdkprov.ChangeRequest
+	prs []*sdkmodel.ChangeRequest
 	mu  sync.Mutex
 	// calls 记录每次 ListCRs 的入参,用于断言"状态两侧都查了""真的翻页了"。
 	calls []sdkprov.ListCROptions
 }
 
-func (p *stateFilterCRProv) ListCRs(_ context.Context, opts sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error) {
+func (p *stateFilterCRProv) ListCRs(_ context.Context, opts sdkprov.ListCROptions) ([]*sdkmodel.ChangeRequest, *int, error) {
 	p.mu.Lock()
 	p.calls = append(p.calls, opts)
 	p.mu.Unlock()
 
-	var out []*sdkprov.ChangeRequest
+	var out []*sdkmodel.ChangeRequest
 	for _, pr := range p.prs {
 		switch opts.State {
-		case sdkprov.CRStateOpened:
-			if pr.State == sdkprov.CRStateOpened {
+		case sdkmodel.CRStateOpened:
+			if pr.State == sdkmodel.CRStateOpened {
 				out = append(out, pr)
 			}
-		case sdkprov.CRStateClosed:
+		case sdkmodel.CRStateClosed:
 			// GitHub/Gitea 的 closed 侧同时覆盖"已关闭"与"已合并"
-			if pr.State == sdkprov.CRStateClosed || pr.State == sdkprov.CRStateMerged {
+			if pr.State == sdkmodel.CRStateClosed || pr.State == sdkmodel.CRStateMerged {
 				out = append(out, pr)
 			}
 		default:
 			// **空状态 = 只返回 open** —— 这正是 GitHub/Gitea/Forgejo 的默认。
 			// 桩必须复刻它,否则"漏掉 closed PR"这个缺陷会被假平台盖住。
-			if pr.State == sdkprov.CRStateOpened {
+			if pr.State == sdkmodel.CRStateOpened {
 				out = append(out, pr)
 			}
 		}
@@ -74,18 +75,18 @@ func (p *stateFilterCRProv) ListCRs(_ context.Context, opts sdkprov.ListCROption
 	return out[start:end], &total, nil
 }
 
-func (p *stateFilterCRProv) seenStates() []sdkprov.CRState {
+func (p *stateFilterCRProv) seenStates() []sdkmodel.CRState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var out []sdkprov.CRState
+	var out []sdkmodel.CRState
 	for _, c := range p.calls {
 		out = append(out, c.State)
 	}
 	return out
 }
 
-func crAt(n int, title string, state sdkprov.CRState, updated time.Time) *sdkprov.ChangeRequest {
-	return &sdkprov.ChangeRequest{
+func crAt(n int, title string, state sdkmodel.CRState, updated time.Time) *sdkmodel.ChangeRequest {
+	return &sdkmodel.ChangeRequest{
 		Number:    strconv.Itoa(n),
 		Title:     title,
 		State:     state,
@@ -119,15 +120,15 @@ func collectPRs(t *testing.T, prov sdkprov.Provider, maxItems int) *MetadataSnap
 // 而且回灌侧的「PR 状态跟着回灌」根本无从触发(快照里压根没有 closed/merged 的 PR)。
 func TestCollectPullRequests_IncludesClosedAndMerged(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	prov := &stateFilterCRProv{prs: []*sdkprov.ChangeRequest{
-		crAt(1, "open one", sdkprov.CRStateOpened, base),
-		crAt(2, "closed one", sdkprov.CRStateClosed, base.Add(time.Hour)),
-		crAt(3, "merged one", sdkprov.CRStateMerged, base.Add(2*time.Hour)),
+	prov := &stateFilterCRProv{prs: []*sdkmodel.ChangeRequest{
+		crAt(1, "open one", sdkmodel.CRStateOpened, base),
+		crAt(2, "closed one", sdkmodel.CRStateClosed, base.Add(time.Hour)),
+		crAt(3, "merged one", sdkmodel.CRStateMerged, base.Add(2*time.Hour)),
 	}}
 
 	snap := collectPRs(t, prov, 500)
 
-	var got []*sdkprov.ChangeRequest
+	var got []*sdkmodel.ChangeRequest
 	data, err := os.ReadFile(filepath.Join(snap.Dir, "pull_requests.json"))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &got))
@@ -143,8 +144,8 @@ func TestCollectPullRequests_IncludesClosedAndMerged(t *testing.T) {
 
 	// 两侧状态都必须查过
 	states := prov.seenStates()
-	assert.Contains(t, states, sdkprov.CRStateOpened)
-	assert.Contains(t, states, sdkprov.CRStateClosed)
+	assert.Contains(t, states, sdkmodel.CRStateOpened)
+	assert.Contains(t, states, sdkmodel.CRStateClosed)
 }
 
 // TestCollectPullRequests_Paginates 上限 500 就该真翻页 —— 列表端点每页上限是 100。
@@ -153,9 +154,9 @@ func TestCollectPullRequests_IncludesClosedAndMerged(t *testing.T) {
 // "上限 500"实际只拿到 100 条,而且**没有任何告警**。
 func TestCollectPullRequests_Paginates(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	var prs []*sdkprov.ChangeRequest
+	var prs []*sdkmodel.ChangeRequest
 	for i := 1; i <= 120; i++ {
-		prs = append(prs, crAt(i, "pr", sdkprov.CRStateOpened, base.Add(time.Duration(i)*time.Minute)))
+		prs = append(prs, crAt(i, "pr", sdkmodel.CRStateOpened, base.Add(time.Duration(i)*time.Minute)))
 	}
 	prov := &stateFilterCRProv{prs: prs}
 
@@ -177,11 +178,11 @@ func TestCollectPullRequests_Paginates(t *testing.T) {
 // 且 open/closed 两侧一起参与 —— 否则 open 侧顶满上限就把 closed 侧整批挤掉。
 func TestCollectPullRequests_CapsByUpdatedAt(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	prov := &stateFilterCRProv{prs: []*sdkprov.ChangeRequest{
-		crAt(1, "open old", sdkprov.CRStateOpened, base),
-		crAt(2, "open new", sdkprov.CRStateOpened, base.Add(3*time.Hour)),
-		crAt(3, "closed mid", sdkprov.CRStateClosed, base.Add(2*time.Hour)),
-		crAt(4, "closed new", sdkprov.CRStateClosed, base.Add(4*time.Hour)),
+	prov := &stateFilterCRProv{prs: []*sdkmodel.ChangeRequest{
+		crAt(1, "open old", sdkmodel.CRStateOpened, base),
+		crAt(2, "open new", sdkmodel.CRStateOpened, base.Add(3*time.Hour)),
+		crAt(3, "closed mid", sdkmodel.CRStateClosed, base.Add(2*time.Hour)),
+		crAt(4, "closed new", sdkmodel.CRStateClosed, base.Add(4*time.Hour)),
 	}}
 
 	snap := collectPRs(t, prov, 2)
@@ -189,7 +190,7 @@ func TestCollectPullRequests_CapsByUpdatedAt(t *testing.T) {
 	assert.EqualValues(t, 2, snap.Counts["pull_requests"])
 	data, err := os.ReadFile(filepath.Join(snap.Dir, "pull_requests.json"))
 	require.NoError(t, err)
-	var got []*sdkprov.ChangeRequest
+	var got []*sdkmodel.ChangeRequest
 	require.NoError(t, json.Unmarshal(data, &got))
 	require.Len(t, got, 2)
 	// 最近的两个:closed new(4h) 与 open new(3h)
@@ -206,7 +207,7 @@ func TestCollectPullRequests_CapsByUpdatedAt(t *testing.T) {
 func TestCollectIssues_ExcludesPullRequests(t *testing.T) {
 	snap := newPRCollectSnap(t)
 	repo := &model.Repo{PlatformOwner: "o", PlatformRepo: "r"}
-	prov := &fakeEngineProv{issues: []*sdkprov.Issue{
+	prov := &fakeEngineProv{issues: []*sdkmodel.Issue{
 		{Number: "1", Title: "real issue", State: "open"},
 		{Number: "7", Title: "a pull request", State: "open", IsPullRequest: true},
 		{Number: "2", Title: "another issue", State: "open"},

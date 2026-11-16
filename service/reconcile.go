@@ -8,6 +8,7 @@ import (
 
 	"github.com/oekit/concurrency/loop"
 	"github.com/yi-nology/git-ferry-core/model"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
@@ -20,8 +21,8 @@ import (
 // branchHeadQuerier 对账所需的最小 provider 能力(测试可 fake,
 // 不用实现整个 sdkprov.Provider 九合一接口)。
 type branchHeadQuerier interface {
-	ListCommits(ctx context.Context, owner, repo string, opts sdkprov.ListCommitsOptions) ([]*sdkprov.CommitInfo, error)
-	CompareCommits(ctx context.Context, owner, repo, base, head string) (*sdkprov.CompareResult, error)
+	ListCommits(ctx context.Context, owner, repo string, opts sdkprov.ListCommitsOptions) ([]*sdkmodel.CommitInfo, error)
+	CompareCommits(ctx context.Context, owner, repo, base, head string) (*sdkmodel.CompareResult, error)
 }
 
 // ReconcileTask 对账单个同步任务:查源/目标分支 HEAD SHA 并比较。

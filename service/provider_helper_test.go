@@ -3,24 +3,24 @@ package service
 import (
 	"testing"
 
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 )
 
 func TestRepoImportFilter_Allow(t *testing.T) {
-	repo := func(fn string, opt ...func(*sdkprov.PlatformRepo)) *sdkprov.PlatformRepo {
-		r := &sdkprov.PlatformRepo{FullName: fn, Name: "name-fallback"}
+	repo := func(fn string, opt ...func(*sdkmodel.PlatformRepo)) *sdkmodel.PlatformRepo {
+		r := &sdkmodel.PlatformRepo{FullName: fn, Name: "name-fallback"}
 		for _, o := range opt {
 			o(r)
 		}
 		return r
 	}
-	archived := func(r *sdkprov.PlatformRepo) { r.Archived = true }
-	forked := func(r *sdkprov.PlatformRepo) { r.Fork = true }
-	stars := func(n int) func(*sdkprov.PlatformRepo) {
-		return func(r *sdkprov.PlatformRepo) { r.Stars = n }
+	archived := func(r *sdkmodel.PlatformRepo) { r.Archived = true }
+	forked := func(r *sdkmodel.PlatformRepo) { r.Fork = true }
+	stars := func(n int) func(*sdkmodel.PlatformRepo) {
+		return func(r *sdkmodel.PlatformRepo) { r.Stars = n }
 	}
-	lang := func(l string) func(*sdkprov.PlatformRepo) {
-		return func(r *sdkprov.PlatformRepo) { r.Language = l }
+	lang := func(l string) func(*sdkmodel.PlatformRepo) {
+		return func(r *sdkmodel.PlatformRepo) { r.Language = l }
 	}
 
 	// nil filter 恒放行
@@ -48,7 +48,7 @@ func TestRepoImportFilter_Allow(t *testing.T) {
 
 	// FullName 为空时回退 Name 匹配 glob
 	f2 := &RepoImportFilter{IncludeGlobs: []string{"team-*"}}
-	if !f2.Allow(repo("", func(r *sdkprov.PlatformRepo) { r.Name = "team-a" })) {
+	if !f2.Allow(repo("", func(r *sdkmodel.PlatformRepo) { r.Name = "team-a" })) {
 		t.Fatal("FullName 空时应回退 Name 匹配")
 	}
 	if f2.Allow(repo("other/x")) {

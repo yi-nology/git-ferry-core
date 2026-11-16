@@ -6,7 +6,9 @@ import (
 	"log/slog"
 
 	"github.com/oekit/pkg/errors"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // ===== Issue/PR 元数据高保真迁移(P3 收尾) =====
@@ -28,33 +30,33 @@ import (
 // metadataMigrator 迁移所需的最小 provider 能力(源侧用读方法,
 // 目标侧用写方法;同一接口,两侧各传一个 provider 实现实例)。
 type metadataMigrator interface {
-	ListIssues(ctx context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkprov.Issue, int, error)
-	CreateIssue(ctx context.Context, opts sdkprov.CreateIssueOptions) (*sdkprov.Issue, error)
-	CloseIssue(ctx context.Context, owner, repo, number string) (*sdkprov.Issue, error)
-	ListIssueComments(ctx context.Context, owner, repo, number string) ([]*sdkprov.IssueComment, error)
-	CreateIssueComment(ctx context.Context, owner, repo, number, body string) (*sdkprov.IssueComment, error)
-	ListCRs(ctx context.Context, opts sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error)
-	CreateCR(ctx context.Context, opts sdkprov.CreateCROptions) (*sdkprov.ChangeRequest, error)
-	CloseCR(ctx context.Context, owner, repo, number string) (*sdkprov.ChangeRequest, error)
+	ListIssues(ctx context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkmodel.Issue, int, error)
+	CreateIssue(ctx context.Context, opts sdkprov.CreateIssueOptions) (*sdkmodel.Issue, error)
+	CloseIssue(ctx context.Context, owner, repo, number string) (*sdkmodel.Issue, error)
+	ListIssueComments(ctx context.Context, owner, repo, number string) ([]*sdkmodel.IssueComment, error)
+	CreateIssueComment(ctx context.Context, owner, repo, number, body string) (*sdkmodel.IssueComment, error)
+	ListCRs(ctx context.Context, opts sdkprov.ListCROptions) ([]*sdkmodel.ChangeRequest, *int, error)
+	CreateCR(ctx context.Context, opts sdkprov.CreateCROptions) (*sdkmodel.ChangeRequest, error)
+	CloseCR(ctx context.Context, owner, repo, number string) (*sdkmodel.ChangeRequest, error)
 }
 
 // issueEnsurer 收敛能力最小面(SDK 2B Ensure* 的可注入缝):
 // 生产用 sdkEnsurer 包完整 Provider;测试用 fake 返回可控 outcome。
 type issueEnsurer interface {
-	EnsureIssueState(ctx context.Context, owner, repo, number string, want sdkprov.IssueState) (sdkprov.MutationOutcome, error)
-	EnsureIssueLabels(ctx context.Context, owner, repo, number string, want []string) (sdkprov.MutationOutcome, error)
+	EnsureIssueState(ctx context.Context, owner, repo, number string, want sdkmodel.IssueState) (sdkrt.MutationOutcome, error)
+	EnsureIssueLabels(ctx context.Context, owner, repo, number string, want []string) (sdkrt.MutationOutcome, error)
 }
 
 // sdkEnsurer 生产适配:包完整 Provider 调 SDK 包级 Ensure* 函数。
 type sdkEnsurer struct{ p sdkprov.Provider }
 
-func (e sdkEnsurer) EnsureIssueState(ctx context.Context, owner, repo, number string, want sdkprov.IssueState) (sdkprov.MutationOutcome, error) {
-	out, _, err := sdkprov.EnsureIssueState(ctx, e.p, owner, repo, number, want)
+func (e sdkEnsurer) EnsureIssueState(ctx context.Context, owner, repo, number string, want sdkmodel.IssueState) (sdkrt.MutationOutcome, error) {
+	out, _, err := sdkrt.EnsureIssueState(ctx, e.p, owner, repo, number, want)
 	return out, err
 }
 
-func (e sdkEnsurer) EnsureIssueLabels(ctx context.Context, owner, repo, number string, want []string) (sdkprov.MutationOutcome, error) {
-	out, _, err := sdkprov.EnsureIssueLabels(ctx, e.p, owner, repo, number, want)
+func (e sdkEnsurer) EnsureIssueLabels(ctx context.Context, owner, repo, number string, want []string) (sdkrt.MutationOutcome, error) {
+	out, _, err := sdkrt.EnsureIssueLabels(ctx, e.p, owner, repo, number, want)
 	return out, err
 }
 
@@ -191,7 +193,7 @@ func migrateIssues(ctx context.Context,
 	if err != nil {
 		return errors.Wrap(err, "list target issues")
 	}
-	existing := make(map[string]*sdkprov.Issue, len(tgtIssues))
+	existing := make(map[string]*sdkmodel.Issue, len(tgtIssues))
 	for _, ti := range tgtIssues {
 		if ti != nil && !ti.IsPullRequest {
 			existing[ti.Title] = ti
@@ -202,9 +204,9 @@ func migrateIssues(ctx context.Context,
 		if is == nil || is.IsPullRequest {
 			continue // PR 由 PR 通道搬运(GitHub 列表混入)
 		}
-		want := sdkprov.IssueStateOpen
-		if is.State == sdkprov.IssueStateClosed {
-			want = sdkprov.IssueStateClosed
+		want := sdkmodel.IssueStateOpen
+		if is.State == sdkmodel.IssueStateClosed {
+			want = sdkmodel.IssueStateClosed
 		}
 		if opts.DryRun {
 			if _, ok := existing[is.Title]; ok {
@@ -226,7 +228,7 @@ func migrateIssues(ctx context.Context,
 				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure labels %q: %v", is.Title, err))
 				continue
 			}
-			if outcome == sdkprov.OutcomeUpdated {
+			if outcome == sdkrt.OutcomeUpdated {
 				rep.UpdatedIssues++
 			} else {
 				rep.UnchangedIssues++
@@ -248,7 +250,7 @@ func migrateIssues(ctx context.Context,
 		}
 		rep.CreatedIssues++
 		// 源已关闭 ⇒ EnsureIssueState 幂等收敛(新建成 open → closed)。
-		if want == sdkprov.IssueStateClosed && created != nil && created.Number != "" {
+		if want == sdkmodel.IssueStateClosed && created != nil && created.Number != "" {
 			if _, err := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, created.Number, want); err != nil {
 				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure state %q: %v", is.Title, err))
 			} else {
@@ -303,7 +305,7 @@ func migrateCRs(ctx context.Context,
 		}
 		rep.CreatedPRs++
 		// 源已关闭 ⇒ 目标同步关闭;merged 不重放(见 Notes)。
-		if cr.State == sdkprov.CRStateClosed && created != nil && created.Number != "" {
+		if cr.State == sdkmodel.CRStateClosed && created != nil && created.Number != "" {
 			if _, cerr := tgt.CloseCR(ctx, tgtOwner, tgtRepo, created.Number); cerr != nil {
 				rep.Errors = append(rep.Errors, fmt.Sprintf("close CR %q: %v", cr.Title, cerr))
 			} else {
@@ -319,8 +321,8 @@ func migrateCRs(ctx context.Context,
 // (ErrDraftNotSupported)⇒ 降级为非 draft 并计入 DraftDegraded——
 // 如实计数,绝不静默产出"看起来成功"的非 draft CR。
 func createTargetCR(ctx context.Context, tgt metadataMigrator,
-	owner, repo string, cr *sdkprov.ChangeRequest, rep *MetadataMigrateReport,
-) (*sdkprov.ChangeRequest, error) {
+	owner, repo string, cr *sdkmodel.ChangeRequest, rep *MetadataMigrateReport,
+) (*sdkmodel.ChangeRequest, error) {
 	opts := sdkprov.CreateCROptions{
 		Owner:        owner,
 		Repo:         repo,
@@ -367,8 +369,8 @@ func listAllPages[T any](limit int, fetch func(page int) ([]T, error)) ([]T, err
 }
 
 // listAllIssues 分页取尽 issue 列表。
-func listAllIssues(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkprov.Issue, error) {
-	return listAllPages(limit, func(page int) ([]*sdkprov.Issue, error) {
+func listAllIssues(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkmodel.Issue, error) {
+	return listAllPages(limit, func(page int) ([]*sdkmodel.Issue, error) {
 		batch, _, err := p.ListIssues(ctx, sdkprov.ListIssuesOptions{
 			Owner: owner, Repo: repo, Page: page, PerPage: pageSize,
 		})
@@ -377,8 +379,8 @@ func listAllIssues(ctx context.Context, p metadataMigrator, owner, repo string, 
 }
 
 // listAllCRs 分页取尽 CR 列表。
-func listAllCRs(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkprov.ChangeRequest, error) {
-	return listAllPages(limit, func(page int) ([]*sdkprov.ChangeRequest, error) {
+func listAllCRs(ctx context.Context, p metadataMigrator, owner, repo string, limit int) ([]*sdkmodel.ChangeRequest, error) {
+	return listAllPages(limit, func(page int) ([]*sdkmodel.ChangeRequest, error) {
 		batch, _, err := p.ListCRs(ctx, sdkprov.ListCROptions{
 			Owner: owner, Repo: repo, Page: page, PerPage: pageSize,
 		})

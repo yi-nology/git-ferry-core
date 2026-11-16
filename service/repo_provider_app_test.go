@@ -17,9 +17,9 @@ import (
 
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
-	_ "github.com/yi-nology/go-git-platform/backends/all"
+	_ "github.com/yi-nology/go-git-platform/adapter/all"
 )
 
 // TestResolveRepoProvider_GitHubAppOnlyPlatform 钉住「仓库级 provider 必须认 GitHub App」。
@@ -95,7 +95,7 @@ func TestResolveRepoProvider_GitHubAppOnlyPlatform(t *testing.T) {
 		Status:   model.RepoStatusActive,
 	}))
 
-	svc := &Service{repos: NewRepoService(repoDAO, platformDAO, sdkprov.NewManager(0))}
+	svc := &Service{repos: NewRepoService(repoDAO, platformDAO, sdkrt.NewManager(0))}
 
 	_, prov, err := svc.repos.GetRepoWithProvider("app-only-repo")
 	require.NoError(t, err)

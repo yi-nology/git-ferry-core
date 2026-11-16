@@ -7,7 +7,7 @@ import (
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -28,7 +28,7 @@ type appDAOs struct {
 	jobs      *dao.ExecutionJobDAO
 	reconcile *dao.ReconcileDAO
 	recovery  *dao.RecoveryPointDAO
-	provider  *sdkprov.Manager
+	provider  *sdkrt.Manager
 }
 
 // initDB 初始化 GORM 与连接池。
@@ -74,7 +74,7 @@ func initDAOs(db *gorm.DB) (*appDAOs, error) {
 		jobs:      dao.NewExecutionJobDAO(db),
 		reconcile: dao.NewReconcileDAO(db),
 		recovery:  dao.NewRecoveryPointDAO(db),
-		provider:  sdkprov.NewManager(30*time.Minute, sdkprov.WithMaxSize(64)),
+		provider:  sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(64)),
 	}, nil
 }
 

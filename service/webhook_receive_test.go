@@ -18,9 +18,10 @@ import (
 
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 
-	_ "github.com/yi-nology/go-git-platform/backends/all"
+	_ "github.com/yi-nology/go-git-platform/adapter/all"
 )
 
 // githubSign GitHub 的 X-Hub-Signature-256 头格式:sha256=<hex(hmac-sha256(body, secret))>。
@@ -73,7 +74,7 @@ func TestReceiveWebhook_MultipleDeliveries_AllRecorded(t *testing.T) {
 	eventDAO := dao.NewWebhookEventDAO(db)
 
 	platform := &model.Platform{
-		Key: "gh", Name: "GitHub", Type: string(sdkprov.PlatformGitHub), APIURL: srv.URL + "/",
+		Key: "gh", Name: "GitHub", Type: string(sdkmodel.PlatformGitHub), APIURL: srv.URL + "/",
 	}
 	require.NoError(t, platformDAO.Create(platform))
 	require.NoError(t, repoDAO.Create(&model.Repo{
@@ -86,7 +87,7 @@ func TestReceiveWebhook_MultipleDeliveries_AllRecorded(t *testing.T) {
 	}))
 
 	svc := &Service{
-		repos:    NewRepoService(repoDAO, platformDAO, sdkprov.NewManager(0)),
+		repos:    NewRepoService(repoDAO, platformDAO, sdkrt.NewManager(0)),
 		webhooks: NewWebhookService(ruleDAO, eventDAO, repoDAO),
 		bgCtx:    context.Background(),
 	}

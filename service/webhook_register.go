@@ -5,13 +5,14 @@ import (
 	"log/slog"
 
 	"github.com/oekit/pkg/errors"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
 
 // RegisterPlatformWebhook 在平台侧为仓库注册 Webhook,回调指向本服务的接收端点
 // (/api/webhook/receive/:repoKey)。secret 非空时持久化到仓库记录(加密存储),
 // 用于入站事件验签。events 为空时默认订阅 push。
-func (s *Service) RegisterPlatformWebhook(ctx context.Context, repoKey, callbackURL, secret string, events []string) (*sdkprov.PlatformWebhook, error) {
+func (s *Service) RegisterPlatformWebhook(ctx context.Context, repoKey, callbackURL, secret string, events []string) (*sdkmodel.PlatformWebhook, error) {
 	repo, prov, err := s.repos.GetRepoWithProvider(repoKey)
 	if err != nil {
 		return nil, err
@@ -43,7 +44,7 @@ func (s *Service) RegisterPlatformWebhook(ctx context.Context, repoKey, callback
 }
 
 // ListPlatformWebhooks 列出平台侧已注册的 Webhook。
-func (s *Service) ListPlatformWebhooks(ctx context.Context, repoKey string) ([]*sdkprov.PlatformWebhook, error) {
+func (s *Service) ListPlatformWebhooks(ctx context.Context, repoKey string) ([]*sdkmodel.PlatformWebhook, error) {
 	repo, prov, err := s.repos.GetRepoWithProvider(repoKey)
 	if err != nil {
 		return nil, err

@@ -7,14 +7,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // fakeMigrator 可控的源/目标 provider(读写都走内存)。
 type fakeMigrator struct {
-	issues          []*sdkprov.Issue
-	comments        map[string][]*sdkprov.IssueComment // issue number -> comments
-	crs             []*sdkprov.ChangeRequest
+	issues          []*sdkmodel.Issue
+	comments        map[string][]*sdkmodel.IssueComment // issue number -> comments
+	crs             []*sdkmodel.ChangeRequest
 	createdIs       []*sdkprov.CreateIssueOptions
 	createdCm       []string // comment bodies
 	createdCr       []*sdkprov.CreateCROptions
@@ -24,61 +26,61 @@ type fakeMigrator struct {
 	// failDraft 目标平台无 draft 写面(模拟 SDK #160 ErrDraftNotSupported)
 	failDraft bool
 	// Ensure 收敛可控返回
-	ensureStateOutcome sdkprov.MutationOutcome
+	ensureStateOutcome sdkrt.MutationOutcome
 	ensureStateErr     error
 	ensureLabelsErr    error
 	// ensuredState 记录 EnsureIssueState 调用(want)
-	ensuredState []sdkprov.IssueState
+	ensuredState []sdkmodel.IssueState
 }
 
-func (f *fakeMigrator) ListIssues(_ context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkprov.Issue, int, error) {
+func (f *fakeMigrator) ListIssues(_ context.Context, opts sdkprov.ListIssuesOptions) ([]*sdkmodel.Issue, int, error) {
 	// 单页返回全部(测试无需真分页;limit 由上层截断)
 	return f.issues, len(f.issues), nil
 }
 
-func (f *fakeMigrator) CreateIssue(_ context.Context, opts sdkprov.CreateIssueOptions) (*sdkprov.Issue, error) {
+func (f *fakeMigrator) CreateIssue(_ context.Context, opts sdkprov.CreateIssueOptions) (*sdkmodel.Issue, error) {
 	if f.failCreateIssue {
 		return nil, errors.New("create boom")
 	}
 	f.createdIs = append(f.createdIs, &opts)
-	return &sdkprov.Issue{Number: "n-created", Title: opts.Title, State: sdkprov.IssueStateOpen}, nil
+	return &sdkmodel.Issue{Number: "n-created", Title: opts.Title, State: sdkmodel.IssueStateOpen}, nil
 }
 
-func (f *fakeMigrator) CloseIssue(_ context.Context, _, _, number string) (*sdkprov.Issue, error) {
+func (f *fakeMigrator) CloseIssue(_ context.Context, _, _, number string) (*sdkmodel.Issue, error) {
 	f.closedIs = append(f.closedIs, number)
-	return &sdkprov.Issue{Number: number, State: sdkprov.IssueStateClosed}, nil
+	return &sdkmodel.Issue{Number: number, State: sdkmodel.IssueStateClosed}, nil
 }
 
-func (f *fakeMigrator) ListIssueComments(_ context.Context, _, _, number string) ([]*sdkprov.IssueComment, error) {
+func (f *fakeMigrator) ListIssueComments(_ context.Context, _, _, number string) ([]*sdkmodel.IssueComment, error) {
 	return f.comments[number], nil
 }
 
-func (f *fakeMigrator) CreateIssueComment(_ context.Context, _, _, _, body string) (*sdkprov.IssueComment, error) {
+func (f *fakeMigrator) CreateIssueComment(_ context.Context, _, _, _, body string) (*sdkmodel.IssueComment, error) {
 	f.createdCm = append(f.createdCm, body)
-	return &sdkprov.IssueComment{Body: body}, nil
+	return &sdkmodel.IssueComment{Body: body}, nil
 }
 
-func (f *fakeMigrator) ListCRs(_ context.Context, _ sdkprov.ListCROptions) ([]*sdkprov.ChangeRequest, *int, error) {
+func (f *fakeMigrator) ListCRs(_ context.Context, _ sdkprov.ListCROptions) ([]*sdkmodel.ChangeRequest, *int, error) {
 	n := len(f.crs)
 	return f.crs, &n, nil
 }
 
-func (f *fakeMigrator) CreateCR(_ context.Context, opts sdkprov.CreateCROptions) (*sdkprov.ChangeRequest, error) {
+func (f *fakeMigrator) CreateCR(_ context.Context, opts sdkprov.CreateCROptions) (*sdkmodel.ChangeRequest, error) {
 	f.createdCr = append(f.createdCr, &opts)
 	if opts.Draft && f.failDraft {
 		return nil, sdkprov.ErrDraftNotSupported
 	}
-	return &sdkprov.ChangeRequest{Number: "cr-created", Title: opts.Title, State: sdkprov.CRStateOpened}, nil
+	return &sdkmodel.ChangeRequest{Number: "cr-created", Title: opts.Title, State: sdkmodel.CRStateOpened}, nil
 }
 
-func (f *fakeMigrator) CloseCR(_ context.Context, _, _, number string) (*sdkprov.ChangeRequest, error) {
+func (f *fakeMigrator) CloseCR(_ context.Context, _, _, number string) (*sdkmodel.ChangeRequest, error) {
 	f.closedCr = append(f.closedCr, number)
-	return &sdkprov.ChangeRequest{Number: number, State: sdkprov.CRStateClosed}, nil
+	return &sdkmodel.ChangeRequest{Number: number, State: sdkmodel.CRStateClosed}, nil
 }
 
 // --- issueEnsurer(SDK 2B Ensure* 可注入缝) ---
 // ensureStateOutcome/ensureLabelsOutcome 可控返回(测试按需设置)。
-func (f *fakeMigrator) EnsureIssueState(_ context.Context, _, _, _ string, want sdkprov.IssueState) (sdkprov.MutationOutcome, error) {
+func (f *fakeMigrator) EnsureIssueState(_ context.Context, _, _, _ string, want sdkmodel.IssueState) (sdkrt.MutationOutcome, error) {
 	f.ensuredState = append(f.ensuredState, want)
 	if f.ensureStateErr != nil {
 		return "", f.ensureStateErr
@@ -86,26 +88,26 @@ func (f *fakeMigrator) EnsureIssueState(_ context.Context, _, _, _ string, want 
 	if f.ensureStateOutcome != "" {
 		return f.ensureStateOutcome, nil
 	}
-	return sdkprov.OutcomeUnchanged, nil
+	return sdkrt.OutcomeUnchanged, nil
 }
 
-func (f *fakeMigrator) EnsureIssueLabels(_ context.Context, _, _, _ string, _ []string) (sdkprov.MutationOutcome, error) {
+func (f *fakeMigrator) EnsureIssueLabels(_ context.Context, _, _, _ string, _ []string) (sdkrt.MutationOutcome, error) {
 	if f.ensureLabelsErr != nil {
 		return "", f.ensureLabelsErr
 	}
-	return sdkprov.OutcomeUnchanged, nil
+	return sdkrt.OutcomeUnchanged, nil
 }
 
 // TestMigrateIssues_WithCommentsAndClose Issue 迁移:标题/正文/labels 搬运、
 // 源 closed 同步关闭、评论逐条搬运。
 func TestMigrateIssues_WithCommentsAndClose(t *testing.T) {
 	src := &fakeMigrator{
-		issues: []*sdkprov.Issue{
-			{Number: "1", Title: "open issue", Body: "b1", Labels: []string{"bug"}, State: sdkprov.IssueStateOpen},
-			{Number: "2", Title: "closed issue", Body: "b2", State: sdkprov.IssueStateClosed},
+		issues: []*sdkmodel.Issue{
+			{Number: "1", Title: "open issue", Body: "b1", Labels: []string{"bug"}, State: sdkmodel.IssueStateOpen},
+			{Number: "2", Title: "closed issue", Body: "b2", State: sdkmodel.IssueStateClosed},
 			{Number: "3", Title: "pr disguised", IsPullRequest: true}, // GitHub 混入的 PR
 		},
-		comments: map[string][]*sdkprov.IssueComment{
+		comments: map[string][]*sdkmodel.IssueComment{
 			"1": {{Body: "first"}, {Body: "second"}},
 		},
 	}
@@ -128,7 +130,7 @@ func TestMigrateIssues_WithCommentsAndClose(t *testing.T) {
 
 // TestMigrateDryRun 盘点不写:Planned 有、目标零写入。
 func TestMigrateDryRun(t *testing.T) {
-	src := &fakeMigrator{issues: []*sdkprov.Issue{{Number: "1", Title: "t1"}}}
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{{Number: "1", Title: "t1"}}}
 	tgt := &fakeMigrator{}
 	rep := &MetadataMigrateReport{}
 
@@ -145,8 +147,8 @@ func TestMigrateDryRun(t *testing.T) {
 // 同标题 ⇒ 计划标 converge:(此前目标列表被 dry-run 跳过,永远只报
 // create,计划失真)。
 func TestMigrateDryRun_ConvergePlan(t *testing.T) {
-	src := &fakeMigrator{issues: []*sdkprov.Issue{{Number: "1", Title: "t1"}}}
-	tgt := &fakeMigrator{issues: []*sdkprov.Issue{{Number: "9", Title: "t1"}}}
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{{Number: "1", Title: "t1"}}}
+	tgt := &fakeMigrator{issues: []*sdkmodel.Issue{{Number: "9", Title: "t1"}}}
 	rep := &MetadataMigrateReport{}
 
 	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,
@@ -159,7 +161,7 @@ func TestMigrateDryRun_ConvergePlan(t *testing.T) {
 
 // TestMigrateCreateFailureDoesNotAbort 单条失败不中断其余(完整报告)。
 func TestMigrateCreateFailureDoesNotAbort(t *testing.T) {
-	src := &fakeMigrator{issues: []*sdkprov.Issue{
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{
 		{Number: "1", Title: "a"},
 		{Number: "2", Title: "b"},
 	}}
@@ -177,10 +179,10 @@ func TestMigrateCreateFailureDoesNotAbort(t *testing.T) {
 
 // TestMigrateCRs PR 搬运:创建 + 源 closed 同步关闭;merged 不重放(只创建)。
 func TestMigrateCRs(t *testing.T) {
-	src := &fakeMigrator{crs: []*sdkprov.ChangeRequest{
+	src := &fakeMigrator{crs: []*sdkmodel.ChangeRequest{
 		{Number: "1", Title: "open pr", SourceBranch: "feat", TargetBranch: "main"},
-		{Number: "2", Title: "closed pr", State: sdkprov.CRStateClosed},
-		{Number: "3", Title: "merged pr", State: sdkprov.CRStateMerged},
+		{Number: "2", Title: "closed pr", State: sdkmodel.CRStateClosed},
+		{Number: "3", Title: "merged pr", State: sdkmodel.CRStateMerged},
 	}}
 	tgt := &fakeMigrator{}
 	rep := &MetadataMigrateReport{}
@@ -197,7 +199,7 @@ func TestMigrateCRs(t *testing.T) {
 // TestMigrateCRs_DraftPreserved SDK #160 写侧:源 draft 透传目标
 // (平台创建面可表达时原样下发)。
 func TestMigrateCRs_DraftPreserved(t *testing.T) {
-	src := &fakeMigrator{crs: []*sdkprov.ChangeRequest{
+	src := &fakeMigrator{crs: []*sdkmodel.ChangeRequest{
 		{Number: "1", Title: "wip", SourceBranch: "feat", TargetBranch: "main", Draft: true},
 		{Number: "2", Title: "ready", SourceBranch: "feat2", TargetBranch: "main"},
 	}}
@@ -217,7 +219,7 @@ func TestMigrateCRs_DraftPreserved(t *testing.T) {
 // TestMigrateCRs_DraftDegraded 目标平台创建面无 draft 表达
 // (ErrDraftNotSupported)⇒ 降级非 draft 创建 + 计数留痕,绝不静默。
 func TestMigrateCRs_DraftDegraded(t *testing.T) {
-	src := &fakeMigrator{crs: []*sdkprov.ChangeRequest{
+	src := &fakeMigrator{crs: []*sdkmodel.ChangeRequest{
 		{Number: "1", Title: "wip", SourceBranch: "feat", TargetBranch: "main", Draft: true},
 	}}
 	tgt := &fakeMigrator{failDraft: true}
@@ -249,16 +251,16 @@ func TestMetadataFidelityNotes(t *testing.T) {
 // 目标已有同标题 issue ⇒ 不重复创建,EnsureIssueState/EnsureIssueLabels
 // 收敛;Unchanged/Updated 按 outcome 分类——迁移可安全重跑。
 func TestMigrateIssues_IdempotentConverge(t *testing.T) {
-	src := &fakeMigrator{issues: []*sdkprov.Issue{
-		{Number: "1", Title: "已存在", State: sdkprov.IssueStateClosed, Labels: []string{"bug"}},
-		{Number: "2", Title: "新建", State: sdkprov.IssueStateOpen},
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{
+		{Number: "1", Title: "已存在", State: sdkmodel.IssueStateClosed, Labels: []string{"bug"}},
+		{Number: "2", Title: "新建", State: sdkmodel.IssueStateOpen},
 	}}
 	tgt := &fakeMigrator{
 		// 目标已有「已存在」同标题 issue
-		issues: []*sdkprov.Issue{
-			{Number: "9", Title: "已存在", State: sdkprov.IssueStateOpen, Labels: []string{"old"}},
+		issues: []*sdkmodel.Issue{
+			{Number: "9", Title: "已存在", State: sdkmodel.IssueStateOpen, Labels: []string{"old"}},
 		},
-		ensureStateOutcome: sdkprov.OutcomeUnchanged,
+		ensureStateOutcome: sdkrt.OutcomeUnchanged,
 	}
 	rep := &MetadataMigrateReport{}
 
@@ -269,18 +271,18 @@ func TestMigrateIssues_IdempotentConverge(t *testing.T) {
 	assert.Equal(t, 1, rep.CreatedIssues, "只有「新建」被创建")
 	assert.Equal(t, 1, rep.UnchangedIssues, "已达标 zero-write 计入 unchanged")
 	require.Len(t, tgt.ensuredState, 1, "收敛路径必须调 EnsureIssueState")
-	assert.Equal(t, sdkprov.IssueStateClosed, tgt.ensuredState[0], "want=源状态 closed")
+	assert.Equal(t, sdkmodel.IssueStateClosed, tgt.ensuredState[0], "want=源状态 closed")
 	assert.Empty(t, rep.Errors)
 }
 
 // TestMigrateIssues_UpdatedOutcome 收敛发生写入 ⇒ Updated 计数。
 func TestMigrateIssues_UpdatedOutcome(t *testing.T) {
-	src := &fakeMigrator{issues: []*sdkprov.Issue{
-		{Number: "1", Title: "t", State: sdkprov.IssueStateClosed},
+	src := &fakeMigrator{issues: []*sdkmodel.Issue{
+		{Number: "1", Title: "t", State: sdkmodel.IssueStateClosed},
 	}}
 	tgt := &fakeMigrator{
-		issues:             []*sdkprov.Issue{{Number: "9", Title: "t", State: sdkprov.IssueStateOpen}},
-		ensureStateOutcome: sdkprov.OutcomeUpdated,
+		issues:             []*sdkmodel.Issue{{Number: "9", Title: "t", State: sdkmodel.IssueStateOpen}},
+		ensureStateOutcome: sdkrt.OutcomeUpdated,
 	}
 	rep := &MetadataMigrateReport{}
 	require.NoError(t, migrateIssues(context.Background(), src, tgt, tgt,

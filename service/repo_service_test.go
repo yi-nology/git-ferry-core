@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/dao"
 	"github.com/yi-nology/git-ferry-core/model"
-	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -31,7 +31,7 @@ func setupRepoServiceTestDB(t *testing.T) (*gorm.DB, *RepoService) {
 	platformDAO, err := dao.NewPlatformDAO(db)
 	require.NoError(t, err, "failed to create PlatformDAO")
 
-	providerMgr := sdkprov.NewManager(0)
+	providerMgr := sdkrt.NewManager(0)
 	svc := NewRepoService(repoDAO, platformDAO, providerMgr)
 
 	return db, svc
