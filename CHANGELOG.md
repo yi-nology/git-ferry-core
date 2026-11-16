@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.50.0] - 2026-11-17
 
 ### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）
 
