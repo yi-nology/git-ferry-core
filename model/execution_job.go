@@ -48,10 +48,16 @@ type ExecutionJob struct {
 	// (not-before,见 Reschedule)。
 	Owner      string     `json:"owner" gorm:"size:64"`
 	LeaseUntil *time.Time `json:"leaseUntil" gorm:"index"`
-	Error      string     `json:"error" gorm:"type:text"`
-	QueuedAt   time.Time  `json:"queuedAt"`
-	ClaimedAt  *time.Time `json:"claimedAt"`
-	FinishedAt *time.Time `json:"finishedAt"`
+	// LeaseVersion 租约纪元(fencing token,#37):Claim/Reschedule/接管重排
+	// (RequeueExpired)每次 +1。Complete/RenewLease/Reschedule 的条件更新
+	// 必须带 lease_version=? —— owner+status 判据拦不住「同 owner 字符串
+	// 先后两次认领」「失而复得」的重叠,按纪元排除;续租不换纪元(同一租约
+	// 的延长,属主在纪元内可安全续租与收尾)。
+	LeaseVersion int64      `json:"leaseVersion" gorm:"not null;default:0"`
+	Error        string     `json:"error" gorm:"type:text"`
+	QueuedAt     time.Time  `json:"queuedAt"`
+	ClaimedAt    *time.Time `json:"claimedAt"`
+	FinishedAt   *time.Time `json:"finishedAt"`
 }
 
 func (ExecutionJob) TableName() string { return TableExecutionJobs }

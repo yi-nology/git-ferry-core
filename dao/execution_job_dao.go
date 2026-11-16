@@ -150,7 +150,8 @@ func (d *ExecutionJobDAO) FindByID(id uint) (*model.ExecutionJob, error) {
 }
 
 // Claim 条件认领:仅当仍是 pending 才翻为 claimed(原子,多实例单胜者)。
-// owner 通常为实例标识;ttl 为执行权租约。
+// owner 通常为实例标识;ttl 为执行权租约;认领开启新的租约纪元
+// (lease_version+1,fencing token 见 model.ExecutionJob.LeaseVersion)。
 //
 // lease_until 在 pending 态下复用作「最早可认领时间」(not-before,见
 // Reschedule):退避中的作业不得提前认领,防派发器对同一作业忙旋。
@@ -160,10 +161,11 @@ func (d *ExecutionJobDAO) Claim(id uint, owner string, ttl time.Duration) (bool,
 		Where("id = ? AND status = ? AND (lease_until IS NULL OR lease_until <= ?)",
 			id, model.JobStatusPending, now).
 		Updates(map[string]any{
-			"status":      model.JobStatusClaimed,
-			"owner":       owner,
-			"lease_until": now.Add(ttl),
-			"claimed_at":  now,
+			"status":        model.JobStatusClaimed,
+			"owner":         owner,
+			"lease_until":   now.Add(ttl),
+			"claimed_at":    now,
+			"lease_version": gorm.Expr("lease_version + 1"),
 		})
 	if res.Error != nil {
 		return false, res.Error
@@ -171,14 +173,16 @@ func (d *ExecutionJobDAO) Claim(id uint, owner string, ttl time.Duration) (bool,
 	return res.RowsAffected == 1, nil
 }
 
-// RenewLease 执行中续租。仅「本人 + 仍 claimed + 租约未过期」才生效:
-// 已过期的租约不得借续租复活(对齐 lock 包「已过期槽不得借 Renew 复活」
-// 的语义——它的执行权可能已被其他实例接管,复活即脑裂)。
+// RenewLease 执行中续租。仅「本人 + 仍 claimed + 租约未过期 + 纪元一致」
+// 才生效:已过期的租约不得借续租复活(对齐 lock 包「已过期槽不得借 Renew
+// 复活」的语义——它的执行权可能已被其他实例接管,复活即脑裂);旧纪元的
+// 持有者不得续租新纪元的作业(同 owner 字符串的先后两次认领,owner+status
+// 判据拦不住,靠 lease_version 按纪元排除,#37)。续租不换纪元。
 // 0 行命中 ⇒ 返回 ErrLeaseLost(旧属主据此立即停手),不再静默吞掉。
-func (d *ExecutionJobDAO) RenewLease(id uint, owner string, ttl time.Duration) error {
+func (d *ExecutionJobDAO) RenewLease(id uint, owner string, leaseVersion int64, ttl time.Duration) error {
 	res := d.db.Model(&model.ExecutionJob{}).
-		Where("id = ? AND owner = ? AND status = ? AND lease_until > ?",
-			id, owner, model.JobStatusClaimed, time.Now()).
+		Where("id = ? AND owner = ? AND status = ? AND lease_until > ? AND lease_version = ?",
+			id, owner, model.JobStatusClaimed, time.Now(), leaseVersion).
 		Update("lease_until", time.Now().Add(ttl))
 	if res.Error != nil {
 		return res.Error
@@ -194,15 +198,20 @@ func (d *ExecutionJobDAO) RenewLease(id uint, owner string, ttl time.Duration) e
 // 见 RequeueExpired——良性繁忙烧光毒丸预算会把作业误判成毒丸丢弃);
 // lease_until 在 pending 态下复用作「最早可认领时间」(not-before)推迟
 // delay,防派发器忙旋;DeferCount 单独记账,与接管次数(Attempt)分离。
+// 条件补 status=claimed AND lease_until>now AND lease_version=?(#37):
+// 租约已过期的属主不得退避重排(执行权存疑,随时可能被接管);
+// 重排关闭本纪元(lease_version+1)。
 // 0 行命中(作业已被接管,不再归本人)⇒ ErrLeaseLost。
-func (d *ExecutionJobDAO) Reschedule(id uint, owner string, delay time.Duration) error {
+func (d *ExecutionJobDAO) Reschedule(id uint, owner string, leaseVersion int64, delay time.Duration) error {
 	res := d.db.Model(&model.ExecutionJob{}).
-		Where("id = ? AND owner = ? AND status = ?", id, owner, model.JobStatusClaimed).
+		Where("id = ? AND owner = ? AND status = ? AND lease_until > ? AND lease_version = ?",
+			id, owner, model.JobStatusClaimed, time.Now(), leaseVersion).
 		Updates(map[string]any{
-			"status":      model.JobStatusPending,
-			"owner":       "",
-			"lease_until": time.Now().Add(delay),
-			"defer_count": gorm.Expr("defer_count + 1"),
+			"status":        model.JobStatusPending,
+			"owner":         "",
+			"lease_until":   time.Now().Add(delay),
+			"defer_count":   gorm.Expr("defer_count + 1"),
+			"lease_version": gorm.Expr("lease_version + 1"),
 		})
 	if res.Error != nil {
 		return res.Error
@@ -216,9 +225,10 @@ func (d *ExecutionJobDAO) Reschedule(id uint, owner string, delay time.Duration)
 // Complete 完成作业:写终态与运行记录 ID,并在**同一事务**里结算代次账本
 // (#36):上推 completed_generation、释放活动槽,若 completed < desired
 // 则再入一个追赶作业 —— 被合并进这次执行的触发不丢。
-// 仅属主可写;0 行命中 ⇒ ErrLeaseLost(此前静默返回 nil,旧 worker 无感
-// 继续跑,脑裂)。
-func (d *ExecutionJobDAO) Complete(id uint, owner string, runID uint, execErr error) error {
+// 条件补 status=claimed AND lease_until>now AND lease_version=?(#37):
+// 毒丸终态不可被旧属主覆写(reaper 已判 failed,WHERE 不再命中),
+// 租约过期/被接管的属主不得写终态。0 行命中 ⇒ ErrLeaseLost。
+func (d *ExecutionJobDAO) Complete(id uint, owner string, leaseVersion int64, runID uint, execErr error) error {
 	status := model.JobStatusSucceeded
 	errMsg := ""
 	if execErr != nil {
@@ -227,7 +237,8 @@ func (d *ExecutionJobDAO) Complete(id uint, owner string, runID uint, execErr er
 	}
 	return d.db.Transaction(func(tx *gorm.DB) error {
 		res := tx.Model(&model.ExecutionJob{}).
-			Where("id = ? AND owner = ?", id, owner).
+			Where("id = ? AND owner = ? AND status = ? AND lease_until > ? AND lease_version = ?",
+				id, owner, model.JobStatusClaimed, time.Now(), leaseVersion).
 			Updates(map[string]any{
 				"status":      status,
 				"run_id":      runID,
@@ -316,55 +327,71 @@ func (d *ExecutionJobDAO) releaseSlotAndCatchUp(tx *gorm.DB, job *model.Executio
 // 放回 pending(attempt+1);attempt 超限 ⇒ 判 failed(毒丸)。
 // 返回 (重放条数, 毒丸条数, 错误)。
 //
+// **单语句条件更新,去掉「先查后改」窗口**(#37):UPDATE 自带
+// lease_until < now 的重新复核——候选选出之后、UPDATE 之前 worker 续租
+// 成功(lease 重新有效)的作业不再被放回 pending,随后可被第三个实例
+// 认领的双属主窗口由此闭合;重排/毒丸各自 +1 纪元(lease_version),
+// 旧属主的续租/收尾立即失锁。
+//
 // 毒丸作业从未执行完 ⇒ 它携带的代次未消费:判毒丸的**同一事务**里释放
 // 活动槽并补追赶作业(#36),否则执行中被合并的触发会随毒丸一起蒸发。
 func (d *ExecutionJobDAO) RequeueExpired(now time.Time) (requeued, poisoned int64, err error) {
+	// 候选仅供毒丸分类与善后(知道是哪些作业、代次几何);
+	// 一切生效以条件 UPDATE 为准,UPDATE 重新复核 status+lease_until。
 	var expired []model.ExecutionJob
 	if err := d.db.Where("status = ? AND lease_until IS NOT NULL AND lease_until < ?",
 		model.JobStatusClaimed, now).Find(&expired).Error; err != nil {
 		return 0, 0, err
 	}
+
+	// 重排分支:单语句条件更新覆盖全部「attempt 未超限」的过期作业。
+	res := d.db.Model(&model.ExecutionJob{}).
+		Where("status = ? AND lease_until IS NOT NULL AND lease_until < ? AND attempt < ?",
+			model.JobStatusClaimed, now, model.MaxJobAttempts).
+		Updates(map[string]any{
+			"status":        model.JobStatusPending,
+			"attempt":       gorm.Expr("attempt + 1"),
+			"owner":         "",
+			"lease_until":   nil,
+			"lease_version": gorm.Expr("lease_version + 1"),
+		})
+	if res.Error != nil {
+		return 0, 0, res.Error
+	}
+	requeued = res.RowsAffected
+
+	// 毒丸分支:逐条条件更新(每条都重新复核 lease_until),命中者在
+	// 同一事务里做代次善后。
 	for i := range expired {
-		attempt := expired[i].Attempt + 1
-		if attempt > model.MaxJobAttempts {
-			var hit int64
-			if err := d.db.Transaction(func(tx *gorm.DB) error {
-				res := tx.Model(&model.ExecutionJob{}).
-					Where("id = ? AND status = ?", expired[i].ID, model.JobStatusClaimed).
-					Updates(map[string]any{
-						"status":      model.JobStatusFailed,
-						"attempt":     attempt,
-						"error":       "max attempts exceeded (lease expired repeatedly)",
-						"finished_at": time.Now(),
-						"active_key":  nil,
-					})
-				if res.Error != nil {
-					return res.Error
-				}
-				hit = res.RowsAffected
-				if hit != 1 {
-					return nil
-				}
-				job := expired[i]
-				return d.releaseSlotAndCatchUp(tx, &job)
-			}); err != nil {
-				return requeued, poisoned, err
+		if expired[i].Attempt < model.MaxJobAttempts {
+			continue // 重排分支已覆盖
+		}
+		var hit int64
+		if err := d.db.Transaction(func(tx *gorm.DB) error {
+			res := tx.Model(&model.ExecutionJob{}).
+				Where("id = ? AND status = ? AND lease_until IS NOT NULL AND lease_until < ?",
+					expired[i].ID, model.JobStatusClaimed, now).
+				Updates(map[string]any{
+					"status":        model.JobStatusFailed,
+					"attempt":       gorm.Expr("attempt + 1"),
+					"error":         "max attempts exceeded (lease expired repeatedly)",
+					"finished_at":   time.Now(),
+					"active_key":    nil,
+					"lease_version": gorm.Expr("lease_version + 1"),
+				})
+			if res.Error != nil {
+				return res.Error
 			}
-			poisoned += hit
-			continue
+			hit = res.RowsAffected
+			if hit != 1 {
+				return nil
+			}
+			job := expired[i]
+			return d.releaseSlotAndCatchUp(tx, &job)
+		}); err != nil {
+			return requeued, poisoned, err
 		}
-		res := d.db.Model(&model.ExecutionJob{}).
-			Where("id = ? AND status = ?", expired[i].ID, model.JobStatusClaimed).
-			Updates(map[string]any{
-				"status":      model.JobStatusPending,
-				"attempt":     attempt,
-				"owner":       "",
-				"lease_until": nil,
-			})
-		if res.Error != nil {
-			return requeued, poisoned, res.Error
-		}
-		requeued += res.RowsAffected
+		poisoned += hit
 	}
 	return requeued, poisoned, nil
 }

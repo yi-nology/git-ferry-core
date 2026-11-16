@@ -33,6 +33,33 @@
   晚于去重建立，否则存量重复会让迁移失败）;新装库经 baseline+v7 同样生效。
   升级前已被旧实现丢弃的触发无从恢复。
 
+- **#37 [durable_queue] Lease 缺 fencing**（lease_version 租约纪元）:三处缺口
+  ——Complete 不校验 status/lease(毒丸终态可被旧属主覆写:reaper 已判 failed,
+  旧 worker 按 id+owner 仍能把终态改成 succeeded)、RequeueExpired 先查后改
+  窗口(SELECT 与 UPDATE 之间 worker 续租成功,UPDATE 仍把租约有效的作业放回
+  pending ⇒ 第三实例认领后同一任务双属主并发推送)、同 owner 字符串先后两次
+  认领无法靠 owner 判据区分。修复:新增 `execution_jobs.lease_version`
+  (fencing token)——Claim/Reschedule/接管重排每次 +1(开启新纪元),续租不换
+  纪元(同一租约的延长);Complete/RenewLease/Reschedule 条件统一补
+  `status=claimed AND lease_until > now AND lease_version = ?`,0 行命中返回
+  ErrLeaseLost;RequeueExpired 改**单语句条件更新**(UPDATE 自带
+  `lease_until < now` 重新复核,续租胜出的作业不再被重放),毒丸分支逐条条件
+  更新并在同事务里做 #36 的代次善后,重排/毒丸各自 +1 纪元。
+  **边界声明(留口子)**:对已进入 git push 的执行者,context 取消只是协作式
+  停手,不构成互斥证明;目标仓库侧条件保护(push 前校验远端 ref 仍是预期值 /
+  fencing token 随 push 传播)属 executor/目标平台侧后续工作,本仓在
+  executeJob 留有注释声明,`job.LeaseVersion` 即现成的传播 token。
+  **迁移要求(v10,向后兼容)**:存量库自动显式 `ALTER TABLE ... ADD
+  lease_version integer NOT NULL DEFAULT 0`,无需回填。
+  **迁移机制加固**:v7/v8/v9/#36 的迁移路径实测发现 glebarez sqlite 的
+  AutoMigrate 对已有数据的表走「建 __temp → INSERT...SELECT → DROP → RENAME」
+  整表重建,且拷贝列清单可能取自加列前的缓存快照 ⇒ 新加列的数据被静默重置
+  为默认值(v9 回填曾被 v10 的 AutoMigrate 这样回滚)。因此迁移中对
+  execution_jobs 的加列一律改为显式 `ALTER TABLE ... ADD COLUMN`(纯增量,
+  HasColumn 幂等守卫,MySQL/sqlite 语法一致);sqlite 的 schema 收敛整体包进
+  单事务单连接(与 MySQL 的持锁连接口径一致,DDL 可事务化,收敛原子提交)。
+  存量库升级已落库的 v2..v6 不改写(只追加纪律)。
+
 ### Changed（oekit 基础设施收编第一轮——gormx / redisx）
 
 - **gormx v0.12.1 接管 DB 基础设施**:
