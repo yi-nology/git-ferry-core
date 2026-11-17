@@ -451,18 +451,23 @@ func (s *Service) HealthCheck() map[string]string {
 		"service":  "ok",
 	}
 
-	// Check database connectivity with timeout
-	dbDone := make(chan error, 1)
-	async.GoSafe(func() { dbDone <- s.sqlDB.Ping() })
-	select {
-	case err := <-dbDone:
-		if err != nil {
-			logx.Error("healthcheck: db ping failed", "error", err)
-			status["database"] = "unhealthy"
+	// Check database connectivity with timeout.
+	// sqlDB 在 db.DB() 失败时为空 —— 这里必须显式降级，不能直接 Ping 触发 panic。
+	if s.sqlDB == nil {
+		status["database"] = "unhealthy: sql.DB unavailable"
+	} else {
+		dbDone := make(chan error, 1)
+		async.GoSafe(func() { dbDone <- s.sqlDB.Ping() })
+		select {
+		case err := <-dbDone:
+			if err != nil {
+				logx.Error("healthcheck: db ping failed", "error", err)
+				status["database"] = "unhealthy"
+			}
+		case <-time.After(5 * time.Second):
+			logx.Error("healthcheck: db ping timed out")
+			status["database"] = "timeout"
 		}
-	case <-time.After(5 * time.Second):
-		logx.Error("healthcheck: db ping timed out")
-		status["database"] = "timeout"
 	}
 
 	// Check Redis connectivity (if configured) with timeout

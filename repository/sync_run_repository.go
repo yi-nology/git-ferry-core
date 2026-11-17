@@ -48,6 +48,9 @@ func (d *SyncRunRepository) FindByTaskKeyAndRunID(taskKey string, runID uint) (*
 		q = q.Where("task_key = ?", taskKey)
 	}
 	if err := q.First(&run).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
 	return &run, nil
@@ -105,6 +108,17 @@ func (d *SyncRunRepository) Delete(id uint) error {
 func (d *SyncRunRepository) FindRecent(page Pagination) ([]*model.SyncRun, error) {
 	var runs []*model.SyncRun
 	err := d.db.Offset(page.Offset).Limit(page.Limit).Order("id DESC").Find(&runs).Error
+	return runs, err
+}
+
+// FindRecentLimit 直接按条数取最近 run(不受列表分页 200 上限约束)。
+// 供趋势/健康聚合等内部只读路径使用;上限仍收敛,防误传超大值。
+func (d *SyncRunRepository) FindRecentLimit(limit int) ([]*model.SyncRun, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 2000
+	}
+	var runs []*model.SyncRun
+	err := d.db.Order("id DESC").Limit(limit).Find(&runs).Error
 	return runs, err
 }
 

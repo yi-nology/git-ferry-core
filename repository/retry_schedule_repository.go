@@ -1,12 +1,18 @@
 package repository
 
 import (
+	"errors"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// ErrScheduleLost 排程已不在 pending 态(被取消/已派发/被其它实例关闭)。
+// 与 execution job 的 ErrLeaseLost 同型:条件更新 0 行命中不是"成功",
+// 调用方必须知道本次操作没有生效。
+var ErrScheduleLost = errors.New("retry schedule already closed")
 
 // RetryScheduleRepository 失败运行的延迟重跑排程(#39)。
 //
@@ -72,41 +78,65 @@ func (d *RetryScheduleRepository) ClaimDue(now time.Time, limit int, lease time.
 }
 
 // MarkDispatched 排程已成功发起重跑,关闭为终态。
+// 0 行命中 ⇒ ErrScheduleLost(已被其它实例取消/关闭)。
 func (d *RetryScheduleRepository) MarkDispatched(id uint) error {
-	return d.db.Model(&model.RetrySchedule{}).
+	res := d.db.Model(&model.RetrySchedule{}).
 		Where("id = ? AND status = ?", id, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"status":     model.RetryScheduleDispatched,
 			"last_error": "",
-		}).Error
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrScheduleLost
+	}
+	return nil
 }
 
 // Reschedule 触发失败:保留 pending,指定下一次最早时间并记录原因。
+// 0 行命中 ⇒ ErrScheduleLost。
 func (d *RetryScheduleRepository) Reschedule(id uint, next time.Time, cause error) error {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
-	return d.db.Model(&model.RetrySchedule{}).
+	res := d.db.Model(&model.RetrySchedule{}).
 		Where("id = ? AND status = ?", id, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"next_attempt_at": next,
 			"last_error":      msg,
-		}).Error
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrScheduleLost
+	}
+	return nil
 }
 
 // Cancel 取消排程(任务删除/禁用等重试无意义的情形)。
+// 0 行命中 ⇒ ErrScheduleLost。
 func (d *RetryScheduleRepository) Cancel(id uint, cause error) error {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
-	return d.db.Model(&model.RetrySchedule{}).
+	res := d.db.Model(&model.RetrySchedule{}).
 		Where("id = ? AND status = ?", id, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"status":     model.RetryScheduleCancelled,
 			"last_error": msg,
-		}).Error
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrScheduleLost
+	}
+	return nil
 }
 
 // CancelForTask 取消某任务的全部待触发排程(任务被删除/禁用时调用),

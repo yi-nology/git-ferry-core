@@ -346,13 +346,30 @@ func IsUnlistedGitSubcommand(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not an allowed git subcommand")
 }
 
-// runGitThroughBackend 把 git 命令交给 backend 执行:
+// runGitThroughBackend 把 git 命令交给 backend 执行(错误按本包历史文案包装):
 //   - SDK RunRaw 白名单内的子命令:只走 SDK(参数加固拒绝即失败,不回落);
 //   - 白名单外的上述内部子命令:回落本地 git 二进制;
 //   - gogit 后端:不 shell out,内部子命令同样回落本地 git。
 func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, dir string, args ...string) (string, error) {
+	return runGitCommand(ctx, backend, dir, true, args...)
+}
+
+// RunGitThroughBackend 同 runGitThroughBackend,但错误原样返回
+// (不包装成 "git <argv>: ..." 文案)。供 service 层只读探针复用同一套
+// RunRaw 回落规则,避免两处各写一份安全判定。
+func RunGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, dir string, args ...string) (string, error) {
+	return runGitCommand(ctx, backend, dir, false, args...)
+}
+
+func runGitCommand(ctx context.Context, backend gitbackend.GitBackend, dir string, wrapErr bool, args ...string) (string, error) {
 	if len(args) == 0 {
 		return "", oekiterrors.New("empty git args")
+	}
+	fail := func(stdout, stderr string, err error) (string, error) {
+		if wrapErr {
+			return "", gitCmdError(args, stderr, err)
+		}
+		return stdout + stderr, err
 	}
 	if native, ok := backend.(*gitbackend.NativeGitBackend); ok && native != nil {
 		stdout, stderr, err := native.RunRaw(ctx, dir, args)
@@ -362,19 +379,19 @@ func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, di
 		case oekiterrors.Is(err, gitbackend.ErrInvalidGitArg):
 			if !IsUnlistedGitSubcommand(err) {
 				// 参数加固命中:不得回落,否则绕过加固。
-				return "", gitCmdError(args, stderr, err)
+				return fail(stdout, stderr, err)
 			}
 			// 子命令不在 SDK 白名单(bundle/fsck/reset/update-ref/lfs/...):
 			// 这是本仓内部构造的命令,回落本地 git。
 		default:
-			return "", gitCmdError(args, stderr, err)
+			return fail(stdout, stderr, err)
 		}
 	}
 	cmd := procx.Command(ctx, "git", args...) //nolint:gosec // 参数由内部构造
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", gitCmdError(args, string(out), err)
+		return fail(string(out), string(out), err)
 	}
 	return string(out), nil
 }

@@ -124,11 +124,16 @@ func (d *ExecutionJobRepository) Enqueue(taskKey, trigger string, webhookEventID
 	return enqueued, nil
 }
 
-// ListPendingIDs 取待认领作业 ID(按入队序 = 因果序)。
+// ListPendingIDs 取**当前可认领**的作业 ID(按入队序 = 因果序)。
+//
+// pending 态的 lease_until 是退避重排的 not-before 标记(见 Reschedule):
+// 未到点的作业混在队首会让派发器每轮空试 Claim,后面的可认领作业被
+// 队头阻塞。这里直接按时间过滤,队列语义与 Claim 的条件保持一致。
 func (d *ExecutionJobRepository) ListPendingIDs(limit int) ([]uint, error) {
 	var ids []uint
 	err := d.db.Model(&model.ExecutionJob{}).
-		Where("status = ?", model.JobStatusPending).
+		Where("status = ? AND (lease_until IS NULL OR lease_until <= ?)",
+			model.JobStatusPending, time.Now()).
 		Order("id").Limit(limit).Pluck("id", &ids).Error
 	return ids, err
 }
@@ -325,11 +330,12 @@ func (d *ExecutionJobRepository) releaseSlotAndCatchUp(tx *gorm.DB, job *model.E
 // 毒丸作业从未执行完 ⇒ 它携带的代次未消费:判毒丸的**同一事务**里释放
 // 活动槽并补追赶作业(#36),否则执行中被合并的触发会随毒丸一起蒸发。
 func (d *ExecutionJobRepository) RequeueExpired(now time.Time) (requeued, poisoned int64, err error) {
-	// 候选仅供毒丸分类与善后(知道是哪些作业、代次几何);
-	// 一切生效以条件 UPDATE 为准,UPDATE 重新复核 status+lease_until。
+	// 候选只取毒丸阈值已到的作业:重排分支是单条集合更新,不需要候选;
+	// 把全部过期作业(含 error 全文)读进内存只会在大面积故障时放大 reaper
+	// 的内存开销。一切生效仍以条件 UPDATE 为准。
 	var expired []model.ExecutionJob
-	if err := d.db.Where("status = ? AND lease_until IS NOT NULL AND lease_until < ?",
-		model.JobStatusClaimed, now).Find(&expired).Error; err != nil {
+	if err := d.db.Where("status = ? AND lease_until IS NOT NULL AND lease_until < ? AND attempt >= ?",
+		model.JobStatusClaimed, now, model.MaxJobAttempts).Find(&expired).Error; err != nil {
 		return 0, 0, err
 	}
 

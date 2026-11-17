@@ -108,6 +108,16 @@ func (d *SyncTaskRepository) FindAll(page Pagination) ([]*model.SyncTask, int64,
 	return tasks, total, err
 }
 
+// FindAllForExport 全量任务(不分页)。
+//
+// 策略导出必须是完整集合:走列表分页会被 MaxPageSize(200)钳住,
+// 导出成功却静默少任务,回放到另一环境后缺失任务永远建不起来。
+func (d *SyncTaskRepository) FindAllForExport() ([]*model.SyncTask, error) {
+	var tasks []*model.SyncTask
+	err := d.db.Order("`key` ASC").Find(&tasks).Error
+	return tasks, err
+}
+
 // FindFiltered 按仓库与最近一次执行状态过滤任务(空串=该维度不过滤)。
 //
 // status 匹配的是 `last_status`(最近一次执行的状态),不是"是否启用"。

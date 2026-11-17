@@ -124,7 +124,12 @@ func TestDurableQueue_BenignBusyDoesNotPoison(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
-			ids, err := svc.jobs.ListPendingIDs(10)
+			// 退避中的作业 lease_until 是 not-before,ListPendingIDs 只返回
+			// 当前可认领的作业;这里观测的是"已回到 pending"这一状态本身,
+			// 直接查库绕过可认领过滤。
+			var ids []uint
+			err := svc.jobs.DB().Model(&model.ExecutionJob{}).
+				Where("status = ?", model.JobStatusPending).Pluck("id", &ids).Error
 			require.NoError(t, err)
 			if len(ids) == 1 {
 				job, err := svc.jobs.FindByID(ids[0])

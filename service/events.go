@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/oekit/logx"
 	"sync"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // ===== 运行完成事件 =====
@@ -106,30 +108,40 @@ func (s *Service) dispatchRunEvent(subs []runSubscriber, ev RunEvent) {
 // 重投事件的 Err 恒为 nil —— 错误信息已落在 run.ErrorMessage,
 // 订阅方应以 Run.Status / Run.ErrorMessage 为准。
 //
-// 返回 (delivered, abandoned):
+// 返回 (delivered, abandoned, err):
 //   - delivered=true:已投给订阅者 ⇒ 可标记已发布;
 //   - abandoned=true:run 记录已被保留期清理,事件失去意义 ⇒ 同样标记
 //     已发布闭环(CHANGELOG 明示的设计取舍,不然每轮都空重试);
-//   - 两者皆 false:此刻**没有订阅者**,一个字节都没投出去 ⇒ **不得标记**,
-//     留待订阅者注册后的下一轮扫描(at-least-once:标记了却没投 = 静默丢失)。
-func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned bool) {
+//   - 两者皆 false,err=nil:此刻**没有订阅者**,一个字节都没投出去 ⇒
+//     **不得标记**,留待订阅者注册后的下一轮扫描(at-least-once);
+//   - err!=nil:查询失败(DB 瞬断/超时),**不得**当成 run 已清理闭环,
+//     保留事件下一轮重试。
+func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned bool, err error) {
 	// 按主题分发:对账事件(漂移/无法判断)不走 run 查找
 	// (RunID=0,查不到会被误判废弃);订阅方按 payload.status 区分告警级别。
 	if ev.Topic == model.OutboxTopicReconcileDrift || ev.Topic == model.OutboxTopicReconcileUnknown {
-		return s.deliverDriftEvent(ev)
+		d, a := s.deliverDriftEvent(ev)
+		return d, a, nil
 	}
 	subs := s.snapshotRunSubs()
 	if len(subs) == 0 {
-		return false, false
+		return false, false, nil
 	}
-	run, err := s.tasks.runRepository.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
-	if err != nil || run == nil {
-		// run 记录已被清理(保留期) ⇒ 事件失去意义,跳过投递并闭环。
-		logx.Warn("outbox: 重投时 run 记录不存在,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)
-		return false, true
+	run, gerr := s.tasks.runRepository.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
+	if gerr != nil {
+		if errors.Is(gerr, repository.ErrNotFound) {
+			// run 记录已被清理(保留期) ⇒ 事件失去意义,跳过投递并闭环。
+			logx.Warn("outbox: 重投时 run 记录不存在,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)
+			return false, true, nil
+		}
+		return false, false, gerr
+	}
+	if run == nil {
+		logx.Warn("outbox: 重投时 run 记录为空,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)
+		return false, true, nil
 	}
 	s.dispatchRunEvent(subs, RunEvent{TaskKey: ev.TaskKey, Run: run, Trigger: ev.Trigger, At: time.Now()})
-	return true, true
+	return true, true, nil
 }
 
 // publishDueOutbox 派发「已过宽限期仍未标记已发布」的 outbox 事件,
@@ -150,8 +162,15 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 	}
 	published := make([]uint, 0, len(evs))
 	noSubscriber := 0
+	queryFailed := 0
 	for i := range evs {
-		delivered, abandoned := s.deliverOutboxEvent(evs[i])
+		delivered, abandoned, derr := s.deliverOutboxEvent(evs[i])
+		if derr != nil {
+			queryFailed++
+			logx.Error("outbox: 重投查询失败,事件保留待下轮重试",
+				"event_id", evs[i].ID, "run_id", evs[i].RunID, "error", derr)
+			continue
+		}
 		if delivered || abandoned {
 			published = append(published, evs[i].ID)
 		} else {
@@ -161,6 +180,9 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 	if noSubscriber > 0 {
 		logx.Warn("outbox: 无订阅者,事件未投递也不标记已发布(留待订阅者注册后重投)",
 			"count", noSubscriber)
+	}
+	if queryFailed > 0 {
+		logx.Warn("outbox: 本轮有事件因查询失败未投递,保留待重试", "count", queryFailed)
 	}
 	if err := s.outbox.MarkPublished(published); err != nil {
 		logx.Error("outbox: 标记已发布失败(下轮可能重复投递,订阅方需幂等)", "error", err)

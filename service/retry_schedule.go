@@ -8,6 +8,7 @@ import (
 	"github.com/oekit/concurrency/loop"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repository"
 )
 
 // ===== 延迟重跑派发器(#39) =====
@@ -100,20 +101,31 @@ func (s *Service) retryDispatchOnce() {
 		switch {
 		case err == nil:
 			if merr := s.retrySchedules.MarkDispatched(sch.ID); merr != nil {
-				logx.Error("auto retry: mark schedule dispatched failed",
-					"schedule_id", sch.ID, "error", merr)
+				if oekiterrors.Is(merr, repository.ErrScheduleLost) {
+					logx.Debug("auto retry: schedule already closed by another actor",
+						"schedule_id", sch.ID)
+				} else {
+					logx.Error("auto retry: mark schedule dispatched failed",
+						"schedule_id", sch.ID, "error", merr)
+				}
 			}
 			logx.Info("auto retry: deferred retry dispatched",
 				"task", sch.TaskKey, "run_id", sch.RunID, "attempt", sch.Attempt)
 		case oekiterrors.Is(err, ErrTaskNotFound), oekiterrors.Is(err, ErrTaskDisabled):
 			// 任务已删除/禁用 ⇒ 重试无意义,关掉排程防止反复拉起。
-			if cerr := s.retrySchedules.Cancel(sch.ID, err); cerr != nil {
+			if cerr := s.retrySchedules.Cancel(sch.ID, err); cerr != nil &&
+				!oekiterrors.Is(cerr, repository.ErrScheduleLost) {
 				logx.Error("auto retry: cancel schedule failed", "schedule_id", sch.ID, "error", cerr)
 			}
 		default:
 			// 任务忙/队列暂不可用等可恢复原因:保留 pending,稍后再来。
 			if rerr := s.retrySchedules.Reschedule(sch.ID, time.Now().Add(retryDispatchBackoff), err); rerr != nil {
-				logx.Error("auto retry: reschedule failed", "schedule_id", sch.ID, "error", rerr)
+				if oekiterrors.Is(rerr, repository.ErrScheduleLost) {
+					logx.Debug("auto retry: schedule already closed, skip reschedule",
+						"schedule_id", sch.ID)
+				} else {
+					logx.Error("auto retry: reschedule failed", "schedule_id", sch.ID, "error", rerr)
+				}
 			}
 			logx.Warn("auto retry: deferred retry not dispatched, will retry",
 				"task", sch.TaskKey, "run_id", sch.RunID, "error", err)

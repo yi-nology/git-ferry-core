@@ -46,6 +46,25 @@ func (d *ForcePushApprovalRepository) Update(a *model.ForcePushApproval) error {
 	return d.update(a)
 }
 
+// RefreshPending 只刷新 pending 记录的展示字段(reason/target_ref/created_at)。
+//
+// 不能用 Update:它按列白名单整行回写,会把读到的 approved/consumed_at
+// 快照一起写回 —— 多实例下管理员在另一实例刚放行,这边一次刷新就把它
+// 重置回未审批。这里条件锁死「仍未放行、未消费、未撤销」。
+func (d *ForcePushApprovalRepository) RefreshPending(id, reason, targetRef string, createdAt time.Time) (bool, error) {
+	res := d.db.Model(&model.ForcePushApproval{}).
+		Where("id = ? AND approved = ? AND consumed_at IS NULL AND revoked_at IS NULL", id, false).
+		Updates(map[string]any{
+			"reason":     reason,
+			"target_ref": targetRef,
+			"created_at": createdAt,
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
+}
+
 // PendingExists 同 task+branch 是否已有未放行记录（幂等判定）。
 func (d *ForcePushApprovalRepository) PendingExists(taskKey, branch string) (bool, error) {
 	var n int64

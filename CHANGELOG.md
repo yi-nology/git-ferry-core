@@ -2,6 +2,36 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed（数据不丢 / 不误判）
+
+- **outbox 重投不再把 DB 瞬断当「run 已清理」闭环**：`FindByTaskKeyAndRunID`
+  统一返回 `repository.ErrNotFound`；`deliverOutboxEvent` 只有该哨兵才判
+  abandoned，其它查询错误保留事件下一轮重试（此前任何错误都会永久丢通知）。
+- **force-push pending 刷新改条件更新**：新增 `RefreshPending`，只写
+  reason/target_ref/created_at 且限定未放行/未消费/未撤销；不再用整行
+  `Update` 把并发放行的 approved/consumed_at 覆盖回未审批。
+- **历史通道查找失败不再回落 main**：push/rollback 读取通道失败直接
+  fail-closed，避免把内容误推到默认分支；仅在通道存在且 TargetBranch
+  为空时才用 `model.DefaultBranch`。
+- **retry_schedules 条件更新 0 行命中返回 `ErrScheduleLost`**：取消/派发
+  竞态不再被日志伪装成「已派发」。
+- **schema 迁移顺序不变；无新增迁移**。
+
+### Changed（查询与执行路径收敛）
+
+- `ListPendingIDs` 过滤 pending 态的 `lease_until` not-before：退避中的
+  作业不再阻塞队头，派发器不再每轮空试 Claim。
+- `RequeueExpired` 只加载毒丸候选（`attempt >= MaxJobAttempts`），重排
+  分支仍为单条集合更新，避免大面积故障时把全部过期作业读进内存。
+- 策略导出改用 `FindAllForExport`（不分页），不再被列表 200 条上限
+  静默截断；`OpsTrends` 改用 `FindRecentLimit`，真正扫描声明的 2000 条。
+- `HealthCheck` 在 `sql.DB` 不可用时显式降级，不再 panic。
+- git 命令收口去重：service 的 `runGitQuiet` 复用
+  `executor.RunGitThroughBackend`，RunRaw 白名单/参数加固不回落规则
+  只保留一份实现。
+
 ## [v0.52.0] - 2026-11-17
 
 ### Changed（完整替换：repository 全量 gormrepo 化 + SDK RunRaw 收口）

@@ -12,7 +12,6 @@ import (
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/pathx"
-	"github.com/oekit/pkg/procx"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -498,27 +497,9 @@ func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int, o
 //
 // 返回值与历史实现一致(stdout/stderr 合并后原样返回,不额外包装错误)。
 func runGitQuiet(ctx context.Context, dir string, args ...string) (string, error) {
-	if len(args) == 0 {
-		return "", oekiterrors.New("empty git args")
-	}
-	if native, ok := lifecycleBackend().(*gitbackend.NativeGitBackend); ok && native != nil {
-		stdout, stderr, err := native.RunRaw(ctx, dir, args)
-		switch {
-		case err == nil:
-			return stdout, nil
-		case oekiterrors.Is(err, gitbackend.ErrInvalidGitArg):
-			if !executor.IsUnlistedGitSubcommand(err) {
-				// 参数加固命中:原样返回错误,不回落。
-				return stdout + stderr, err
-			}
-		default:
-			return stdout + stderr, err
-		}
-	}
-	cmd := procx.Command(ctx, "git", args...) //nolint:gosec // 内部构造
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	// 与 executor 共用同一实现:RunRaw 白名单 + 参数加固不回落 +
+	// 内部子命令回落本地 git。这里只要错误原样返回。
+	return executor.RunGitThroughBackend(ctx, lifecycleBackend(), dir, args...)
 }
 
 var (

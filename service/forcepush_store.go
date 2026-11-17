@@ -84,10 +84,16 @@ func (st *ForcePushStore) RequestApproval(taskKey, branch, reason, targetRef str
 	// 刷新后,待批的永远是"当前这一次分歧"。
 	existing, err := st.repo.FindPending(taskKey, branch)
 	if err == nil && existing != nil {
-		existing.Reason = reason
-		existing.TargetRef = targetRef
-		existing.CreatedAt = time.Now().UTC()
-		_ = st.repo.Update(existing)
+		// 只刷新展示字段:整行 Update 会把并发放行的 approved/consumed_at
+		// 用旧快照覆盖回未审批(多实例下真实存在)。
+		if _, rerr := st.repo.RefreshPending(existing.ID, reason, targetRef, time.Now().UTC()); rerr != nil {
+			logx.Warn("force-push: 刷新 pending 审批失败", "id", existing.ID, "error", rerr)
+		}
+		return
+	}
+	if err != nil && !isRepositoryNotFound(err) {
+		// 查询失败时不要盲目插入:可能已有 pending,插入会制造重复审批。
+		logx.Warn("force-push: 查询 pending 审批失败,跳过本次刷新", "task", taskKey, "error", err)
 		return
 	}
 	_ = st.repo.Create(&ForcePushApproval{

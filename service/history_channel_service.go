@@ -1034,9 +1034,13 @@ func (h *HistoryService) pushRun(ctx context.Context, run *model.HistoryRun, for
 
 	// 逐个目标推送:用各自凭据。任一失败即中止,不推其余。
 	report := &HistoryPushDTO{RunID: run.ID, Heads: map[string]string{}}
-	branch := "main"
-	if ch, err := h.channels.FindByID(run.ChannelID); err == nil && ch.TargetBranch != "" {
-		branch = ch.TargetBranch
+	ch, err := h.channels.FindByID(run.ChannelID)
+	if err != nil {
+		return nil, oekiterrors.Wrap(err, "读取历史通道失败,拒绝在未知目标分支上推送")
+	}
+	branch := ch.TargetBranch
+	if branch == "" {
+		branch = model.DefaultBranch
 	}
 
 	// **推送前的门禁核对**:执行记录的门禁结论、产物路径、产物 HEAD
@@ -1247,9 +1251,13 @@ func (h *HistoryService) rollbackRun(ctx context.Context, runID uint, ref string
 	// ref 是留底上的分支名、而推送目标恒为目标分支(main)时,
 	// 把留底的另一个分支强推到 main,公开主干就被换成了不相干的内容。
 	// 传 commit hash 的用法不受影响(hash 不属于任何分支的语义)。
-	branch := "main"
-	if ch, err := h.channels.FindByID(run.ChannelID); err == nil && ch.TargetBranch != "" {
-		branch = ch.TargetBranch
+	ch, err := h.channels.FindByID(run.ChannelID)
+	if err != nil {
+		return nil, oekiterrors.Wrap(err, "读取历史通道失败,拒绝回滚到未知目标分支")
+	}
+	branch := ch.TargetBranch
+	if branch == "" {
+		branch = model.DefaultBranch
 	}
 	if !isCommitHash(ref) && ref != branch {
 		return nil, oekiterrors.New(fmt.Sprintf("回滚目标 %s 与目标分支 %s 不一致:回滚只接受目标分支的同名 ref,或一个 commit hash",
