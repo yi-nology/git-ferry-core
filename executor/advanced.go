@@ -338,10 +338,18 @@ func (e *Executor) gitOutput(ctx context.Context, dir string, args ...string) (s
 	return runGitThroughBackend(ctx, e.backend, dir, args...)
 }
 
-// runGitThroughBackend 把 git 命令交给 backend 执行,backend 跑不了的回落裸 git。
-//
-// 回落只发生在平台的参数预校验阶段(ErrInvalidGitArg,exec 之前)或 backend
-// 非 native(gogit 不 shell out)时,不存在“平台跑过一次又跑一次”的重复执行。
+// IsUnlistedGitSubcommand 判断 SDK 拒绝的原因是「子命令不在白名单」,
+// 而不是「参数不安全」。只有前一种允许回落本地 git;后者必须原样返回
+// 错误——回落等于把 SDK 刚拒掉的参数(-c/--exec/ext::/控制字符/以 -
+// 开头的 ref)原样执行,是安全旁路。
+func IsUnlistedGitSubcommand(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not an allowed git subcommand")
+}
+
+// runGitThroughBackend 把 git 命令交给 backend 执行:
+//   - SDK RunRaw 白名单内的子命令:只走 SDK(参数加固拒绝即失败,不回落);
+//   - 白名单外的上述内部子命令:回落本地 git 二进制;
+//   - gogit 后端:不 shell out,内部子命令同样回落本地 git。
 func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
 		return "", oekiterrors.New("empty git args")
@@ -352,7 +360,12 @@ func runGitThroughBackend(ctx context.Context, backend gitbackend.GitBackend, di
 		case err == nil:
 			return stdout, nil
 		case oekiterrors.Is(err, gitbackend.ErrInvalidGitArg):
-			// 平台白名单之外(bundle/fsck/update-ref/lfs/...)→ 回落裸 git
+			if !IsUnlistedGitSubcommand(err) {
+				// 参数加固命中:不得回落,否则绕过加固。
+				return "", gitCmdError(args, stderr, err)
+			}
+			// 子命令不在 SDK 白名单(bundle/fsck/reset/update-ref/lfs/...):
+			// 这是本仓内部构造的命令,回落本地 git。
 		default:
 			return "", gitCmdError(args, stderr, err)
 		}

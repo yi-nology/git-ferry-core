@@ -21,10 +21,16 @@ type base[T any, ID comparable] struct {
 }
 
 func newBase[T any, ID comparable](db *gorm.DB) base[T, ID] {
+	return newBaseExcluding[T, ID](db)
+}
+
+// newBaseExcluding 在 Update 列白名单里额外排除实体特有列
+// (如 sync_tasks.next_fire_at 由调度器条件更新独占)。
+func newBaseExcluding[T any, ID comparable](db *gorm.DB, exclude ...string) base[T, ID] {
 	return base[T, ID]{
 		db:         db,
 		g:          gormrepo.NewGormRepository[T, ID](db),
-		updateCols: writableColumns[T](db),
+		updateCols: writableColumns[T](db, exclude...),
 	}
 }
 
@@ -33,7 +39,7 @@ func newBase[T any, ID comparable](db *gorm.DB) base[T, ID] {
 // Update 走 gormrepo 的 SELECT 列白名单形态(而非 gorm 的 Save):
 //   - 不整行覆写 id/created_at/updated_at/deleted_at;
 //   - 0 行命中即结束,不再触发 Save 的 upsert 旁路(主键不存在时不会凭空插入)。
-func writableColumns[T any](db *gorm.DB) []string {
+func writableColumns[T any](db *gorm.DB, exclude ...string) []string {
 	var probe T
 	stmt := &gorm.Statement{DB: db}
 	if err := stmt.Parse(probe); err != nil || stmt.Schema == nil {
@@ -41,6 +47,9 @@ func writableColumns[T any](db *gorm.DB) []string {
 	}
 	skip := map[string]struct{}{
 		"id": {}, "created_at": {}, "updated_at": {}, "deleted_at": {},
+	}
+	for _, c := range exclude {
+		skip[c] = struct{}{}
 	}
 	cols := make([]string, 0, len(stmt.Schema.Fields))
 	for _, f := range stmt.Schema.Fields {

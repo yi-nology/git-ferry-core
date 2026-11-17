@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### Changed（完整替换：repository 全量 gormrepo 化 + SDK RunRaw 收口）
+
+- **23 个 Repository 全部嵌入 `gormrepo` 基座**：原 7 个遗留 DAO 式
+  （execution_job / sync_task / reconcile / migration_mapping /
+  retry_schedule / outbox_event / pending_trigger）改用 `base[T, ID]`；
+  删除各自的 `db` 字段与手写单条 CRUD / `Save`。
+  - `SyncTaskRepository.Update` 由 `Omit("next_fire_at").Save` 改为
+    列白名单 `gormrepo.Update`（白名单继续排除 `next_fire_at`）；
+  - `ReconcileRepository.Get` / `ExecutionJobRepository.FindByID` /
+    `MigrationMappingRepository.Find` 统一走 `getByID` / `getByCondition`
+    （查无此条 = `repository.ErrNotFound`）。
+- **git 执行收口到 SDK `RunRaw`**：`runGitThroughBackend` / `runGitQuiet`
+  以 `gitbackend.NativeGitBackend.RunRaw` 为唯一主路径；仅当 SDK 明确
+  返回「子命令不在白名单」时回落本地 git（bundle / fsck / reset /
+  update-ref / lfs 等内部命令）。**安全修复**：参数加固拒绝
+  （`-c` / `--exec` / `ext::` / 控制字符 / 以 `-` 开头的 ref）不再回落
+  ——旧实现会把 SDK 刚拒掉的参数原样交给裸 git 执行。
+- 有意保留：`repository.Paginate`（offset 契约，gormx.Paginate 是 page
+  制）；`pathx.MatchGlob` 分支匹配（`*` 跨 `/` 的本仓口径，与 SDK
+  `branchfilter` 的 path 语义不同）。
+
+### Changed（依赖：go-git-platform v1.0.0 GA）
+
+- **SDK v0.143.0 → v1.0.0**：统一七平台 Git SDK 正式版——四层分层
+  （model ← provider ← runtime ← adapter）+ **22 包 / 4216 符号金样冻结**
+  （v1 起公共面增删改即红）+ 四域覆盖率门 + 七平台只读巡检矩阵 +
+  MCP 六目标分发。版本承诺：v1 起 breaking = major、minor = 能力、
+  patch = 修复（见 SDK `docs/VERSIONING.md`）。
+- v1.0.0 唯一生产行为修复 `FileOptions.Content` 统一为明文语义
+  （gitea/forgejo adapter 内部 base64）——本仓未使用平台文件写 API，
+  无消费面变更；本轮仅升版 + 全量回归。
+
 ### Fixed（P1 六单：#39/#40/#41/#42/#43/#44）
 
 - **#39 [retry] 冷却期不再吞预算**:`RetryTracker.Decision` 新增

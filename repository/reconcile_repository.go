@@ -11,11 +11,11 @@ import (
 
 // ReconcileRepository 对账结果存储(reconcile_results,每任务最新一条)。
 type ReconcileRepository struct {
-	db *gorm.DB
+	base[model.ReconcileRecord, string]
 }
 
 func NewReconcileRepository(db *gorm.DB) *ReconcileRepository {
-	return &ReconcileRepository{db: db}
+	return &ReconcileRepository{base: newBase[model.ReconcileRecord, string](db)}
 }
 
 // Upsert 记录一次对账结果(task_key 主键,重复对账覆盖最新)。
@@ -29,13 +29,9 @@ func (d *ReconcileRepository) Upsert(r *model.ReconcileRecord) error {
 	}).Create(r).Error
 }
 
-// Get 查某任务最新对账结果。
+// Get 查某任务最新对账结果(查无此条返回 ErrNotFound)。
 func (d *ReconcileRepository) Get(taskKey string) (*model.ReconcileRecord, error) {
-	var r model.ReconcileRecord
-	if err := d.db.Where("task_key = ?", taskKey).First(&r).Error; err != nil {
-		return nil, err
-	}
-	return &r, nil
+	return d.getByID(taskKey)
 }
 
 // ListDrift 漂移/分支缺失记录(漂移告警/看板用)。

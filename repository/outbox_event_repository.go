@@ -10,11 +10,11 @@ import (
 
 // OutboxEventRepository 事务外发盒存储(见 model.OutboxEvent)。
 type OutboxEventRepository struct {
-	db *gorm.DB
+	base[model.OutboxEvent, uint]
 }
 
 func NewOutboxEventRepository(db *gorm.DB) *OutboxEventRepository {
-	return &OutboxEventRepository{db: db}
+	return &OutboxEventRepository{base: newBase[model.OutboxEvent, uint](db)}
 }
 
 // CreateInTx 在既有事务里写事件 —— **必须与业务写入同事务**,

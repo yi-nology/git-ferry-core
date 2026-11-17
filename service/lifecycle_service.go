@@ -490,21 +490,27 @@ func revListCounts(ctx context.Context, dir, a, b string) (aAhead, bAhead int, o
 	return aAhead, bAhead, true
 }
 
-// runGitQuiet 只读 git 命令。优先走 backend.RunRaw(与 executor 侧同一收口),
-// 平台白名单之外的子命令回落裸 git;返回值与历史实现一致(stdout/stderr 合并
-// 后原样返回,不额外包装错误)。
+// runGitQuiet 只读 git 命令。优先走 backend.RunRaw(与 executor 侧同一收口):
+//   - SDK 白名单内命令被参数加固拒绝(ErrInvalidGitArg)⇒ 原样返回错误,
+//     **不回落**(回落等于绕过 -c/--exec/ext:: 防护);
+//   - SDK 白名单外的内部子命令(bundle/fsck/... )⇒ 回落本地 git;
+//   - 非 native 后端 ⇒ 同样回落本地 git。
+//
+// 返回值与历史实现一致(stdout/stderr 合并后原样返回,不额外包装错误)。
 func runGitQuiet(ctx context.Context, dir string, args ...string) (string, error) {
 	if len(args) == 0 {
 		return "", oekiterrors.New("empty git args")
 	}
-	backend := lifecycleBackend()
-	if native, ok := backend.(*gitbackend.NativeGitBackend); ok && native != nil {
+	if native, ok := lifecycleBackend().(*gitbackend.NativeGitBackend); ok && native != nil {
 		stdout, stderr, err := native.RunRaw(ctx, dir, args)
 		switch {
 		case err == nil:
 			return stdout, nil
 		case oekiterrors.Is(err, gitbackend.ErrInvalidGitArg):
-			// 白名单之外 → 回落裸 git
+			if !executor.IsUnlistedGitSubcommand(err) {
+				// 参数加固命中:原样返回错误,不回落。
+				return stdout + stderr, err
+			}
 		default:
 			return stdout + stderr, err
 		}

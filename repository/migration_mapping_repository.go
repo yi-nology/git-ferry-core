@@ -12,27 +12,19 @@ import (
 // 身份键是 (SourcePlatform, SourceRepo, ObjectType, SourceNumber),
 // 标题/正文永不参与查重。
 type MigrationMappingRepository struct {
-	db *gorm.DB
+	base[model.MigrationMapping, uint]
 }
 
 func NewMigrationMappingRepository(db *gorm.DB) *MigrationMappingRepository {
-	return &MigrationMappingRepository{db: db}
+	return &MigrationMappingRepository{base: newBase[model.MigrationMapping, uint](db)}
 }
 
-// Find 按源对象身份键查映射;不存在返回 (nil, nil)。
+// Find 按源对象身份键查映射;查无此条返回 ErrNotFound。
 func (d *MigrationMappingRepository) Find(sourcePlatform, sourceRepo, objectType, sourceNumber string) (*model.MigrationMapping, error) {
-	var m model.MigrationMapping
-	err := d.db.Where(
+	return d.getByCondition(
 		"source_platform = ? AND source_repo = ? AND object_type = ? AND source_number = ?",
 		sourcePlatform, sourceRepo, objectType, sourceNumber,
-	).First(&m).Error
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &m, nil
+	)
 }
 
 // CreatePending 先落 pending 映射(断点续迁的占位):唯一键冲突返回

@@ -23,7 +23,7 @@ var ErrLeaseLost = errors.New("execution job lease lost: no longer owned by this
 // 执行中到达的触发即使被合并,也以代次形式留痕,作业收尾 CAS 发现
 // completed < desired 必须再入追赶作业 ⇒ 被合并的触发不丢。
 type ExecutionJobRepository struct {
-	db *gorm.DB
+	base[model.ExecutionJob, uint]
 	// lockingReads MySQL 方言下用 SELECT ... FOR UPDATE 锁定读状态行:
 	// REPEATABLE READ 的快照读看不到并发事务的代次递增,不锁定读会让两个
 	// 并发入队都判「活动槽空闲」而双插(唯一索引能拦住,但整个事务回滚、
@@ -33,7 +33,7 @@ type ExecutionJobRepository struct {
 }
 
 func NewExecutionJobRepository(db *gorm.DB) *ExecutionJobRepository {
-	return &ExecutionJobRepository{db: db, lockingReads: isMySQLDialect(db)}
+	return &ExecutionJobRepository{base: newBase[model.ExecutionJob, uint](db), lockingReads: isMySQLDialect(db)}
 }
 
 // isMySQLDialect 报告连接的方言是否 MySQL:FOR UPDATE 锁定读只有 MySQL 支持
@@ -135,11 +135,7 @@ func (d *ExecutionJobRepository) ListPendingIDs(limit int) ([]uint, error) {
 
 // FindByID 查单条。
 func (d *ExecutionJobRepository) FindByID(id uint) (*model.ExecutionJob, error) {
-	var j model.ExecutionJob
-	if err := d.db.First(&j, id).Error; err != nil {
-		return nil, err
-	}
-	return &j, nil
+	return d.getByID(id)
 }
 
 // Claim 条件认领:仅当仍是 pending 才翻为 claimed(原子,多实例单胜者)。

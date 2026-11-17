@@ -10,11 +10,11 @@ import (
 
 // PendingTriggerRepository 待补跑触发的持久化存储(见 model.PendingTrigger)。
 type PendingTriggerRepository struct {
-	db *gorm.DB
+	base[model.PendingTrigger, uint]
 }
 
 func NewPendingTriggerRepository(db *gorm.DB) *PendingTriggerRepository {
-	return &PendingTriggerRepository{db: db}
+	return &PendingTriggerRepository{base: newBase[model.PendingTrigger, uint](db)}
 }
 
 // Upsert 记一笔待补跑。同一任务重复记 ⇒ generation+1(合并语义:只补跑一次,

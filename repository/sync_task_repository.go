@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"errors"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
@@ -9,11 +8,13 @@ import (
 )
 
 type SyncTaskRepository struct {
-	db *gorm.DB
+	base[model.SyncTask, uint]
 }
 
 func NewSyncTaskRepository(db *gorm.DB) *SyncTaskRepository {
-	return &SyncTaskRepository{db: db}
+	return &SyncTaskRepository{
+		base: newBaseExcluding[model.SyncTask, uint](db, "next_fire_at"),
+	}
 }
 
 func (d *SyncTaskRepository) FindByRepoKey(repoKey string, page Pagination) ([]*model.SyncTask, int64, error) {
@@ -24,14 +25,7 @@ func (d *SyncTaskRepository) FindByRepoKey(repoKey string, page Pagination) ([]*
 }
 
 func (d *SyncTaskRepository) FindByKey(key string) (*model.SyncTask, error) {
-	var task model.SyncTask
-	if err := d.db.Where("`key` = ?", key).First(&task).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &task, nil
+	return d.getByCondition("`key` = ?", key)
 }
 
 func (d *SyncTaskRepository) FindAllEnabled() ([]*model.SyncTask, error) {
@@ -77,18 +71,16 @@ func (d *SyncTaskRepository) ResetNextFire(key string) error {
 }
 
 func (d *SyncTaskRepository) Create(task *model.SyncTask) error {
-	return d.db.Create(task).Error
+	return d.create(task)
 }
 
-// Update 更新任务配置。
+// Update 更新任务配置(列白名单,且排除 next_fire_at)。
 //
-// **必须 Omit next_fire_at**:该列是共享调度器的事实源,由
-// SeedNextFire/ClaimDueFire 条件更新推进;RemoveCronJob 另有显式
-// ResetNextFire。#40 引入该列后,若这里用整行 Save,一个普通的改名
-// 请求会把执行开始时读到的旧 next_fire_at 写回,导致同一到点周期
-// 重复触发(或把已推进的排程倒退)。
+// next_fire_at 是共享调度器的事实源,由 SeedNextFire/ClaimDueFire 条件
+// 更新推进;若这里整行写回,一个普通的改名请求会把执行开始时读到的旧
+// next_fire_at 写回,导致同一到点周期重复触发(或把已推进的排程倒退)。
 func (d *SyncTaskRepository) Update(task *model.SyncTask) error {
-	return d.db.Omit("next_fire_at").Save(task).Error
+	return d.update(task)
 }
 
 // UpdateLastRun 只更新"最近一次执行"这两个字段。

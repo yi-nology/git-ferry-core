@@ -18,11 +18,11 @@ import (
 //   - 认领后进程崩溃 ⇒ lease 到期后其它实例再次认领(at-least-once,
 //     执行侧仍有 taskKey 互斥/队列合并兜底)。
 type RetryScheduleRepository struct {
-	db *gorm.DB
+	base[model.RetrySchedule, uint]
 }
 
 func NewRetryScheduleRepository(db *gorm.DB) *RetryScheduleRepository {
-	return &RetryScheduleRepository{db: db}
+	return &RetryScheduleRepository{base: newBase[model.RetrySchedule, uint](db)}
 }
 
 // Create 幂等登记一条排程;同一 RunID 已存在时返回 created=false。
