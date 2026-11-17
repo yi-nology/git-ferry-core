@@ -8,10 +8,11 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
-
+	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
+	"gorm.io/gorm"
 )
 
 // newOutboxTestService 造带 outbox 的轻量服务(不跑 executor)。
@@ -26,10 +27,10 @@ func newOutboxTestService(t *testing.T) *Service {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 
-	repoRepository, err := repository.NewRepoRepository(db)
+	repoDAO, err := repository.NewRepoRepository(db)
 	require.NoError(t, err)
 	taskSvc := NewTaskService(
-		repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository)
+		repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoDAO)
 	taskSvc.outbox = repository.NewOutboxEventRepository(db)
 
 	return &Service{
@@ -38,6 +39,115 @@ func newOutboxTestService(t *testing.T) *Service {
 		bgCtx:  context.Background(),
 		config: &model.Config{},
 	}
+}
+
+// newDirectRunOutboxService 带**真实 executor** 的轻量服务:任务的源仓库
+// 不存在 ⇒ Execute 快速失败(run 记录与 outbox 事件照常同事务落库),
+// 正好走完 RunTaskWithTrigger 的直跑收尾路径。
+func newDirectRunOutboxService(t *testing.T, key string) *Service {
+	t.Helper()
+	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{},
+		&model.Repo{}, &model.Platform{}, &model.OutboxEvent{}, &model.PendingTrigger{}))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	repoDAO, err := repository.NewRepoRepository(db)
+	require.NoError(t, err)
+	platformDAO, err := repository.NewPlatformRepository(db)
+	require.NoError(t, err)
+	mgr := sdkrt.NewManager(0)
+
+	svc := &Service{
+		config:    &model.Config{Git: model.GitConfig{TempDir: t.TempDir()}},
+		repos:     NewRepoService(repoDAO, platformDAO, mgr),
+		platforms: NewPlatformService(platformDAO, repoDAO, mgr),
+		tasks: NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db),
+			repository.NewSyncRunStepRepository(db), repoDAO),
+		guard:   newLocalGuard(2),
+		pending: repository.NewPendingTriggerRepository(db),
+		bgCtx:   context.Background(),
+	}
+	svc.tasks.outbox = repository.NewOutboxEventRepository(db)
+	svc.outbox = svc.tasks.outbox
+
+	exec, err := executor.NewExecutor(svc)
+	require.NoError(t, err)
+	svc.executor = exec
+
+	require.NoError(t, svc.tasks.taskRepository.Create(&model.SyncTask{
+		Key: key, Name: "direct", Enabled: true,
+		SourceRepoKey: "missing/repo", TargetRepoKey: "missing/tgt",
+		SourceBranch: "main", TargetBranch: "main",
+	}))
+	return svc
+}
+
+// TestOutbox_DirectPathNoSubscriberKeepsEvent RunTaskWithTrigger **直跑路径**
+// 同样不得「未投递先闭环」(#38):无订阅者时 emitRunCompleted 返回 false,
+// 不得按 run 标记已发布 —— 旧实现丢弃 delivered 无条件 markOutboxPublishedByRun,
+// 无订阅者(壳层未注册 runwatch/进程刚启动/纯 CLI 模式)时完成事件被标记
+// 已发布却从未投递 ⇒ 通知与自动补偿永久丢失,且 outbox 里不可见(已标记
+// published),运维无法事后补偿。#15 只修了异步路径(finishRun),这是直跑
+// 路径的遗漏面。
+func TestOutbox_DirectPathNoSubscriberKeepsEvent(t *testing.T) {
+	svc := newDirectRunOutboxService(t, "ob-direct")
+
+	// 直跑一次(源仓库缺失 ⇒ run 失败,但 run/outbox 事件已落库)
+	err := svc.RunTaskWithTrigger(context.Background(), "ob-direct", model.TriggerWebhook, nil)
+	require.Error(t, err, "仓库缺失的执行应失败")
+
+	// 事件确实落库了(同事务 invariant,两种实现都应满足)
+	var total int64
+	require.NoError(t, svc.tasks.runRepository.DB().Table("outbox_events").
+		Where("task_key = ?", "ob-direct").Count(&total).Error)
+	require.Equal(t, int64(1), total, "直跑路径必须同事务落一条完成事件")
+
+	// 关键断言:无订阅者时事件不得被标记已发布
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n, "直跑路径无订阅者时事件不得被标记已发布(#38)")
+
+	// 订阅者注册后派发器重投闭环(通知不丢)
+	got := make(chan RunEvent, 1)
+	svc.SubscribeRuns(func(ev RunEvent) { got <- ev })
+	svc.publishDueOutbox(0)
+	select {
+	case ev := <-got:
+		require.NotNil(t, ev.Run)
+		assert.Equal(t, "ob-direct", ev.TaskKey)
+	case <-time.After(2 * time.Second):
+		t.Fatal("直跑路径未闭环的事件,派发器应重投给订阅者")
+	}
+	n, err = svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Zero(t, n, "投递后事件必须闭环")
+}
+
+// TestOutbox_DirectPathSubscriberClosesEvent 对照:有订阅者时直跑路径
+// 正常闭环(投递成功 ⇒ 标记已发布,派发器宽限后不重投)。
+func TestOutbox_DirectPathSubscriberClosesEvent(t *testing.T) {
+	svc := newDirectRunOutboxService(t, "ob-direct-sub")
+
+	got := make(chan RunEvent, 1)
+	svc.SubscribeRuns(func(ev RunEvent) { got <- ev })
+
+	err := svc.RunTaskWithTrigger(context.Background(), "ob-direct-sub", model.TriggerCron, nil)
+	require.Error(t, err)
+
+	select {
+	case ev := <-got:
+		require.NotNil(t, ev.Run)
+		assert.Equal(t, "ob-direct-sub", ev.TaskKey)
+	case <-time.After(2 * time.Second):
+		t.Fatal("有订阅者时直跑路径必须投递完成事件")
+	}
+	n, err := svc.outbox.CountUnpublished()
+	require.NoError(t, err)
+	assert.Zero(t, n, "快速路径已投递 ⇒ 事件闭环")
 }
 
 // TestOutbox_CompletionWritesEventInTx 运行完成必须**同事务**写 outbox 事件:

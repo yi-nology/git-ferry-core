@@ -113,8 +113,9 @@ func (s *Service) dispatchRunEvent(subs []runSubscriber, ev RunEvent) {
 //   - 两者皆 false:此刻**没有订阅者**,一个字节都没投出去 ⇒ **不得标记**,
 //     留待订阅者注册后的下一轮扫描(at-least-once:标记了却没投 = 静默丢失)。
 func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned bool) {
-	// 按主题分发:漂移事件不走 run 查找(RunID=0,查不到会被误判废弃)。
-	if ev.Topic == model.OutboxTopicReconcileDrift {
+	// 按主题分发:对账事件(漂移/无法判断)不走 run 查找
+	// (RunID=0,查不到会被误判废弃);订阅方按 payload.status 区分告警级别。
+	if ev.Topic == model.OutboxTopicReconcileDrift || ev.Topic == model.OutboxTopicReconcileUnknown {
 		return s.deliverDriftEvent(ev)
 	}
 	subs := s.snapshotRunSubs()

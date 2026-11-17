@@ -11,7 +11,7 @@ import (
 )
 
 // TestNewService_WiresAllStores 全链路接线回归:
-// NewService 必须把 Repo 装配到 Service 的每个存储字段。
+// NewService 必须把 Repository 装配到 Service 的每个存储字段。
 //
 // 回归背景(真实事故,随 v0.36.0 发布):svc.outbox 从未在构造函数赋值 ⇒
 // 进程内 outbox 派发器空转(有 nil 守卫不 panic),事件只落库不重投、
@@ -30,12 +30,14 @@ func TestNewService_WiresAllStores(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Stop()
 
-	assert.NotNil(t, svc.outbox, "outbox Repo 必须接线(构造函数赋值)")
-	assert.NotNil(t, svc.pending, "pending Repo 必须接线")
-	assert.NotNil(t, svc.jobs, "execution jobs Repo 必须接线")
+	assert.NotNil(t, svc.outbox, "outbox Repository 必须接线(构造函数赋值)")
+	assert.NotNil(t, svc.pending, "pending Repository 必须接线")
+	assert.NotNil(t, svc.jobs, "execution jobs Repository 必须接线")
+	assert.NotNil(t, svc.retrySchedules, "retry_schedules Repository 必须接线(#39)")
+	assert.NotNil(t, svc.migrationMappings, "migration_mappings Repository 必须接线(#41)")
 	assert.NotEmpty(t, svc.instanceID, "lease 属主标识必须生成")
-	assert.NotNil(t, svc.reconciles, "reconcile Repo 必须接线")
-	assert.NotNil(t, svc.recovery, "recovery Repo 必须接线")
+	assert.NotNil(t, svc.reconciles, "reconcile Repository 必须接线")
+	assert.NotNil(t, svc.recovery, "recovery Repository 必须接线")
 	assert.NotNil(t, svc.executor.Recovery, "executor 必须注入恢复点记录器")
 	assert.NotNil(t, svc.templates, "templates store 必须接线")
 	assert.NotNil(t, svc.approvals, "force-push approvals 必须接线")
@@ -50,6 +52,21 @@ func TestNewService_WiresAllStores(t *testing.T) {
 	require.NotNil(t, tr)
 	tr.mu.Lock()
 	hasChain := tr.chain != nil
+	hasScheduler := tr.schedule != nil
 	tr.mu.Unlock()
 	assert.True(t, hasChain, "RetryTracker.chain 必须接线(重试预算按 DB 派生)")
+	assert.True(t, hasScheduler, "RetryTracker.schedule 必须接线(冷却期延迟重跑落库,#39)")
+}
+
+// TestNewService_RejectsInvalidDeploymentMode 部署模式错误必须启动时拒绝
+// (#42),而不是运行期以双执行暴露。
+func TestNewService_RejectsInvalidDeploymentMode(t *testing.T) {
+	cfg := &model.Config{
+		Mode:     model.DeployModeDistributed,
+		Database: model.DatabaseConfig{Driver: model.DriverSQLite, DSN: filepath.Join(t.TempDir(), "bad.db")},
+		Git:      model.GitConfig{TempDir: t.TempDir()},
+	}
+	_, err := NewService(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database.driver must be mysql")
 }

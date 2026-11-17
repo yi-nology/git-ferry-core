@@ -14,7 +14,6 @@ require (
 	github.com/oekit/metrics v0.4.1
 	github.com/oekit/pkg v0.52.0
 	github.com/oekit/redisx v0.16.0
-	github.com/oekit/timertask v0.5.5
 	github.com/oekit/tracing v0.4.7
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.23.0

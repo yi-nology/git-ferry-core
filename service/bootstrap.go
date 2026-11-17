@@ -26,6 +26,8 @@ type appRepositories struct {
 	pending   *repository.PendingTriggerRepository
 	outbox    *repository.OutboxEventRepository
 	jobs      *repository.ExecutionJobRepository
+	retry     *repository.RetryScheduleRepository
+	migration *repository.MigrationMappingRepository
 	reconcile *repository.ReconcileRepository
 	recovery  *repository.RecoveryPointRepository
 	provider  *sdkrt.Manager
@@ -48,28 +50,30 @@ func initDB(cfg *Config) (*gorm.DB, error) {
 
 // initRepositories 装配 Repository 与平台 Provider 缓存。
 func initRepositories(db *gorm.DB) (*appRepositories, error) {
-	repoRepository, err := repository.NewRepoRepository(db)
+	repoDAO, err := repository.NewRepoRepository(db)
 	if err != nil {
-		return nil, oekiterrors.Wrap(err, "init repo Repo failed")
+		return nil, oekiterrors.Wrap(err, "init repo Repository failed")
 	}
-	platformRepository, err := repository.NewPlatformRepository(db)
+	platformDAO, err := repository.NewPlatformRepository(db)
 	if err != nil {
-		return nil, oekiterrors.Wrap(err, "failed to create PlatformRepo")
+		return nil, oekiterrors.Wrap(err, "failed to create PlatformRepository")
 	}
 	return &appRepositories{
-		repo:      repoRepository,
+		repo:      repoDAO,
 		task:      repository.NewSyncTaskRepository(db),
 		run:       repository.NewSyncRunRepository(db),
 		runStep:   repository.NewSyncRunStepRepository(db),
 		rule:      repository.NewWebhookRuleRepository(db),
 		event:     repository.NewWebhookEventRepository(db),
-		platform:  platformRepository,
+		platform:  platformDAO,
 		opLog:     repository.NewOperationLogRepository(db),
 		template:  repository.NewTemplateRepository(db),
 		approv:    repository.NewForcePushApprovalRepository(db),
 		pending:   repository.NewPendingTriggerRepository(db),
 		outbox:    repository.NewOutboxEventRepository(db),
 		jobs:      repository.NewExecutionJobRepository(db),
+		retry:     repository.NewRetryScheduleRepository(db),
+		migration: repository.NewMigrationMappingRepository(db),
 		reconcile: repository.NewReconcileRepository(db),
 		recovery:  repository.NewRecoveryPointRepository(db),
 		provider:  sdkrt.NewManager(30*time.Minute, sdkrt.WithMaxSize(64)),

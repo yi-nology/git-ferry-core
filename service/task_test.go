@@ -29,16 +29,14 @@ func setupTaskTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	db := setupTaskTestDB(t)
-	taskRepository := repository.NewSyncTaskRepository(db)
-	runRepository := repository.NewSyncRunRepository(db)
+	taskDAO := repository.NewSyncTaskRepository(db)
+	runDAO := repository.NewSyncRunRepository(db)
 
-	runStepRepository := repository.NewSyncRunStepRepository(db)
-	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, nil)
+	runStepDAO := repository.NewSyncRunStepRepository(db)
+	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, nil)
 
 	svc := &Service{
-		tasks:    taskService,
-		cron:     newTestCronScheduler(t),
-		cronKeys: make(map[string]string),
+		tasks: taskService,
 		config: &model.Config{
 			Sync: model.SyncConfig{
 				DefaultTimeout: 300,
@@ -118,9 +116,13 @@ func TestCreateTask_WithCron(t *testing.T) {
 		t.Errorf("expected cron '*/5 * * * *', got %q", task.Cron)
 	}
 
-	// Verify cron job was added
-	if _, exists := svc.cronKeys[task.Key]; !exists {
-		t.Error("expected cron job to be added")
+	// cron 只落 DB(next_fire_at 由共享调度器播种),不再有本地点表。
+	stored, err := svc.GetTask(ctx, task.Key)
+	if err != nil || stored == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if stored.Cron != "*/5 * * * *" {
+		t.Errorf("expected persisted cron, got %q", stored.Cron)
 	}
 }
 
@@ -279,11 +281,6 @@ func TestDeleteTask(t *testing.T) {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
 
-	// Verify cron job exists
-	if _, exists := svc.cronKeys[created.Key]; !exists {
-		t.Error("expected cron job to exist before deletion")
-	}
-
 	// Delete the task
 	err = svc.DeleteTask(ctx, created.Key)
 	if err != nil {
@@ -299,10 +296,6 @@ func TestDeleteTask(t *testing.T) {
 		t.Error("expected task to be deleted")
 	}
 
-	// Verify cron job is removed
-	if _, exists := svc.cronKeys[created.Key]; exists {
-		t.Error("expected cron job to be removed after deletion")
-	}
 }
 
 func TestListHistory(t *testing.T) {
@@ -379,7 +372,7 @@ func TestDeleteHistory(t *testing.T) {
 	}
 }
 
-func TestPreviewSync_WithRepoRepo(t *testing.T) {
+func TestPreviewSync_WithRepoDAO(t *testing.T) {
 	t.Setenv("ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 
 	db := setupTaskTestDB(t)
@@ -388,26 +381,22 @@ func TestPreviewSync_WithRepoRepo(t *testing.T) {
 		t.Fatalf("failed to migrate repo: %v", err)
 	}
 
-	taskRepository := repository.NewSyncTaskRepository(db)
-	runRepository := repository.NewSyncRunRepository(db)
-	runStepRepository := repository.NewSyncRunStepRepository(db)
-	repoRepository, err := repository.NewRepoRepository(db)
+	taskDAO := repository.NewSyncTaskRepository(db)
+	runDAO := repository.NewSyncRunRepository(db)
+	runStepDAO := repository.NewSyncRunStepRepository(db)
+	repoDAO, err := repository.NewRepoRepository(db)
 	if err != nil {
-		t.Fatalf("failed to create repo repository: %v", err)
+		t.Fatalf("failed to create RepoRepository: %v", err)
 	}
 
-	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
+	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
 
-	svc := &Service{
-		tasks:    taskService,
-		cron:     newTestCronScheduler(t),
-		cronKeys: make(map[string]string),
-	}
+	svc := &Service{tasks: taskService}
 
 	ctx := context.Background()
 
 	// Create repos
-	if err := repoRepository.Create(&model.Repo{
+	if err := repoDAO.Create(&model.Repo{
 		Key:      "source-repo",
 		Name:     "Source",
 		CloneURL: "https://github.com/source/repo.git",
@@ -415,7 +404,7 @@ func TestPreviewSync_WithRepoRepo(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create source repo failed: %v", err)
 	}
-	if err := repoRepository.Create(&model.Repo{
+	if err := repoDAO.Create(&model.Repo{
 		Key:      "target-repo",
 		Name:     "Target",
 		CloneURL: "https://github.com/target/repo.git",
@@ -452,21 +441,17 @@ func TestPreviewSync_MissingRepo(t *testing.T) {
 		t.Fatalf("failed to migrate repo: %v", err)
 	}
 
-	taskRepository := repository.NewSyncTaskRepository(db)
-	runRepository := repository.NewSyncRunRepository(db)
-	runStepRepository := repository.NewSyncRunStepRepository(db)
-	repoRepository, err := repository.NewRepoRepository(db)
+	taskDAO := repository.NewSyncTaskRepository(db)
+	runDAO := repository.NewSyncRunRepository(db)
+	runStepDAO := repository.NewSyncRunStepRepository(db)
+	repoDAO, err := repository.NewRepoRepository(db)
 	if err != nil {
-		t.Fatalf("failed to create repo repository: %v", err)
+		t.Fatalf("failed to create RepoRepository: %v", err)
 	}
 
-	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
+	taskService := NewTaskService(taskDAO, runDAO, runStepDAO, repoDAO)
 
-	svc := &Service{
-		tasks:    taskService,
-		cron:     newTestCronScheduler(t),
-		cronKeys: make(map[string]string),
-	}
+	svc := &Service{tasks: taskService}
 
 	ctx := context.Background()
 
@@ -490,14 +475,14 @@ func TestPreviewSync(t *testing.T) {
 	if err := db.AutoMigrate(&model.Repo{}); err != nil {
 		t.Fatalf("migrate repo: %v", err)
 	}
-	repoRepository, err := repository.NewRepoRepository(db)
+	repoDAO, err := repository.NewRepoRepository(db)
 	if err != nil {
 		t.Fatalf("NewRepoRepository: %v", err)
 	}
-	if err := repoRepository.Create(&model.Repo{Key: "src", Name: "src", Status: model.RepoStatusActive}); err != nil {
+	if err := repoDAO.Create(&model.Repo{Key: "src", Name: "src", Status: model.RepoStatusActive}); err != nil {
 		t.Fatalf("seed repo: %v", err)
 	}
-	ts := NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoRepository)
+	ts := NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), repoDAO)
 	ctx := context.Background()
 
 	// 目标缺失

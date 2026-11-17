@@ -38,12 +38,16 @@ type SyncTask struct {
 	IncludeBranches string `json:"include_branches" gorm:"size:512"`
 	// ExcludeRefPatterns 逗号分隔 ref glob 黑名单(如 "refs/pull/*,refs/merge-requests/*")。
 	// fetch/clone 后删除匹配 ref,避免 PR 引用污染目标。空=默认排除 refs/pull/* 与 refs/merge-requests/*。
-	ExcludeRefPatterns string         `json:"exclude_ref_patterns" gorm:"size:512"`
-	LastRunAt          *time.Time     `json:"last_run_at"`
-	LastStatus         string         `json:"last_status" gorm:"size:20"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	DeletedAt          gorm.DeletedAt `json:"-" gorm:"index"`
+	ExcludeRefPatterns string `json:"exclude_ref_patterns" gorm:"size:512"`
+	// NextFireAt cron 下一次触发的数据库事实源(#40):各实例共享该列,
+	// 调度器只做「算下次时间 + 条件更新抢占」,不再维护本地 robfig 表。
+	// nil = 尚未排程(启动/改 cron 后由调度器按当前时间播种)。
+	NextFireAt *time.Time     `json:"next_fire_at" gorm:"index"`
+	LastRunAt  *time.Time     `json:"last_run_at"`
+	LastStatus string         `json:"last_status" gorm:"size:20"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (SyncTask) TableName() string {

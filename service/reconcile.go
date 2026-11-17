@@ -63,8 +63,7 @@ func reconcileBranches(ctx context.Context,
 
 	srcSHA, err := branchHeadSHA(ctx, srcProv, srcOwner, srcRepo, srcBranch)
 	if err != nil {
-		res.Status = model.ReconcileSourceMissing
-		res.Message = "查询源分支失败: " + err.Error()
+		res.Status, res.Message = classifyBranchQueryError("源", srcBranch, err)
 		return res
 	}
 	if srcSHA == "" {
@@ -74,8 +73,7 @@ func reconcileBranches(ctx context.Context,
 	}
 	tgtSHA, err := branchHeadSHA(ctx, tgtProv, tgtOwner, tgtRepo, tgtBranch)
 	if err != nil {
-		res.Status = model.ReconcileTargetMissing
-		res.Message = "查询目标分支失败: " + err.Error()
+		res.Status, res.Message = classifyBranchQueryError("目标", tgtBranch, err)
 		return res
 	}
 	if tgtSHA == "" {
@@ -94,9 +92,18 @@ func reconcileBranches(ctx context.Context,
 	// 漂移:在**目标端**比较 base(目标)..head(源) ⇒ ahead = 目标缺的提交。
 	cmp, err := tgtProv.CompareCommits(ctx, tgtOwner, tgtRepo, tgtSHA, srcSHA)
 	if err != nil {
-		res.Status = model.ReconcileDrift
-		res.Message = "SHA 不一致,且 CompareCommits 失败: " + err.Error()
-		logx.Warn("reconcile: compare failed", "src_sha", srcSHA, "tgt_sha", tgtSHA, "error", err)
+		// 「无法判断」不是「已证明漂移」:403/429/超时/5xx 报 drift
+		// 会制造假漂移告警并污染 drift 率(#44)。
+		switch {
+		case sdkprov.IsNotImplemented(err), sdkprov.IsPlatformNotSupported(err):
+			res.Status = model.ReconcileUnsupported
+			res.Message = "SHA 不一致,但平台不支持 CompareCommits: " + err.Error()
+		default:
+			res.Status = model.ReconcileUnknown
+			res.Message = "SHA 不一致,但 CompareCommits 失败,无法判断漂移方向: " + err.Error()
+		}
+		logx.Warn("reconcile: compare failed", "src_sha", srcSHA, "tgt_sha", tgtSHA,
+			"status", res.Status, "error", err)
 		return res
 	}
 	res.Status = model.ReconcileDrift
@@ -104,6 +111,18 @@ func reconcileBranches(ctx context.Context,
 	res.TargetAhead = cmp.BehindBy
 	res.Message = "两端漂移:目标缺提交 / 目标多出提交(旁路写入?)"
 	return res
+}
+
+// classifyBranchQueryError 分支 HEAD 查询错误分类:只有平台明确表示
+// 「分支/资源不存在」(404/410)才归 missing;401/403/429/5xx/超时/
+// 解析失败等一律 unknown(可重试/需运维介入),不得伪装成分支缺失。
+func classifyBranchQueryError(side, branch string, err error) (status, message string) {
+	if sdkprov.IsNotFound(err) || sdkprov.IsGone(err) {
+		return map[string]string{"源": model.ReconcileSourceMissing, "目标": model.ReconcileTargetMissing}[side],
+			side + "分支不存在: " + branch
+	}
+	return model.ReconcileUnknown,
+		"查询" + side + "分支失败(无法判断,可重试/检查凭据与限流): " + err.Error()
 }
 
 // branchHeadSHA 取分支 HEAD SHA:ListCommits(branch, PerPage=1) 的第一条。
@@ -151,7 +170,9 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 		logx.Error("reconcile: 列出启用任务失败", "error", err)
 		return
 	}
-	var drift int
+	// 告警分级:#44 要求 unknown 不计入漂移率——凭据失效/限流/5xx 是
+	// 「本次无法判断」,不是「已证明漂移」。单独计数,便于接运维告警。
+	var drift, unknown int
 	for _, task := range tasks {
 		res, rerr := s.ReconcileTask(ctx, task.Key)
 		if rerr != nil {
@@ -161,7 +182,11 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 		if werr := s.recordReconcile(res); werr != nil {
 			logx.Error("reconcile: 结果落库失败", "task", task.Key, "error", werr)
 		}
-		if res.Status != model.ReconcileInSync {
+		switch res.Status {
+		case model.ReconcileInSync:
+		case model.ReconcileUnknown, model.ReconcileUnsupported:
+			unknown++
+		default:
 			drift++
 		}
 		// 平台 API 限速:任务间小睡,宁可慢不可被限流封。
@@ -171,8 +196,9 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	if drift > 0 {
-		logx.Warn("reconcile: 本轮发现漂移/缺失", "drift", drift, "total", len(tasks))
+	if drift > 0 || unknown > 0 {
+		logx.Warn("reconcile: 本轮发现漂移/缺失/无法判断",
+			"drift", drift, "unknown", unknown, "total", len(tasks))
 	}
 }
 
@@ -198,8 +224,16 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 	if res.Status == model.ReconcileInSync {
 		return nil
 	}
-	logx.Warn("reconcile: 漂移/缺失", "task", res.TaskKey, "status", res.Status,
-		"source_ahead", res.SourceAhead, "target_ahead", res.TargetAhead, "msg", res.Message)
+	topic := model.OutboxTopicReconcileDrift
+	switch res.Status {
+	case model.ReconcileUnknown, model.ReconcileUnsupported:
+		topic = model.OutboxTopicReconcileUnknown
+		logx.Warn("reconcile: 无法判断(不计入漂移率,检查凭据/限流/平台能力)",
+			"task", res.TaskKey, "status", res.Status, "msg", res.Message)
+	default:
+		logx.Warn("reconcile: 漂移/缺失", "task", res.TaskKey, "status", res.Status,
+			"source_ahead", res.SourceAhead, "target_ahead", res.TargetAhead, "msg", res.Message)
+	}
 	if s.outbox == nil {
 		return nil
 	}
@@ -212,21 +246,31 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 		"message":      res.Message,
 		"checked_at":   res.CheckedAt,
 	})
-	// 漂移事件直接落 outbox(独立事实,无需事务);投递沿用既有派发器。
+	// 对账事件直接落 outbox(独立事实,无需事务);投递沿用既有派发器。
 	return s.outbox.CreateInTx(s.tasks.runRepository.DB(), &model.OutboxEvent{
-		Topic:   model.OutboxTopicReconcileDrift,
+		Topic:   topic,
 		TaskKey: res.TaskKey,
 		Status:  res.Status,
 		Payload: string(payload),
 	})
 }
 
-// ListReconcileDrift 全部非 in_sync 的对账结果(告警面)。
+// ListReconcileDrift 漂移/分支缺失的对账结果(漂移告警面)。
+// unknown/unsupported 走 ListReconcileUnknown,不计入漂移率(#44)。
 func (s *Service) ListReconcileDrift(_ context.Context) ([]model.ReconcileRecord, error) {
 	if s.reconciles == nil {
 		return nil, nil
 	}
 	return s.reconciles.ListDrift()
+}
+
+// ListReconcileUnknown 无法判断(unknown/unsupported)的对账结果:
+// 凭据失效/限流/平台无 Compare 能力——运维告警面,不是漂移。
+func (s *Service) ListReconcileUnknown(_ context.Context) ([]model.ReconcileRecord, error) {
+	if s.reconciles == nil {
+		return nil, nil
+	}
+	return s.reconciles.ListUnknown()
 }
 
 // ListReconcileAll 全部对账结果(观测面)。

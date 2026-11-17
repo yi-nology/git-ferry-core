@@ -74,6 +74,12 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 		}
 	} else {
 		s.removeCronJob(task.Key)
+		if !task.Enabled && s.retrySchedules != nil {
+			// 禁用期间不应继续自动重跑(cron/手动都会拒绝执行)。
+			if _, cerr := s.retrySchedules.CancelForTask(task.Key, ErrTaskDisabled); cerr != nil {
+				logx.Warn("update task: cancel retry schedules failed", "taskKey", task.Key, "error", cerr)
+			}
+		}
 	}
 
 	return task, nil
@@ -81,6 +87,15 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 
 func (s *Service) DeleteTask(ctx context.Context, key string) error {
 	s.removeCronJob(key)
+	// 任务删除后,已排程的延迟重跑没有意义:关闭待触发排程,
+	// 防止调度器把已删任务反复拉起(#39)。
+	if s.retrySchedules != nil {
+		if n, err := s.retrySchedules.CancelForTask(key, ErrTaskNotFound); err != nil {
+			logx.Warn("delete task: cancel retry schedules failed", "taskKey", key, "error", err)
+		} else if n > 0 {
+			logx.Info("delete task: cancelled pending retry schedules", "taskKey", key, "count", n)
+		}
+	}
 	if err := s.tasks.DeleteTask(ctx, key); err != nil {
 		return err
 	}
@@ -150,7 +165,9 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 	return nil
 }
 
-// finishRun 执行收尾:先释放执行权,再广播完成事件,最后消费待补跑触发。
+// finishRun 异步路径(RunTaskAsync)收尾:先释放执行权,再走与直跑路径
+// **共用**的收尾 finishDirectRun —— 两条路径不分叉,投递/闭环/补跑语义
+// 单一实现。
 //
 // **顺序不能反**:此前 emit 在 release 之前 —— 订阅方(runwatch)收到失败
 // 完成事件后立即触发自动重跑,而执行权还没放 ⇒ 重跑撞上 ErrTaskRunning
@@ -158,16 +175,27 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 // 先放行执行权,补偿/重跑才能立刻接上。
 func (s *Service) finishRun(taskKey, trigger string, run *model.SyncRun, err error, release func()) {
 	release()
+	s.finishDirectRun(taskKey, trigger, run, err)
+}
+
+// finishDirectRun 两条执行路径(RunTaskAsync / RunTaskWithTrigger 直跑)
+// 共用的收尾:广播完成事件 + 真投递才闭环 outbox + 消费待补跑触发。
+//
+// **真的投递了才闭环 outbox 行**(派发器宽限后不会重投):无订阅者时不得
+// 标记 —— 否则事件被标记已发布却从未投递,at-least-once 退化成
+// at-most-once;留在 outbox 由派发器重投。崩溃在标记之前 ⇒ 派发器/启动
+// 扫描按 at-least-once 重投,订阅方幂等吸收。
+//
+// #38:直跑路径此前把 emitRunCompleted 的返回值丢弃并无条件闭环 —— #15 只
+// 修了异步路径,直跑入口(非队列模式的 cron 触发 / 同步 webhook / 手动)
+// 在无订阅者时事件被标记已发布却从未投递,通知与自动补偿永久丢失。
+func (s *Service) finishDirectRun(taskKey, trigger string, run *model.SyncRun, err error) {
 	delivered := s.emitRunCompleted(taskKey, trigger, run, err)
-	// 快速路径**真的投递了**才闭环 outbox 行(派发器宽限后不会重投)。
-	// 无订阅者时不得标记 —— 否则事件被标记已发布却从未投递,
-	// at-least-once 退化成 at-most-once;留在 outbox 由派发器重投。
-	// 崩溃在标记之前 ⇒ 派发器/启动扫描按 at-least-once 重投,订阅方幂等吸收。
 	if delivered && run != nil {
 		s.markOutboxPublishedByRun(run.ID)
 	}
 	observeRunMetrics(run)
-	// RunTaskAsync 路径(手动/重试/auto_retry)在这里消费待补跑 —— 旧实现
+	// RunTaskAsync / RunTaskWithTrigger 收尾在这里消费待补跑 —— 旧实现
 	// 只有 RunTaskWithTrigger 消费,手动执行期间积压的 webhook 永远补不上(P0)。
 	s.runPendingWebhook(taskKey)
 }
@@ -217,14 +245,9 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 		}
 		return s.executor.Execute(ctx, task, trigger, webhookEventID)
 	}()
-	s.emitRunCompleted(taskKey, trigger, run, execErr)
-	observeRunMetrics(run)
-	if run != nil {
-		// 快速路径已投递 ⇒ 闭环 outbox 行(与 finishRun 同语义)。
-		s.markOutboxPublishedByRun(run.ID)
-	}
-	// **释放执行权之后**再补跑:否则补跑会立刻又撞上同一个执行权。
-	s.runPendingWebhook(taskKey)
+	// 收尾与异步路径共用 finishDirectRun(#38):执行权已由上方 defer 释放,
+	// 广播完成事件(真投递才闭环 outbox)、消费待补跑触发。
+	s.finishDirectRun(taskKey, trigger, run, execErr)
 	return execErr
 }
 

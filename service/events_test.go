@@ -51,12 +51,16 @@ func TestRetryTracker_ShouldRetry(t *testing.T) {
 func TestRetryTracker_Cooldown(t *testing.T) {
 	p := AutoRetryPolicy{MaxAutoRetries: 5, Cooldown: time.Minute}
 
-	// 链内最近一条重试刚结束 ⇒ 冷却中,不放行
+	// 链内最近一条重试刚结束 ⇒ 冷却中:不是「永久不重试」,而是
+	// Deferred + 剩余等待时间(冷却只推迟、不吞预算,#39)。
 	tr := NewRetryTracker(0)
 	tr.SetChainStats(fakeChain(1, time.Now(), nil))
 	d := tr.ShouldRetry(&model.SyncRun{ID: 1, TaskKey: "k", TriggerSource: model.TriggerAutoRetry, Status: model.StatusFailed}, p)
 	assert.False(t, d.Retry)
-	assert.Equal(t, "cooldown not elapsed", d.Reason)
+	assert.True(t, d.Deferred, "冷却期必须标记为可延后,而不是永久拒绝")
+	assert.Positive(t, d.RetryAfter, "必须给出剩余等待时间")
+	assert.Equal(t, "cooldown", d.Reason)
+	assert.Equal(t, 2, d.Attempt, "冷却内失败不消耗预算,下次仍是第 2 次重跑")
 
 	// 冷却已过 ⇒ 放行(冷却以链内最近一条重试的**结束时间**起算,
 	// 用开始时间会让"失败后立即判定"永远撞上冷却,链被冻死)
@@ -64,6 +68,69 @@ func TestRetryTracker_Cooldown(t *testing.T) {
 	tr.SetChainStats(fakeChain(1, time.Now().Add(-2*time.Minute), nil))
 	d = tr.ShouldRetry(&model.SyncRun{ID: 2, TaskKey: "k", TriggerSource: model.TriggerAutoRetry, Status: model.StatusFailed}, p)
 	assert.True(t, d.Retry)
+}
+
+// TestRetryTracker_CooldownDoesNotSwallowBudget 验收(#39):
+// Cooldown>0、MaxAutoRetries=3、每次失败都立即返回 ⇒ 冷却只在两次重跑
+// 之间推迟,最终恰好吃满 3 次重跑预算,第 4 次明确 "max auto retries reached"。
+func TestRetryTracker_CooldownDoesNotSwallowBudget(t *testing.T) {
+	p := AutoRetryPolicy{MaxAutoRetries: 3, Cooldown: time.Minute}
+	chainLen := int64(0)
+	lastEnd := time.Time{}
+
+	scheduled := 0
+	tr := NewRetryTracker(0)
+	tr.SetChainStats(func(string, uint, bool) (int64, time.Time, error) {
+		return chainLen, lastEnd, nil
+	})
+	tr.SetRetryScheduler(func(run *model.SyncRun, d Decision) error {
+		scheduled++
+		assert.True(t, d.Deferred)
+		return nil
+	})
+
+	// R1:链头失败,链为空 ⇒ 立即重跑(第 1 次)。
+	d := tr.ShouldRetry(&model.SyncRun{ID: 1, TaskKey: "k", Status: model.StatusFailed}, p)
+	require.True(t, d.Retry)
+	assert.Equal(t, 1, d.Attempt)
+
+	// R2 立即失败:冷却中 ⇒ 延后,预算仍为 0/3。
+	chainLen, lastEnd = 1, time.Now()
+	d = tr.ShouldRetry(&model.SyncRun{ID: 2, TaskKey: "k", TriggerSource: model.TriggerAutoRetry, Status: model.StatusFailed}, p)
+	require.True(t, d.Deferred)
+	assert.Equal(t, 2, d.Attempt, "R2 之后下一次是第 2 次重跑")
+	assert.Equal(t, 1, scheduled)
+
+	// R3 立即失败:仍是冷却延期,下一次是第 3 次重跑。
+	chainLen, lastEnd = 2, time.Now()
+	d = tr.ShouldRetry(&model.SyncRun{ID: 3, TaskKey: "k", TriggerSource: model.TriggerAutoRetry, Status: model.StatusFailed}, p)
+	require.True(t, d.Deferred)
+	assert.Equal(t, 3, d.Attempt)
+	assert.Equal(t, 2, scheduled)
+
+	// R4 失败:3 次重跑已执行完 ⇒ 明确预算耗尽(不是 cooldown 假死)。
+	chainLen, lastEnd = 3, time.Now()
+	d = tr.ShouldRetry(&model.SyncRun{ID: 4, TaskKey: "k", TriggerSource: model.TriggerAutoRetry, Status: model.StatusFailed}, p)
+	assert.False(t, d.Retry)
+	assert.False(t, d.Deferred)
+	assert.Equal(t, "max auto retries reached", d.Reason)
+	assert.Equal(t, 2, scheduled, "预算耗尽不得再排程")
+}
+
+// TestRetryTracker_CooldownScheduleFailureKeepsRetryable 排程落库失败时
+// 不得标记 decided(否则该失败运行永久失去重试机会)。
+func TestRetryTracker_CooldownScheduleFailureKeepsRetryable(t *testing.T) {
+	p := AutoRetryPolicy{MaxAutoRetries: 3, Cooldown: time.Minute}
+	tr := NewRetryTracker(0)
+	tr.SetChainStats(fakeChain(1, time.Now(), nil))
+	tr.SetRetryScheduler(func(*model.SyncRun, Decision) error { return assert.AnError })
+	run := &model.SyncRun{ID: 9, TaskKey: "k", TriggerSource: model.TriggerAutoRetry, Status: model.StatusFailed}
+	d := tr.ShouldRetry(run, p)
+	assert.False(t, d.Retry)
+	assert.Equal(t, "schedule retry failed", d.Reason)
+	// 未标记 decided ⇒ 下一次仍会尝试落库(而不是 "run already decided")。
+	d = tr.ShouldRetry(run, p)
+	assert.Equal(t, "schedule retry failed", d.Reason)
 }
 
 func TestRetryTracker_ChainUnavailableRefuses(t *testing.T) {

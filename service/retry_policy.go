@@ -40,8 +40,10 @@ type chainStatsFunc func(taskKey string, runID uint, runIsRetry bool) (int64, ti
 //     运行重复放行。它不参与预算——预算是 DB 里的链长,不是这个 map。
 type RetryTracker struct {
 	mu      sync.Mutex
-	decided map[uint]struct{} // runID -> 已放行过重跑(同进程去重)
+	decided map[uint]struct{} // runID -> 已放行/已排程(同进程去重)
 	chain   chainStatsFunc    // nil = 未接 DB(仅裸构造的测试路径),预算恒按 0 算
+	// schedule 冷却期延迟重跑落库函数(nil = 未接 DB,只返回 Deferred 决策)。
+	schedule retryScheduleFunc
 	// maxKeep 淘汰阈值，防止 decided 无限增长
 	maxKeep int
 }
@@ -67,18 +69,44 @@ func (t *RetryTracker) SetChainStats(fn chainStatsFunc) {
 	t.chain = fn
 }
 
+// retryScheduleFunc 把「冷却期延后」落成持久化排程(由 Service 注入 DB)。
+// 成功 ⇒ 该失败运行在排程表里恰有一条记录(run_id 唯一),多实例/双通道
+// 不会重复排程;失败 ⇒ 不标记 decided,留待下次判定或重启恢复。
+type retryScheduleFunc func(run *model.SyncRun, d Decision) error
+
+// SetRetryScheduler 注入冷却期排程落库函数(由 NewService 接线)。
+func (t *RetryTracker) SetRetryScheduler(fn retryScheduleFunc) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.schedule = fn
+}
+
 // Decision 一次判定结果。
 type Decision struct {
-	// Retry 是否应触发自动重跑
+	// Retry 是否应立即触发自动重跑
 	Retry bool
+	// Deferred 现在不能跑、但**预算未耗尽**,应在 RetryAfter 之后再判定/调度。
+	// 与 Retry=false+Reason 的「永久不重试」严格区分:冷却期不是终点,
+	// 只是时间未到(#39)。
+	Deferred bool
+	// RetryAfter Deferred=true 时距最早可重跑时刻的剩余等待时间。
+	// 冷却只推迟、不消耗预算。
+	RetryAfter time.Duration
 	// Attempt 本次将要进行的第几次重跑（1 起）
 	Attempt int
-	// Reason 不重跑时的原因（可日志输出）
+	// AttemptLimit 本次判定时的自动重跑预算上限(排程快照用)。
+	AttemptLimit int
+	// Reason 不立即重跑时的原因（可日志输出;冷却为 "cooldown"）
 	Reason string
 }
 
 // ShouldRetry 判定该失败运行是否应自动重跑,放行时记账(同进程去重)。
 // 只对 Status=failed 的运行放行；成功运行直接跳过。
+//
+// #39 冷却语义:冷却未到 ⇒ Retry=false 但 **Deferred=true + RetryAfter>0**,
+// 且不消耗预算。若注入了排程函数,这里会把「到点重跑」写入 retry_schedules
+// (run_id 唯一),由 core 的延迟重跑派发器在到点后触发 —— 冷却只推迟,
+// 不会让「冷却内失败」把剩余预算永久冻结。
 func (t *RetryTracker) ShouldRetry(run *model.SyncRun, p AutoRetryPolicy) Decision {
 	if run == nil {
 		return Decision{Reason: "nil run"}
@@ -96,6 +124,7 @@ func (t *RetryTracker) ShouldRetry(run *model.SyncRun, p AutoRetryPolicy) Decisi
 		return Decision{Reason: "run already decided"}
 	}
 	chain := t.chain
+	schedule := t.schedule
 	t.mu.Unlock()
 
 	var already int64
@@ -115,15 +144,38 @@ func (t *RetryTracker) ShouldRetry(run *model.SyncRun, p AutoRetryPolicy) Decisi
 		return Decision{Reason: "max auto retries reached"}
 	}
 	// 冷却以「上一次链内重试的结束时间」起算;链为空(lastEnd 零值)不冷却。
-	if !lastEnd.IsZero() && time.Since(lastEnd) < p.Cooldown {
-		return Decision{Reason: "cooldown not elapsed"}
+	if p.Cooldown > 0 && !lastEnd.IsZero() {
+		if elapsed := time.Since(lastEnd); elapsed < p.Cooldown {
+			d := Decision{
+				Deferred:     true,
+				RetryAfter:   p.Cooldown - elapsed,
+				Attempt:      int(already) + 1,
+				AttemptLimit: p.MaxAutoRetries,
+				Reason:       "cooldown",
+			}
+			if schedule != nil {
+				if err := schedule(run, d); err != nil {
+					// 排程落库失败 ≠ 永久放弃:不标记 decided,保留重判窗口。
+					logx.Warn("auto retry: persist cooldown schedule failed",
+						"run_id", run.ID, "task", run.TaskKey, "error", err)
+					return Decision{Reason: "schedule retry failed"}
+				}
+				t.markDecided(run.ID)
+			}
+			return d
+		}
 	}
 
+	t.markDecided(run.ID)
+	return Decision{Retry: true, Attempt: int(already) + 1, AttemptLimit: p.MaxAutoRetries}
+}
+
+// markDecided 记录同进程已判定(调用方不得持锁)。
+func (t *RetryTracker) markDecided(runID uint) {
 	t.mu.Lock()
-	t.decided[run.ID] = struct{}{}
+	t.decided[runID] = struct{}{}
 	t.pruneLocked()
 	t.mu.Unlock()
-	return Decision{Retry: true, Attempt: int(already) + 1}
 }
 
 // pruneLocked 超过 maxKeep 时按 run ID 升序淘汰最老条目（run ID 单调递增）。

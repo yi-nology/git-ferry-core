@@ -43,6 +43,9 @@ var allModels = []any{
 	&PendingTrigger{},
 	&OutboxEvent{},
 	&ExecutionJob{},
+	&ExecutionTaskState{},
+	&RetrySchedule{},
+	&MigrationMapping{},
 	&ReconcileRecord{},
 	&RecoveryPoint{},
 }

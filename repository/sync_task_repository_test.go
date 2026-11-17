@@ -268,3 +268,34 @@ func TestSyncTaskRepo_Fields(t *testing.T) {
 	assert.False(t, task.GitForce, "expected git force to be false")
 	assert.Equal(t, "success", task.LastStatus, "expected last status 'success'")
 }
+
+// TestSyncTaskDAO_UpdateDoesNotClobberNextFireAt #40 并发回归:
+// 普通配置更新(改名)不得把调度器已推进的 next_fire_at 用旧快照写回,
+// 否则同一到点周期会重复触发。
+func TestSyncTaskDAO_UpdateDoesNotClobberNextFireAt(t *testing.T) {
+	db := setupSyncTaskTestDB(t)
+	d := NewSyncTaskRepository(db)
+
+	t1 := time.Now().Add(time.Minute)
+	require.NoError(t, d.Create(&model.SyncTask{
+		Key: "cron-race", Name: "old", Enabled: true, Cron: "* * * * *", NextFireAt: &t1,
+	}))
+	stale, err := d.FindByKey("cron-race")
+	require.NoError(t, err)
+
+	// 调度器在这一刻抢占了一次,把 next_fire_at 推进到 t2。
+	t2 := time.Now().Add(2 * time.Minute)
+	require.NoError(t, db.Model(&model.SyncTask{}).Where("`key` = ?", "cron-race").
+		Update("next_fire_at", t2).Error)
+
+	// 运维改名(使用更新前读到的快照)。
+	stale.Name = "new"
+	require.NoError(t, d.Update(stale))
+
+	after, err := d.FindByKey("cron-race")
+	require.NoError(t, err)
+	assert.Equal(t, "new", after.Name)
+	require.NotNil(t, after.NextFireAt)
+	assert.WithinDuration(t, t2, *after.NextFireAt, time.Second,
+		"配置更新不得回写旧 next_fire_at(会产生重复触发)")
+}

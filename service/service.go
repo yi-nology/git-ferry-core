@@ -12,7 +12,6 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/core/lifecycle"
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/oekit/timertask/local"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -45,26 +44,34 @@ type Service struct {
 	// lease 属主标识。仅 durable_queue=true 时启用。
 	jobs       *repository.ExecutionJobRepository
 	instanceID string
+	// retrySchedules 延迟重跑排程(retry_schedules,见 retry_schedule.go);
+	// 冷却期判定落库,到点由本实例或其它实例认领触发(#39)。
+	retrySchedules *repository.RetryScheduleRepository
+	// migrationMappings 元数据迁移的源→目标身份映射(#41);
+	// 标题不再作为身份键,重复执行按映射断点续迁。
+	migrationMappings *repository.MigrationMappingRepository
 	// reconciles 对账结果存储(reconcile_results,见 reconcile.go);
 	// 仅 reconcile_interval_hours>0 时启用。
 	reconciles *repository.ReconcileRepository
 	// recovery 恢复点索引(recovery_points,见 recovery.go)。
 	recovery *repository.RecoveryPointRepository
 	// driftSubs 对账漂移订阅者(见 events.go;壳层接告警渠道)。
-	driftSubs       []driftSubscriber
-	driftSubID      uint64
-	driftSubMu      sync.Mutex
-	runSubs         []runSubscriber
-	runSubID        uint64
-	runSubMu        sync.Mutex
-	repos           *RepoService
-	tasks           *TaskService
-	webhooks        *WebhookService
-	platforms       *PlatformService
-	opLogs          *OperationLogService
-	cron            *local.Scheduler
-	cronKeys        map[string]string
-	cronMu          sync.RWMutex
+	driftSubs  []driftSubscriber
+	driftSubID uint64
+	driftSubMu sync.Mutex
+	runSubs    []runSubscriber
+	runSubID   uint64
+	runSubMu   sync.Mutex
+	repos      *RepoService
+	tasks      *TaskService
+	webhooks   *WebhookService
+	platforms  *PlatformService
+	opLogs     *OperationLogService
+	// cron 共享调度状态:DB 的 sync_tasks.next_fire_at 是唯一事实源,
+	// 本地只保留「循环是否已启动」与取消函数(#40)。
+	cronStarted     bool
+	cronCancel      context.CancelFunc
+	cronMu          sync.Mutex
 	executor        *executor.Executor
 	mirror          *MirrorService
 	history         *HistoryService
@@ -79,6 +86,27 @@ type Service struct {
 }
 
 func NewService(cfg *Config, opts ...Option) (*Service, error) {
+	if cfg == nil {
+		return nil, oekiterrors.New("service: config must not be nil")
+	}
+	// 部署模式 fail-fast:显式 distributed/worker 的硬约束不满足时
+	// 拒绝启动(LocalConfig 路径已在 Config.Validate 里校验过;
+	// 壳层程序化构造 Config 也走同一口径)。
+	if err := cfg.ValidateDeploymentMode(); err != nil {
+		return nil, err
+	}
+	// 启动自检日志:mode / 关键开关 / 副本假设,便于运维核对。
+	logx.Info("deployment mode",
+		"mode", cfg.DeploymentMode(),
+		"durable_queue", cfg.Sync.DurableQueue,
+		"execute_jobs", cfg.Sync.ExecuteJobs == nil || *cfg.Sync.ExecuteJobs,
+		"mirror_lock_fail_closed", cfg.Sync.MirrorLockFailClosed,
+		"redis_configured", cfg.Redis.Addr != "",
+		"replicas_assumption", map[string]string{
+			model.DeployModeStandalone:  "1 (single instance)",
+			model.DeployModeDistributed: ">=1 (shared MySQL/Redis, queue + fail-closed locks)",
+			model.DeployModeWorker:      ">=1 (queue consumers, no management API by shell convention)",
+		}[cfg.DeploymentMode()])
 	so := &serviceOptions{}
 	for _, opt := range opts {
 		opt(so)
@@ -97,52 +125,43 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	if err := ensureTempDir(cfg.Git.TempDir); err != nil {
 		return nil, err
 	}
-	repos, err := initRepositories(db)
+	repositories, err := initRepositories(db)
 	if err != nil {
 		return nil, err
 	}
 
-	repoService := NewRepoService(repos.repo, repos.platform, repos.provider)
-	taskService := NewTaskService(repos.task, repos.run, repos.runStep, repos.repo)
-	webhookService := NewWebhookService(repos.rule, repos.event, repos.repo)
-	platformService := NewPlatformService(repos.platform, repos.repo, repos.provider)
-	opLogService := NewOperationLogService(repos.opLog)
+	repoService := NewRepoService(repositories.repo, repositories.platform, repositories.provider)
+	taskService := NewTaskService(repositories.task, repositories.run, repositories.runStep, repositories.repo)
+	webhookService := NewWebhookService(repositories.rule, repositories.event, repositories.repo)
+	platformService := NewPlatformService(repositories.platform, repositories.repo, repositories.provider)
+	opLogService := NewOperationLogService(repositories.opLog)
 	// provider 生命周期钩子随实例走(WithProviderHooks),构造 provider 时带上。
 	repoService.hooks = so.providerHooks
 	platformService.hooks = so.providerHooks
 
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	repos.provider.StartJanitor(bgCtx, 10*time.Minute)
-
-	// cron 调度器统一走 oekit/timertask/local:零 Redis 依赖,
-	// 并发度与全局同步并发上限一致;业务键形态支持运行期 upsert/对账。
-	sched, err := local.New(local.Config{Concurrency: cfg.Sync.MaxConcurrent})
-	if err != nil {
-		bgCancel()
-		return nil, oekiterrors.Wrap(err, "init cron scheduler")
-	}
+	repositories.provider.StartJanitor(bgCtx, 10*time.Minute)
 
 	svc := &Service{
-		config:        cfg,
-		db:            db,
-		ownsDB:        ownsDB,
-		providerHooks: so.providerHooks,
-		repos:         repoService,
-		tasks:         taskService,
-		webhooks:      webhookService,
-		platforms:     platformService,
-		opLogs:        opLogService,
-		// 调度器:oekit/timertask/local(零 Redis 依赖,支持业务键 upsert/对账)。
-		cron:       sched,
-		cronKeys:   make(map[string]string),
-		bgCtx:      bgCtx,
-		bgCancel:   bgCancel,
-		pending:    repos.pending,
-		outbox:     repos.outbox,
-		jobs:       repos.jobs,
-		instanceID: newInstanceID(),
-		reconciles: repos.reconcile,
-		recovery:   repos.recovery,
+		config:            cfg,
+		db:                db,
+		ownsDB:            ownsDB,
+		providerHooks:     so.providerHooks,
+		repos:             repoService,
+		tasks:             taskService,
+		webhooks:          webhookService,
+		platforms:         platformService,
+		opLogs:            opLogService,
+		bgCtx:             bgCtx,
+		bgCancel:          bgCancel,
+		pending:           repositories.pending,
+		outbox:            repositories.outbox,
+		jobs:              repositories.jobs,
+		retrySchedules:    repositories.retry,
+		migrationMappings: repositories.migration,
+		instanceID:        newInstanceID(),
+		reconciles:        repositories.reconcile,
+		recovery:          repositories.recovery,
 		shutdown: lifecycle.New(10*time.Second,
 			lifecycle.WithLogger(slog.New(logx.SlogHandler(logx.Default())))),
 	}
@@ -164,16 +183,19 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	svc.guard = guard
 
 	// 同步策略模板库：表存储（templates）；旧 data/templates.json 仅作历史迁移源。
-	svc.templates = &dbTemplateStore{repo: repos.template}
+	svc.templates = &dbTemplateStore{repo: repositories.template}
 
 	// force-push 审批：表存储（force_push_approvals）。
-	svc.approvals = NewForcePushStore(repos.approv)
+	svc.approvals = NewForcePushStore(repositories.approv)
 	svc.retryTracker = NewRetryTracker(0)
 	// 重试预算按「连续 auto_retry 链」从 DB 派生:重启不丢、多实例一致。
-	svc.retryTracker.SetChainStats(repos.run.AutoRetryChainStats)
+	svc.retryTracker.SetChainStats(repositories.run.AutoRetryChainStats)
+	// #39 冷却期不吞预算:延后判定落 retry_schedules,由延迟重跑派发器
+	// 到点认领触发(重启/多实例都生效)。
+	svc.retryTracker.SetRetryScheduler(svc.scheduleDeferredRetry)
 
 	// outbox 接线:运行完成与 outbox 事件同事务落库(见 TaskService.CompleteRun*)。
-	taskService.outbox = repos.outbox
+	taskService.outbox = repositories.outbox
 
 	exec, err := executor.NewExecutor(svc)
 	if err != nil {
@@ -262,6 +284,14 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		svc.dispatchOutboxLoop()
 	})
 
+	// #39 延迟重跑派发器:retry_schedules 到点后由任意实例认领触发。
+	// 不依赖本地定时器 ⇒ 重启后延迟重试仍生效,多实例单胜者。
+	svc.wg.Add(1)
+	async.GoSafe(func() {
+		defer svc.wg.Done()
+		svc.retryDispatchLoop()
+	})
+
 	// P2 持久化执行队列:本实例负责执行时启动派发器与 reaper;
 	// execute_jobs=false 的纯 API 实例只入队(由 Worker 实例认领执行)。
 	if svc.durableQueueOn() && svc.executesJobs() {
@@ -314,16 +344,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 }
 
 func (s *Service) Start() error {
-	if err := s.startCronJobs(); err != nil {
-		return err
-	}
-	// 周期把 DB 启用集收敛到本地调度器:其它实例的 cron 变更 30s 内生效(#40)。
-	s.wg.Add(1)
-	async.GoSafe(func() {
-		defer s.wg.Done()
-		s.cronReconcileLoop()
-	})
-	return nil
+	return s.startCronJobs()
 }
 
 func (s *Service) Stop() {

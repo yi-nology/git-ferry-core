@@ -2,10 +2,16 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/oekit/logx"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/oekit/pkg/errors"
+	"github.com/yi-nology/git-ferry-core/model"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 	sdkrt "github.com/yi-nology/go-git-platform/runtime"
@@ -86,9 +92,12 @@ type MetadataMigrateReport struct {
 	CreatedComments int `json:"createdComments"`
 	CreatedPRs      int `json:"createdPrs"`
 	// 按 MutationOutcome 分类的幂等收敛统计(SDK 2B Ensure* 语义):
-	// Updated=已有同标题 issue 且状态/标签发生写入;Unchanged=已达标零写入。
+	// Updated=已映射 issue 且状态/标签发生写入;Unchanged=已达标零写入。
 	UpdatedIssues   int `json:"updatedIssues,omitempty"`
 	UnchangedIssues int `json:"unchangedIssues,omitempty"`
+	// UnclosedMappings 创建过程中断的 pending 映射数(目标对象已写但
+	// 编号未回填)。显式报告,要求人工核对——绝不静默再建一份。
+	UnclosedMappings int `json:"unclosedMappings,omitempty"`
 	// DraftDegraded 目标平台创建面无 draft 表达(SDK #160 ErrDraftNotSupported)
 	// 而降级为非 draft 创建的 CR 数——如实计数,绝不静默。
 	DraftDegraded int      `json:"draftDegraded,omitempty"`
@@ -153,8 +162,31 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 	rep := &MetadataMigrateReport{DryRun: opts.DryRun, Notes: metadataFidelityNotes}
 
 	if opts.Issues {
-		if err := migrateIssues(ctx, src, tgt, sdkEnsurer{tgtProv}, srcOwner, srcRepo, tgtOwner, tgtRepo, limit, opts, rep); err != nil {
+		if err := migrateIssues(ctx, src, tgt, sdkEnsurer{tgtProv}, s.migrationMappings,
+			srcRec.Platform, srcOwner, srcRepo, tgtRec.Platform, tgtOwner, tgtRepo,
+			limit, opts, rep); err != nil {
 			return rep, err
+		}
+		// 断点续迁可见性:把该源仓库仍未闭环的 pending 映射显式带进报告。
+		if s.migrationMappings != nil {
+			unclosed, uerr := s.migrationMappings.ListUnclosed(
+				srcRec.Platform, srcOwner+"/"+srcRepo, model.MigrationObjectIssue)
+			if uerr != nil {
+				rep.Errors = append(rep.Errors, fmt.Sprintf("list unclosed migration mappings: %v", uerr))
+			} else {
+				// 当前页内的 pending 已在 migrateIssues 逐条报告;这里只补
+				// 「不在本次源列表里」的存量未闭环映射(避免重复噪音)。
+				if len(unclosed) > rep.UnclosedMappings {
+					nums := make([]string, 0, len(unclosed))
+					for _, m := range unclosed {
+						nums = append(nums, "#"+m.SourceNumber)
+					}
+					rep.Errors = append(rep.Errors, fmt.Sprintf(
+						"unclosed migration mappings outside current page: %s (target objects may have been created; manual reconciliation required)",
+						strings.Join(nums, ", ")))
+					rep.UnclosedMappings = len(unclosed)
+				}
+			}
 		}
 	}
 	if opts.PRs {
@@ -169,16 +201,38 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 	return rep, nil
 }
 
-// migrateIssues 搬运 Issue(含可选评论)——**幂等收敛式**(SDK 2B Ensure*):
-//   - 目标无同标题 → CreateIssue(created);源 closed → EnsureIssueState 收敛;
-//   - 目标已有同标题 → 不重复创建,EnsureIssueState(状态)+EnsureIssueLabels
-//     (标签全集)收敛——Unchanged 零写 / Updated 恰写;
-//   - 评论仅对**新建**的 issue 重放(已有 issue 跳过,避免重复评论)。
-//
-// 跨平台无共同 ID,标题是迁移的自然键。
+// migrationMappingStore 迁移映射的最小持久化面(生产用 Repository,测试可 fake/nil)。
+// nil store = 无断点续迁能力(仅创建),用于不接 DB 的裸调用。
+type migrationMappingStore interface {
+	Find(sourcePlatform, sourceRepo, objectType, sourceNumber string) (*model.MigrationMapping, error)
+	CreatePending(m *model.MigrationMapping) (bool, error)
+	Save(m *model.MigrationMapping) error
+	MarkFailed(sourcePlatform, sourceRepo, objectType, sourceNumber string, cause error) error
+}
+
+// issueFingerprint 源 Issue 内容指纹(title/body/state/labels 的规范化摘要)。
+// 用于增量收敛判断与审计;排序 labels 保证同一内容不同顺序同指纹。
+func issueFingerprint(is *sdkmodel.Issue) string {
+	labels := append([]string(nil), is.Labels...)
+	sort.Strings(labels)
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s",
+		is.Title, is.Body, string(is.State), strings.Join(labels, "\x00"))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// migrateIssues 搬运 Issue(含可选评论)——**映射身份键 + 幂等收敛**:
+//   - 身份键 = (平台, 仓库, object_type, 源 issue number),绝不使用标题;
+//     同标题的 N 个源 Issue 各自创建/映射到不同目标对象,不再互相归并;
+//   - 映射命中且目标编号已回填 ⇒ EnsureIssueState/EnsureIssueLabels 收敛
+//     (Unchanged 零写 / Updated 恰写);重复执行可安全重跑;
+//   - 映射未命中 ⇒ 先写 pending 映射再创建目标对象,创建成功后回填编号;
+//     进程在创建与回填之间崩溃时,pending 映射成为断点线索,报告显式
+//     列出并要求人工核对(绝不静默再建一份);
+//   - 评论仅对**新建**的 issue 重放(已有目标对象跳过,避免重复评论)。
 func migrateIssues(ctx context.Context,
-	src, tgt metadataMigrator, ens issueEnsurer,
-	srcOwner, srcRepo, tgtOwner, tgtRepo string,
+	src, tgt metadataMigrator, ens issueEnsurer, maps migrationMappingStore,
+	srcPlatform, srcOwner, srcRepo, tgtPlatform, tgtOwner, tgtRepo string,
 	limit int, opts MetadataMigrateOptions, rep *MetadataMigrateReport,
 ) error {
 	issues, err := listAllIssues(ctx, src, srcOwner, srcRepo, limit)
@@ -187,16 +241,42 @@ func migrateIssues(ctx context.Context,
 	}
 	rep.SourceIssues = len(issues)
 
-	// 目标已有 issue 按标题索引(收敛面)。dry-run 也要读:否则盘点
-	// 永远报 create、看不到收敛项,计划失真。
-	tgtIssues, err := listAllIssues(ctx, tgt, tgtOwner, tgtRepo, limit)
-	if err != nil {
-		return errors.Wrap(err, "list target issues")
+	srcRepoID := srcOwner + "/" + srcRepo
+	lookupMapping := func(is *sdkmodel.Issue) (*model.MigrationMapping, error) {
+		if maps == nil || is.Number == "" {
+			return nil, nil
+		}
+		return maps.Find(srcPlatform, srcRepoID, model.MigrationObjectIssue, is.Number)
 	}
-	existing := make(map[string]*sdkmodel.Issue, len(tgtIssues))
-	for _, ti := range tgtIssues {
-		if ti != nil && !ti.IsPullRequest {
-			existing[ti.Title] = ti
+	// saveMapping 回填/更新映射;失败不中断主流程,但必须在报告里可见。
+	saveMapping := func(is *sdkmodel.Issue, targetNumber, status string, cause error) {
+		if maps == nil || is.Number == "" {
+			return
+		}
+		msg := ""
+		if cause != nil {
+			msg = cause.Error()
+		}
+		m := &model.MigrationMapping{
+			SourcePlatform:     srcPlatform,
+			SourceRepo:         srcRepoID,
+			ObjectType:         model.MigrationObjectIssue,
+			SourceNumber:       is.Number,
+			TargetPlatform:     tgtPlatform,
+			TargetRepo:         tgtOwner + "/" + tgtRepo,
+			TargetNumber:       targetNumber,
+			SourceUpdatedAt:    is.UpdatedAt,
+			ContentFingerprint: issueFingerprint(is),
+			Status:             status,
+			LastError:          msg,
+		}
+		if status == model.MigrationMappingMigrated || status == model.MigrationMappingConverged {
+			now := time.Now()
+			m.MigratedAt = &now
+		}
+		if err := maps.Save(m); err != nil {
+			rep.Errors = append(rep.Errors,
+				fmt.Sprintf("save migration mapping for source issue #%s: %v", is.Number, err))
 		}
 	}
 
@@ -208,24 +288,33 @@ func migrateIssues(ctx context.Context,
 		if is.State == sdkmodel.IssueStateClosed {
 			want = sdkmodel.IssueStateClosed
 		}
-		if opts.DryRun {
-			if _, ok := existing[is.Title]; ok {
-				rep.DryRunPlanned = append(rep.DryRunPlanned, "converge: "+is.Title)
-			} else {
-				rep.DryRunPlanned = append(rep.DryRunPlanned, "issue: "+is.Title)
-			}
+
+		cur, merr := lookupMapping(is)
+		if merr != nil {
+			rep.Errors = append(rep.Errors, fmt.Sprintf("find migration mapping for source issue #%s: %v", is.Number, merr))
 			continue
 		}
-
-		// ---- 收敛路径:目标已有同标题 ----
-		if cur, ok := existing[is.Title]; ok && cur.Number != "" {
-			outcome, err := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, cur.Number, want)
-			if err != nil {
-				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure state %q: %v", is.Title, err))
+		// ---- 断点识别:已登记 pending 但目标编号未回填 ----
+		if cur != nil && cur.TargetNumber == "" && cur.Status == model.MigrationMappingPending {
+			rep.UnclosedMappings++
+			rep.Errors = append(rep.Errors, fmt.Sprintf(
+				"unclosed migration mapping: source issue #%s %q has no target number (target object may have been created; manual reconciliation required)",
+				is.Number, is.Title))
+			continue
+		}
+		// ---- 收敛路径:映射命中且目标编号已知 ----
+		if cur != nil && cur.TargetNumber != "" {
+			if opts.DryRun {
+				rep.DryRunPlanned = append(rep.DryRunPlanned, "converge: "+is.Title)
 				continue
 			}
-			if _, err := ens.EnsureIssueLabels(ctx, tgtOwner, tgtRepo, cur.Number, is.Labels); err != nil {
-				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure labels %q: %v", is.Title, err))
+			outcome, cerr := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, cur.TargetNumber, want)
+			if cerr != nil {
+				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure state %q: %v", is.Title, cerr))
+				continue
+			}
+			if _, cerr := ens.EnsureIssueLabels(ctx, tgtOwner, tgtRepo, cur.TargetNumber, is.Labels); cerr != nil {
+				rep.Errors = append(rep.Errors, fmt.Sprintf("ensure labels %q: %v", is.Title, cerr))
 				continue
 			}
 			if outcome == sdkrt.OutcomeUpdated {
@@ -233,10 +322,79 @@ func migrateIssues(ctx context.Context,
 			} else {
 				rep.UnchangedIssues++
 			}
+			saveMapping(is, cur.TargetNumber, model.MigrationMappingConverged, nil)
 			continue
 		}
+		// ---- 创建路径(映射未命中,或上次创建失败待重试) ----
+		if opts.DryRun {
+			rep.DryRunPlanned = append(rep.DryRunPlanned, "issue: "+is.Title)
+			continue
+		}
+		if maps != nil && is.Number != "" {
+			// 先写 pending 占位:并发/崩溃时同一源对象不会静默创建两份。
+			pending := &model.MigrationMapping{
+				SourcePlatform:     srcPlatform,
+				SourceRepo:         srcRepoID,
+				ObjectType:         model.MigrationObjectIssue,
+				SourceNumber:       is.Number,
+				TargetPlatform:     tgtPlatform,
+				TargetRepo:         tgtOwner + "/" + tgtRepo,
+				SourceUpdatedAt:    is.UpdatedAt,
+				ContentFingerprint: issueFingerprint(is),
+				Status:             model.MigrationMappingPending,
+			}
+			// 上次创建失败(failed)⇒ 显式重置为 pending 后重试创建;
+			// 其余情况走「先占位再创建」的单赢家路径。
+			if cur == nil || cur.Status == model.MigrationMappingFailed {
+				placed := false
+				if cur != nil {
+					if serr := maps.Save(pending); serr != nil {
+						rep.Errors = append(rep.Errors, fmt.Sprintf("reset failed mapping for source issue #%s: %v", is.Number, serr))
+						continue
+					}
+					placed = true
+				} else {
+					var perr error
+					placed, perr = maps.CreatePending(pending)
+					if perr != nil {
+						rep.Errors = append(rep.Errors, fmt.Sprintf("create pending mapping for source issue #%s: %v", is.Number, perr))
+						continue
+					}
+				}
+				if !placed {
+					// 并发迁移先占位(pending 已在上面拦截)。
+					again, ferr := lookupMapping(is)
+					if ferr != nil {
+						rep.Errors = append(rep.Errors, fmt.Sprintf("re-read migration mapping for source issue #%s: %v", is.Number, ferr))
+						continue
+					}
+					if again != nil && again.TargetNumber != "" {
+						// 别的执行者刚创建完:转收敛,不重复创建。
+						outcome, cerr := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, again.TargetNumber, want)
+						if cerr != nil {
+							rep.Errors = append(rep.Errors, fmt.Sprintf("ensure state %q: %v", is.Title, cerr))
+							continue
+						}
+						if _, cerr := ens.EnsureIssueLabels(ctx, tgtOwner, tgtRepo, again.TargetNumber, is.Labels); cerr != nil {
+							rep.Errors = append(rep.Errors, fmt.Sprintf("ensure labels %q: %v", is.Title, cerr))
+							continue
+						}
+						if outcome == sdkrt.OutcomeUpdated {
+							rep.UpdatedIssues++
+						} else {
+							rep.UnchangedIssues++
+						}
+						continue
+					}
+					rep.UnclosedMappings++
+					rep.Errors = append(rep.Errors, fmt.Sprintf(
+						"concurrent/unclosed migration mapping for source issue #%s %q; skipped create to avoid duplicate",
+						is.Number, is.Title))
+					continue
+				}
+			}
+		}
 
-		// ---- 创建路径 ----
 		created, cerr := tgt.CreateIssue(ctx, sdkprov.CreateIssueOptions{
 			Owner:  tgtOwner,
 			Repo:   tgtRepo,
@@ -245,10 +403,16 @@ func migrateIssues(ctx context.Context,
 			Labels: is.Labels,
 		})
 		if cerr != nil {
+			if maps != nil {
+				_ = maps.MarkFailed(srcPlatform, srcRepoID, model.MigrationObjectIssue, is.Number, cerr)
+			}
 			rep.Errors = append(rep.Errors, fmt.Sprintf("create issue %q: %v", is.Title, cerr))
 			continue
 		}
 		rep.CreatedIssues++
+		if created != nil && created.Number != "" {
+			saveMapping(is, created.Number, model.MigrationMappingMigrated, nil)
+		}
 		// 源已关闭 ⇒ EnsureIssueState 幂等收敛(新建成 open → closed)。
 		if want == sdkmodel.IssueStateClosed && created != nil && created.Number != "" {
 			if _, err := ens.EnsureIssueState(ctx, tgtOwner, tgtRepo, created.Number, want); err != nil {

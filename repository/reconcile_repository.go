@@ -38,11 +38,24 @@ func (d *ReconcileRepository) Get(taskKey string) (*model.ReconcileRecord, error
 	return &r, nil
 }
 
-// ListDrift 全部非 in_sync 的记录(告警/看板用)。
+// ListDrift 漂移/分支缺失记录(漂移告警/看板用)。
+// unknown/unsupported **不在此列**(#44):那是「无法判断」,走
+// ListUnknown 的运维告警,不污染 drift 率。
 func (d *ReconcileRepository) ListDrift() ([]model.ReconcileRecord, error) {
 	var rs []model.ReconcileRecord
-	err := d.db.Where("status <> ?", model.ReconcileInSync).
-		Order("checked_at DESC").Find(&rs).Error
+	err := d.db.Where("status IN ?", []string{
+		model.ReconcileDrift, model.ReconcileSourceMissing, model.ReconcileTargetMissing,
+	}).Order("checked_at DESC").Find(&rs).Error
+	return rs, err
+}
+
+// ListUnknown 无法判断的记录(unknown/unsupported):凭据/限流/平台能力
+// 问题,单独计数与告警(#44)。
+func (d *ReconcileRepository) ListUnknown() ([]model.ReconcileRecord, error) {
+	var rs []model.ReconcileRecord
+	err := d.db.Where("status IN ?", []string{
+		model.ReconcileUnknown, model.ReconcileUnsupported,
+	}).Order("checked_at DESC").Find(&rs).Error
 	return rs, err
 }
 

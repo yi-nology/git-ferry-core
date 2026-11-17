@@ -4,6 +4,121 @@
 
 ## [Unreleased]
 
+### Fixed（P1 六单：#39/#40/#41/#42/#43/#44）
+
+- **#39 [retry] 冷却期不再吞预算**:`RetryTracker.Decision` 新增
+  `Deferred`/`RetryAfter`/`AttemptLimit`——冷却未到返回「可延后 + 剩余
+  等待时间」而不是模糊的 `Retry=false`;新增 `retry_schedules` 表
+  （`run_id` 唯一、`root_run_id`/`attempt`/`attempt_limit`/`retry_reason`
+  落库），冷却期判定先持久化排程，再由 core 延迟重跑派发器按
+  `next_attempt_at` 条件认领并触发 `RunTaskAsync(trigger=auto_retry)`。
+  重启后延迟重试仍生效，多实例单胜者；预算仍按 `sync_runs` 的
+  auto_retry 链计数，排程本身不消耗预算。迁移 v12。
+- **#40 [cron] 调度表改为数据库共享视图**:`sync_tasks.next_fire_at` 成为
+  唯一事实源；各实例不再维护本地 robfig 表，周期扫描后以单条条件更新
+  `UPDATE ... SET next_fire_at=? WHERE key=? AND next_fire_at<=now` 抢占，
+  跨实例配置一致，持有者退出后任意实例下一轮接手。配置更新不会用旧快照
+  回写 `next_fire_at`（`SyncTaskDAO.Update` 显式 Omit）。迁移 v11。
+- **#41 [migrate] Issue 迁移身份键改为源编号**:新增 `migration_mappings`
+  表，身份键 `(source_platform, source_repo, object_type, source_number)`，
+  标题只作展示字段——同标题的多个源 Issue 不再归并。迁移前先查映射：
+  命中回填编号 ⇒ 幂等收敛；未命中 ⇒ 先写 pending 占位再创建并回填，
+  中断残留的 pending 映射在报告中显式列为未闭环（不静默重建），
+  支持断点续迁。迁移 v13。
+- **#42 [config] 部署模式 fail-fast**:新增 `mode`（`standalone` 缺省 /
+  `distributed` / `worker`）与 `ValidateDeploymentMode`——distributed 必须
+  MySQL + `durable_queue=true` + Redis + `mirror_lock_fail_closed=true`；
+  worker 必须 `durable_queue=true` 且不得 `execute_jobs=false`；
+  非法组合在 `LoadConfig`/`NewService` 启动时报错并指名缺项，同时输出
+  启动自检日志。修复 `execute_jobs` 的 envconfig 指针被物化为 false
+  （`noinit`），保证「未配置 = 默认执行」。
+- **#43 [schema] 迁移锁全 DDL 同连接**:MySQL 路径统一走
+  `gormx.RunWithAdvisoryLock`（`db.Connection()` 把 GET_LOCK→迁移→
+  RELEASE_LOCK 钉在同一条 `*sql.Conn`），版本表 AutoMigrate 也移入互斥区；
+  不再存在连接池换连接导致 RELEASE_LOCK 落空/锁泄漏的形态。补回归测试
+  钉住「全部 DDL 在锁回调内」。
+- **#44 [reconcile] 错误分类收敛**:新增 `unknown`（401/403/429/5xx/
+  超时/解析失败）与 `unsupported`（平台无 CompareCommits）状态；只有
+  平台明确 404/410 才归 `source_missing`/`target_missing`，
+  CompareCommits 失败不再伪造成 `drift`。`unknown/unsupported` 单独计数、
+  单独 outbox 主题 `reconcile.unknown`、`ListReconcileUnknown`，
+  不计入漂移率。
+
+### Migration
+
+- v11 `sync_tasks.next_fire_at`（含索引）
+- v12 `retry_schedules`
+- v13 `migration_mappings`
+
+## [v0.51.0] - 2026-11-17
+
+### Fixed（durable_queue 数据丢失面之三单，本段随 #36/#37/#38 分 commit 追加）
+
+- **#36 [durable_queue] 执行中到达的触发被合并丢弃**（generation-based
+  coalescing）:旧入队 `INSERT ... WHERE NOT EXISTS` 把作业 claimed 期间的
+  新提交当作「重复触发」合并丢弃且不记任何待办 ⇒ 作业收尾后同步空窗无上限
+  （低频仓库/纯手动触发场景新提交只能等下一次 webhook/cron）。修复:新增
+  任务级状态行 `execution_task_states`（每 task_key 一行:desired/completed
+  代次 + active_job_id 活动槽），每次触发在**同一事务**里递增
+  `desired_generation`——被合并 ≠ 丢弃，代次即待办承接标记；作业携带
+  `generation`，收尾在同一事务里 CAS 上推 `completed_generation`、释放活动槽，
+  `completed < desired` 时**必须**再入追赶作业（继承 task_key/trigger，携带
+  最新代次）——执行中连发 N 次 webhook 全部被承接，最后一次触发对应的提交
+  一定被执行，且合并语义保持（N 次执行中触发合并为 1 次追赶，不放大执行
+  次数）。活动槽另由 `execution_jobs.active_key` 唯一索引
+  （`uk_execution_jobs_active_slot`）表达数据库级硬保证（MySQL RR 下
+  `WHERE NOT EXISTS` 不保证严格单胜出）；入队对状态行做锁定读
+  （MySQL `FOR UPDATE`，sqlite 单写者天然串行）串行化同任务并发入队。
+  **与 pending_triggers 的关系**（非两套待办机制）:pending_triggers 服务
+  直跑模式（guard 撞忙补偿），状态行代次服务队列模式（入队合并）——
+  `durable_queue=true` 时触发走 enqueueTaskRun，到不了 guard 撞忙分支,
+  两路径互斥各管一种模式。
+  **迁移要求（v7，向后兼容）**:存量库升级自动执行——同任务重复活动作业
+  去重（多余判 failed，保留 claimed 优先）、补
+  `execution_task_states` 表与 `execution_jobs.generation/active_key` 列、
+  建活动槽唯一索引、回填存量活动作业（generation=1、active_key=task_key、
+  状态行 desired=1/活动槽指向存活作业）。唯一索引**不挂在模型 tag**（必须
+  晚于去重建立，否则存量重复会让迁移失败）;新装库经 baseline+v7 同样生效。
+  升级前已被旧实现丢弃的触发无从恢复。
+
+- **#37 [durable_queue] Lease 缺 fencing**（lease_version 租约纪元）:三处缺口
+  ——Complete 不校验 status/lease(毒丸终态可被旧属主覆写:reaper 已判 failed,
+  旧 worker 按 id+owner 仍能把终态改成 succeeded)、RequeueExpired 先查后改
+  窗口(SELECT 与 UPDATE 之间 worker 续租成功,UPDATE 仍把租约有效的作业放回
+  pending ⇒ 第三实例认领后同一任务双属主并发推送)、同 owner 字符串先后两次
+  认领无法靠 owner 判据区分。修复:新增 `execution_jobs.lease_version`
+  (fencing token)——Claim/Reschedule/接管重排每次 +1(开启新纪元),续租不换
+  纪元(同一租约的延长);Complete/RenewLease/Reschedule 条件统一补
+  `status=claimed AND lease_until > now AND lease_version = ?`,0 行命中返回
+  ErrLeaseLost;RequeueExpired 改**单语句条件更新**(UPDATE 自带
+  `lease_until < now` 重新复核,续租胜出的作业不再被重放),毒丸分支逐条条件
+  更新并在同事务里做 #36 的代次善后,重排/毒丸各自 +1 纪元。
+  **边界声明(留口子)**:对已进入 git push 的执行者,context 取消只是协作式
+  停手,不构成互斥证明;目标仓库侧条件保护(push 前校验远端 ref 仍是预期值 /
+  fencing token 随 push 传播)属 executor/目标平台侧后续工作,本仓在
+  executeJob 留有注释声明,`job.LeaseVersion` 即现成的传播 token。
+  **迁移要求(v10,向后兼容)**:存量库自动显式 `ALTER TABLE ... ADD
+  lease_version integer NOT NULL DEFAULT 0`,无需回填。
+  **迁移机制加固**:v7/v8/v9/#36 的迁移路径实测发现 glebarez sqlite 的
+  AutoMigrate 对已有数据的表走「建 __temp → INSERT...SELECT → DROP → RENAME」
+  整表重建,且拷贝列清单可能取自加列前的缓存快照 ⇒ 新加列的数据被静默重置
+  为默认值(v9 回填曾被 v10 的 AutoMigrate 这样回滚)。因此迁移中对
+  execution_jobs 的加列一律改为显式 `ALTER TABLE ... ADD COLUMN`(纯增量,
+  HasColumn 幂等守卫,MySQL/sqlite 语法一致);sqlite 的 schema 收敛整体包进
+  单事务单连接(与 MySQL 的持锁连接口径一致,DDL 可事务化,收敛原子提交)。
+  存量库升级已落库的 v2..v6 不改写(只追加纪律)。
+
+- **#38 [outbox] RunTaskWithTrigger 直跑路径丢弃 delivered 后无条件闭环**
+  (#15 在该入口未修完):直跑路径此前把 emitRunCompleted 的返回值丢弃并
+  无条件 markOutboxPublishedByRun —— 无订阅者(壳层未注册 runwatch /
+  进程刚启动 / 纯 CLI 模式)时完成事件被标记已发布却从未投递 ⇒ 通知与
+  自动补偿永久丢失,且事件已标记 published 在 outbox 里不可见,运维无法
+  事后补偿。修复:抽 `finishDirectRun` 共用收尾(广播完成事件 + 真投递才
+  闭环 outbox + 消费待补跑触发),finishRun(异步路径)与其共用同一实现
+  —— 两条路径不分叉;与 #15 的既有回归(service/outbox_test.go)同型补
+  直跑路径回归(无订阅者保留事件 → 订阅者注册后派发器重投闭环;有订阅者
+  正常闭环两条对照)。schema 无变更。
+
 ### Changed（oekit 基础设施收编第一轮——gormx / redisx）
 
 - **gormx v0.12.1 接管 DB 基础设施**:
@@ -112,12 +227,12 @@
   core 单独运行（未调 proclog）时走 logx 默认 std logger（`LOG_LEVEL`
   控级），不再依赖宿主先配置 slog。
 
-### Changed（五件收编——timertask / tarx / lifecycle / metrics / tracing / httpjson）
+### Changed（五件收编——timex/cron / tarx / lifecycle / metrics / tracing / httpjson）
 
-- **cron 调度器**：`robfig/cron` → **`oekit/timertask/local`**（业务键
-  `ScheduleFor` / `UnscheduleFor`）；新增 30s「DB 启用集 → 调度器」
-  `Reconcile` 对账，跨实例新建/改/停用 cron 在 30s 内生效（#40）；
-  cron 表达式校验改 `oekit/pkg/timex/cron`。
+- **cron 表达式解析**：`robfig/cron` → **`oekit/pkg/timex/cron`**。
+  调度本身沿用 v0.51.0 的 **DB 共享调度**（`sync_tasks.next_fire_at` +
+  条件更新抢占，#40）——`timertask/local` 是单实例本地调度器，与
+  「DB 是唯一事实源」的目标冲突，本轮明确不引入。
 - **冷备归档**：`archive/zip` → **`oekit/pkg/tarx`**；`sync.backup_format`
   取值 `zip` → `tar`，产物后缀 `.tar` / `.tar.enc`。**破坏性变更**：
   存量 `.zip` 冷备与 `backup_format=zip` 配置不再识别（启动校验直接拒绝）。
@@ -131,7 +246,7 @@
 - **出站上传**：手写 `http.NewRequest` + `DefaultClient` →
   **`oekit/pkg/httpjson.DoRaw`**（S3 / WebDAV / Azure；V4/SharedKey 签名
   在 header 钩子内完成，统一 5 分钟超时与限容读体）。
-- 依赖变化：+`timertask v0.5.5` / `tracing v0.4.7` / `metrics v0.4.1`；
+- 依赖变化：+`tracing v0.4.7` / `metrics v0.4.1`；`oekit/core` **v0.15.3**；
   `oekit/pkg` v0.48 → **v0.52**。
 
 ## [v0.50.0] - 2026-11-17

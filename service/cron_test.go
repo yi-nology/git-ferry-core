@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"sync"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/oekit/timertask/local"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -14,255 +14,170 @@ import (
 	"gorm.io/gorm"
 )
 
+// setupCronTestDB 共享调度测试库:sync_tasks + 执行队列表(触发走 durable
+// queue,避免在调度测试里真的跑 executor)。
 func setupCronTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err, "failed to open test db")
-
-	err = db.AutoMigrate(&model.SyncTask{})
-	require.NoError(t, err, "failed to migrate test db")
-
-	// sqlite :memory: 每个连接是独立库;强制单连接,确保 cron goroutine 能看到已迁移的表
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(t.TempDir(), "cron.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.SyncTask{}, &model.SyncRun{}, &model.SyncRunStep{}, &model.Repo{},
+		&model.ExecutionJob{}, &model.ExecutionTaskState{}, model.RetrySchedule{}, model.MigrationMapping{},
+	))
 	sqlDB, err := db.DB()
-	require.NoError(t, err, "failed to get underlying db")
+	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	return db
 }
 
-// newTestCronScheduler 构造测试用 oekit/timertask/local 调度器(与生产同源)。
-func newTestCronScheduler(t *testing.T) *local.Scheduler {
+// setupCronTestService 独立实例(可多个共享同一 db 模拟多副本)。
+func setupCronTestService(t *testing.T, db *gorm.DB) *Service {
 	t.Helper()
-	sched, err := local.New(local.Config{Concurrency: 4})
-	require.NoError(t, err)
-	return sched
-}
-
-func setupCronTestService(t *testing.T) (*Service, *gorm.DB) {
-	t.Helper()
-
-	db := setupCronTestDB(t)
-	taskRepository := repository.NewSyncTaskRepository(db)
-
-	taskService := NewTaskService(taskRepository, nil, nil, nil)
-
 	return &Service{
-		tasks:    taskService,
-		cron:     newTestCronScheduler(t), // 与生产一致:标准 5 字段解析
-		cronKeys: make(map[string]string),
-		cronMu:   sync.RWMutex{},
-	}, db
+		tasks:  NewTaskService(repository.NewSyncTaskRepository(db), repository.NewSyncRunRepository(db), repository.NewSyncRunStepRepository(db), nil),
+		jobs:   repository.NewExecutionJobRepository(db),
+		bgCtx:  context.Background(),
+		config: &model.Config{Sync: model.SyncConfig{DurableQueue: true}},
+	}
 }
 
-func TestAddCronJob(t *testing.T) {
-	svc, _ := setupCronTestService(t)
-
+func mustCreateCronTask(t *testing.T, svc *Service, key, expr string) *model.SyncTask {
+	t.Helper()
 	task := &model.SyncTask{
-		Key:  "test-task-1",
-		Cron: "* * * * *", // 标准五字段:每分钟
+		Key: key, Name: key, Cron: expr, Enabled: true,
+		SourceBranch: "main", TargetBranch: "main",
 	}
-
-	err := svc.addCronJob(task)
-	require.NoError(t, err, "addCronJob failed")
-
-	// Verify the cron job was added
-	_, exists := svc.cronKeys[task.Key]
-	assert.True(t, exists, "expected cron job to be added")
+	require.NoError(t, svc.tasks.taskRepository.Create(task))
+	return task
 }
 
-func TestAddCronJob_UpdateExisting(t *testing.T) {
-	svc, _ := setupCronTestService(t)
-
-	task := &model.SyncTask{
-		Key:  "test-task-1",
-		Cron: "*/5 * * * *",
-	}
-
-	// Add initial cron job
-	err := svc.addCronJob(task)
-	require.NoError(t, err, "addCronJob failed")
-
-	initialSpec := svc.cronKeys[task.Key]
-
-	// Update the cron job
-	task.Cron = "*/2 * * * *"
-	err = svc.addCronJob(task)
-	require.NoError(t, err, "addCronJob update failed")
-
-	// 同 key 改 spec ⇒ 调度器摘旧装新
-	newSpec := svc.cronKeys[task.Key]
-	assert.NotEqual(t, initialSpec, newSpec, "expected cron spec to change after update")
+func pendingCronJobs(t *testing.T, svc *Service) []model.ExecutionJob {
+	t.Helper()
+	var jobs []model.ExecutionJob
+	require.NoError(t, svc.jobs.DB().Where("status = ?", model.JobStatusPending).Find(&jobs).Error)
+	return jobs
 }
 
-func TestAddCronJob_InvalidCron(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+// TestCronTick_SeedsThenFiresOnce 共享调度:
+//  1. next_fire_at 为空 ⇒ 只播种(不触发);
+//  2. 到点 ⇒ 条件抢占一次并触发,next_fire_at 推进到未来;
+//  3. 同一到点周期重复扫描不重复触发。
+func TestCronTick_SeedsThenFiresOnce(t *testing.T) {
+	db := setupCronTestDB(t)
+	svc := setupCronTestService(t, db)
+	task := mustCreateCronTask(t, svc, "cron-seed", "* * * * *")
 
-	task := &model.SyncTask{
-		Key:  "test-task-1",
-		Cron: "invalid-cron-expression",
-	}
+	require.NoError(t, svc.runCronTick(context.Background()))
+	got, err := svc.tasks.taskRepository.FindByKey(task.Key)
+	require.NoError(t, err)
+	require.NotNil(t, got.NextFireAt, "首次扫描必须播种 next_fire_at")
+	assert.True(t, got.NextFireAt.After(time.Now()), "播种的是下一次触发,不得立即执行")
+	assert.Empty(t, pendingCronJobs(t, svc), "播种不触发")
 
-	err := svc.addCronJob(task)
-	require.Error(t, err, "expected error for invalid cron expression")
+	// 模拟到点。
+	require.NoError(t, db.Model(&model.SyncTask{}).Where("`key` = ?", task.Key).
+		Update("next_fire_at", time.Now().Add(-time.Second)).Error)
+	require.NoError(t, svc.runCronTick(context.Background()))
+
+	require.Eventually(t, func() bool { return len(pendingCronJobs(t, svc)) == 1 },
+		2*time.Second, 5*time.Millisecond, "到点必须触发一次(入队)")
+	jobs := pendingCronJobs(t, svc)
+	assert.Equal(t, model.TriggerCron, jobs[0].Trigger)
+	assert.Equal(t, task.Key, jobs[0].TaskKey)
+
+	// 下一轮扫描:next_fire_at 已推进,不得重复触发。
+	require.NoError(t, svc.runCronTick(context.Background()))
+	assert.Len(t, pendingCronJobs(t, svc), 1, "同一到点周期只允许一个实例触发一次")
 }
 
-func TestRemoveCronJob(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+// TestCron_CrossInstanceSharedView 实例 A 新建的 cron 任务,实例 B 无需重启
+// 即在下一轮扫描看到并触发 —— 有效调度计划是 DB 单一事实源(#40)。
+func TestCron_CrossInstanceSharedView(t *testing.T) {
+	db := setupCronTestDB(t)
+	a := setupCronTestService(t, db)
+	b := setupCronTestService(t, db)
 
-	task := &model.SyncTask{
-		Key:  "test-task-1",
-		Cron: "*/5 * * * *",
-	}
+	task := mustCreateCronTask(t, a, "cron-cross", "*/5 * * * *")
+	require.NoError(t, a.runCronTick(context.Background())) // A 播种
+	// 模拟到点(此刻 A 若退出,B 仍应接手)。
+	require.NoError(t, db.Model(&model.SyncTask{}).Where("`key` = ?", task.Key).
+		Update("next_fire_at", time.Now().Add(-time.Second)).Error)
 
-	// Add a cron job first
-	err := svc.addCronJob(task)
-	require.NoError(t, err, "addCronJob failed")
+	// B 没有本地点表/注册动作,只在 DB 看到到期任务并抢占触发。
+	require.NoError(t, b.runCronTick(context.Background()))
+	require.Eventually(t, func() bool { return len(pendingCronJobs(t, b)) == 1 },
+		2*time.Second, 5*time.Millisecond, "B 必须接手 A 的调度")
 
-	// Verify it exists
-	_, exists := svc.cronKeys[task.Key]
-	require.True(t, exists, "expected cron job to exist before removal")
-
-	// Remove the cron job
-	svc.removeCronJob(task.Key)
-
-	// Verify it's removed
-	_, exists = svc.cronKeys[task.Key]
-	assert.False(t, exists, "expected cron job to be removed")
+	// A 同时扫描也不得双触发(条件更新单胜者)。
+	require.NoError(t, a.runCronTick(context.Background()))
+	assert.Len(t, pendingCronJobs(t, a), 1, "跨实例同一到点周期不得重复触发")
 }
 
-func TestRemoveCronJob_NonExistent(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+// TestCron_ModificationVisibleToOtherInstance 改 cron/禁用只改 DB,
+// 其它实例下一轮看到同一计划(不再有各实例各一份的旧表达式)。
+func TestCron_ModificationVisibleToOtherInstance(t *testing.T) {
+	db := setupCronTestDB(t)
+	a := setupCronTestService(t, db)
+	b := setupCronTestService(t, db)
 
-	// Remove a non-existent cron job (should not panic)
-	svc.removeCronJob("non-existent-key")
-}
+	// 用两个「下一次触发时间必然不同」的表达式(避免 * * * * 与
+	// */10 * * * * 在整十分钟点撞成同一时刻,造成测试 flaky)。
+	task := mustCreateCronTask(t, a, "cron-mod", "0 0 1 1 *")
+	require.NoError(t, a.runCronTick(context.Background()))
+	old, err := a.tasks.taskRepository.FindByKey(task.Key)
+	require.NoError(t, err)
+	require.NotNil(t, old.NextFireAt)
 
-func TestStartCronJobs(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+	// A 修改表达式 ⇒ 排程清空,B 下一轮按新表达式重新播种。
+	newExpr := "0 0 1 2 *"
+	_, err = a.UpdateTask(context.Background(), &model.UpdateTaskRequest{Key: task.Key, Cron: &newExpr})
+	require.NoError(t, err)
+	mid, err := a.tasks.taskRepository.FindByKey(task.Key)
+	require.NoError(t, err)
+	assert.Nil(t, mid.NextFireAt, "cron 变更必须清空旧排程,防旧表达式继续触发")
 
-	// Create tasks in the database
-	tasks := []struct {
-		key  string
-		cron string
-	}{
-		{"task-1", "* * * * *"},
-		{"task-2", "*/2 * * * *"},
-	}
+	require.NoError(t, b.runCronTick(context.Background()))
+	got, err := b.tasks.taskRepository.FindByKey(task.Key)
+	require.NoError(t, err)
+	require.NotNil(t, got.NextFireAt)
+	assert.NotEqual(t, *old.NextFireAt, *got.NextFireAt, "B 必须按新表达式重新播种")
 
-	for _, tt := range tasks {
-		_, err := svc.tasks.CreateTask(context.TODO(), &model.CreateTaskRequest{
-			Name:          tt.key,
-			SourceRepoKey: "source",
-			SourceBranch:  "main",
-			TargetRepoKey: "target",
-			TargetBranch:  "main",
-			Cron:          tt.cron,
-		})
-		require.NoError(t, err, "Create task failed")
-	}
-
-	err := svc.startCronJobs()
-	require.NoError(t, err, "startCronJobs failed")
-
-	// Verify cron jobs were added
-	assert.Equal(t, 2, len(svc.cronKeys), "expected 2 cron jobs")
-
-	// Cleanup
-	svc.stopCronJobs()
-}
-
-func TestStartCronJobs_WithDisabledTasks(t *testing.T) {
-	svc, db := setupCronTestService(t)
-
-	// Create tasks with some disabled
-	task1, err := svc.tasks.CreateTask(context.TODO(), &model.CreateTaskRequest{
-		Name: "task-1", Cron: "*/5 * * * *",
-		SourceRepoKey: "source", SourceBranch: "main",
-		TargetRepoKey: "target", TargetBranch: "main",
-	})
-	require.NoError(t, err, "Create task1 failed")
-
-	task2, err := svc.tasks.CreateTask(context.TODO(), &model.CreateTaskRequest{
-		Name: "task-2", Cron: "*/2 * * * *",
-		SourceRepoKey: "source", SourceBranch: "main",
-		TargetRepoKey: "target", TargetBranch: "main",
-	})
-	require.NoError(t, err, "Create task2 failed")
-
-	// Update task2 to set enabled=false using the actual key
+	// 禁用 ⇒ 不再被扫描/触发。
 	disabled := false
-	_, err = svc.tasks.UpdateTask(context.TODO(), &model.UpdateTaskRequest{
-		Key:     task2.Key,
-		Enabled: &disabled,
-	})
-	require.NoError(t, err, "Update task2 failed")
-
-	// Debug: check what's in the database
-	var allTasks []*model.SyncTask
-	db.Find(&allTasks)
-	t.Logf("All tasks in DB: %d", len(allTasks))
-	for _, task := range allTasks {
-		t.Logf("  Task %s: enabled=%v, cron=%q", task.Key, task.Enabled, task.Cron)
-	}
-
-	enabled, err := svc.tasks.FindAllEnabledTasks()
-	require.NoError(t, err, "FindAllEnabled failed")
-	t.Logf("Enabled tasks: %d", len(enabled))
-	t.Logf("Task1 key: %s, Task2 key: %s", task1.Key, task2.Key)
-
-	err = svc.startCronJobs()
-	require.NoError(t, err, "startCronJobs failed")
-
-	// Only enabled tasks should have cron jobs
-	assert.Equal(t, 1, len(svc.cronKeys), "expected 1 cron job (only enabled)")
-
-	// Cleanup
-	svc.stopCronJobs()
+	_, err = a.UpdateTask(context.Background(), &model.UpdateTaskRequest{Key: task.Key, Enabled: &disabled})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.SyncTask{}).Where("`key` = ?", task.Key).
+		Update("next_fire_at", time.Now().Add(-time.Second)).Error)
+	require.NoError(t, b.runCronTick(context.Background()))
+	assert.Empty(t, pendingCronJobs(t, b), "禁用任务不得触发")
 }
 
-func TestStartCronJobs_WithTasksWithoutCron(t *testing.T) {
-	svc, _ := setupCronTestService(t)
+// TestCron_InvalidExpressionAndNil 旧 addCronJob 入口保留校验语义。
+func TestCron_InvalidExpressionAndNil(t *testing.T) {
+	db := setupCronTestDB(t)
+	svc := setupCronTestService(t, db)
 
-	// Create tasks without cron
-	_, err := svc.tasks.CreateTask(context.TODO(), &model.CreateTaskRequest{
-		Name: "task-1", Cron: "",
-		SourceRepoKey: "source", SourceBranch: "main",
-		TargetRepoKey: "target", TargetBranch: "main",
-	})
-	require.NoError(t, err, "Create task failed")
+	assert.Error(t, svc.addCronJob(&model.SyncTask{Key: "bad", Cron: "invalid-cron-expression"}))
+	assert.Error(t, svc.addCronJob(nil))
+	assert.NoError(t, svc.addCronJob(&model.SyncTask{Key: "ok", Cron: "*/5 * * * *"}))
 
-	err = svc.startCronJobs()
-	require.NoError(t, err, "startCronJobs failed")
-
-	// No cron jobs should be added
-	assert.Equal(t, 0, len(svc.cronKeys), "expected 0 cron jobs")
-
-	// Cleanup
-	svc.stopCronJobs()
-}
-
-func TestStopCronJobs(t *testing.T) {
-	svc, _ := setupCronTestService(t)
-
-	task := &model.SyncTask{
-		Key:  "test-task-1",
-		Cron: "*/5 * * * *",
-	}
-
-	// Add a cron job
-	err := svc.addCronJob(task)
-	require.NoError(t, err, "addCronJob failed")
-
-	// Stop cron jobs (should not panic)
-	svc.stopCronJobs()
-}
-
-func TestAddCronJob_StandardFiveFieldExpressions(t *testing.T) {
-	// 用户与前端预设输入的都是标准 5 字段 crontab;曾因生产用 6 字段
-	// (WithSeconds)解析器导致 "expected exactly 6 fields" 全部失败。
+	// 标准五字段表达式仍被接受。
 	for _, expr := range []string{"* * * * *", "*/5 * * * *", "0 0 * * *", "0 9 * * 1-5", "30 2 1 * *"} {
-		svc, _ := setupCronTestService(t)
-		task := &model.SyncTask{Key: "five-field-" + expr, Cron: expr}
-		err := svc.addCronJob(task)
-		assert.NoError(t, err, "标准五字段表达式 %q 注册失败", expr)
+		assert.NoError(t, svc.addCronJob(&model.SyncTask{Key: "five-" + expr, Cron: expr}))
 	}
+}
+
+// TestStartCronJobs_SharedScheduler start/stop 幂等,首次扫描播种。
+func TestStartCronJobs_SharedScheduler(t *testing.T) {
+	db := setupCronTestDB(t)
+	svc := setupCronTestService(t, db)
+	mustCreateCronTask(t, svc, "cron-start", "*/5 * * * *")
+
+	require.NoError(t, svc.startCronJobs())
+	require.NoError(t, svc.startCronJobs(), "重复 Start 必须幂等")
+	got, err := svc.tasks.taskRepository.FindByKey("cron-start")
+	require.NoError(t, err)
+	assert.NotNil(t, got.NextFireAt)
+	svc.stopCronJobs()
+	svc.stopCronJobs() // 幂等
 }
