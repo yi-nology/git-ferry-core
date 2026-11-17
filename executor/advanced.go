@@ -346,6 +346,27 @@ func IsUnlistedGitSubcommand(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not an allowed git subcommand")
 }
 
+// localGitFallbackAllowlist 允许回落本地 git 的内部子命令白名单。
+//
+// 回落授权不能只依赖 SDK 的错误文案:文案变化会让白名单失效(功能坏),
+// 而若上游把某类拒绝也归成「未列出」,按文案回落就等于把 SDK 刚拒掉的
+// 命令交给裸 git。这里再做一次本地正向枚举,只放行本仓内部实际构造的命令。
+var localGitFallbackAllowlist = map[string]struct{}{
+	"bundle":       {},
+	"lfs":          {},
+	"for-each-ref": {},
+	"update-ref":   {},
+	"reset":        {},
+	"rev-parse":    {},
+	"rev-list":     {},
+	"fsck":         {},
+}
+
+func localGitFallbackAllowed(subcommand string) bool {
+	_, ok := localGitFallbackAllowlist[subcommand]
+	return ok
+}
+
 // runGitThroughBackend 把 git 命令交给 backend 执行(错误按本包历史文案包装):
 //   - SDK RunRaw 白名单内的子命令:只走 SDK(参数加固拒绝即失败,不回落);
 //   - 白名单外的上述内部子命令:回落本地 git 二进制;
@@ -380,6 +401,10 @@ func runGitCommand(ctx context.Context, backend gitbackend.GitBackend, dir strin
 			if !IsUnlistedGitSubcommand(err) {
 				// 参数加固命中:不得回落,否则绕过加固。
 				return fail(stdout, stderr, err)
+			}
+			if !localGitFallbackAllowed(args[0]) {
+				return fail(stdout, stderr, oekiterrors.Wrap(err,
+					fmt.Sprintf("git subcommand %q not permitted for local fallback", args[0])))
 			}
 			// 子命令不在 SDK 白名单(bundle/fsck/reset/update-ref/lfs/...):
 			// 这是本仓内部构造的命令,回落本地 git。

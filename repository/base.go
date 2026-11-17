@@ -89,6 +89,13 @@ func (b *base[T, ID]) update(e *T) error {
 	return err
 }
 
+// updateInTx 同 update,但在调用方事务内执行(同一列白名单口径)。
+func (b *base[T, ID]) updateInTx(tx *gorm.DB, e *T) error {
+	_, err := gormrepo.NewGormRepository[T, ID](tx).
+		Update(context.Background(), e, crud.UpdateOption{Columns: b.updateCols})
+	return err
+}
+
 // updateFields 按字段更新(天然列白名单),返回受影响行数。
 func (b *base[T, ID]) updateFields(id ID, fields map[string]any) (int64, error) {
 	return b.g.UpdateFields(context.Background(), id, fields)

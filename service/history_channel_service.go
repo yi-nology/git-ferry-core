@@ -350,13 +350,19 @@ func (h *HistoryService) ListHistoryChannels(_ context.Context, offset, limit in
 	if err != nil {
 		return nil, 0, err
 	}
+	ids := make([]uint, 0, len(channels))
+	for _, ch := range channels {
+		ids = append(ids, ch.ID)
+	}
+	targetsByChannel, err := h.targets.FindByChannelIDs(ids)
+	if err != nil {
+		return nil, 0, err
+	}
 	out := make([]*HistoryChannelDTO, 0, len(channels))
 	for _, ch := range channels {
 		dto := toDTO(ch)
-		if targets, err := h.targets.FindByChannel(ch.ID); err == nil {
-			for _, t := range targets {
-				dto.Targets = append(dto.Targets, toTargetDTO(t))
-			}
+		for _, t := range targetsByChannel[ch.ID] {
+			dto.Targets = append(dto.Targets, toTargetDTO(t))
 		}
 		out = append(out, dto)
 	}
@@ -861,12 +867,17 @@ func (h *HistoryService) finishRun(run *model.HistoryRun, status, errMsg string)
 		run.PrevHash = prev.EntryHash
 	}
 	run.EntryHash = model.ComputeHistoryRunHash(run.PrevHash, run)
-	if err := h.runs.Update(run); err != nil {
-		return nil, err
-	}
-	// 链尾锚点:记下最后一条已入链记录的哈希。
-	// 有了它,「链尾被截断」也能检出(链本身只能证明前后接得上)。
-	if err := h.channels.UpdateLastEntryHash(run.ChannelID, run.EntryHash); err != nil {
+	// run 入链与链尾锚点必须同事务提交:分开写时进程在两次提交之间崩溃,
+	// 会留下「run 有哈希、锚点还是上一条」的完好链,VerifyHistoryChannelChain
+	// 却报链尾不匹配。
+	if err := h.runs.DB().Transaction(func(tx *gorm.DB) error {
+		if err := h.runs.UpdateInTx(tx, run); err != nil {
+			return err
+		}
+		// 链尾锚点:记下最后一条已入链记录的哈希。
+		// 有了它,「链尾被截断」也能检出(链本身只能证明前后接得上)。
+		return h.channels.UpdateLastEntryHashInTx(tx, run.ChannelID, run.EntryHash)
+	}); err != nil {
 		return nil, err
 	}
 	return toRunDTO(run), nil

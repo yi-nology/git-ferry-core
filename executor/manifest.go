@@ -86,9 +86,9 @@ func BuildManifest(backupDir string) (*BackupManifest, error) {
 	sort.Slice(m.Entries, func(i, j int) bool {
 		return m.Entries[i].Name < m.Entries[j].Name
 	})
-	for i := range m.Entries {
-		m.Entries[i].TaskKey = inferTaskKey(m.Entries[i].Name)
-	}
+	// TaskKey 不在这里反解:文件名是 <taskKey>-<branch>-<ts>,而 taskKey
+	// 本身允许含 '-'，按 '-' 切第一段会把 key 截错。需要归属的调用方
+	// (service.BuildBackupManifest) 用已知任务清单做最长前缀匹配回填。
 	m.EntryCount = len(m.Entries)
 	m.MerkleRoot = merkleRoot(m.Entries)
 	return m, nil
@@ -239,14 +239,4 @@ func merkleRoot(entries []ManifestEntry) string {
 		level = next
 	}
 	return level[0]
-}
-
-func inferTaskKey(bundleName string) string {
-	// 命名: <taskKey>-<branch>-<ts>.bundle
-	base := strings.TrimSuffix(bundleName, ".bundle")
-	parts := strings.Split(base, "-")
-	if len(parts) >= 3 {
-		return parts[0]
-	}
-	return ""
 }

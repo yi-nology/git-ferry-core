@@ -32,6 +32,16 @@ func (d *HistoryChannelRepository) UpdateLastEntryHash(id uint, hash string) err
 		Update("last_entry_hash", hash).Error
 }
 
+// UpdateLastEntryHashInTx 同 UpdateLastEntryHash,但在调用方事务内执行
+// (与 run 入链写入同事务,避免「run 已入链、锚点没更新」)。
+func (d *HistoryChannelRepository) UpdateLastEntryHashInTx(tx *gorm.DB, id uint, hash string) error {
+	return tx.Model(&model.HistoryChannel{}).Where("id = ?", id).
+		Update("last_entry_hash", hash).Error
+}
+
+// DB 暴露底层句柄,供跨 Repo 事务使用。
+func (d *HistoryChannelRepository) DB() *gorm.DB { return d.db }
+
 // FindAll 分页列出通道。
 func (d *HistoryChannelRepository) FindAll(page Pagination) ([]*model.HistoryChannel, int64, error) {
 	var channels []*model.HistoryChannel
@@ -94,6 +104,24 @@ func (d *HistoryTargetRepository) FindByChannel(channelID uint) ([]*model.Histor
 	return targets, nil
 }
 
+// FindByChannelIDs 批量列出多个通道的目标并按 channel_id 分组。
+// 通道列表页原实现逐通道查询(默认 50 通道 = 51 条查询)。
+func (d *HistoryTargetRepository) FindByChannelIDs(channelIDs []uint) (map[uint][]*model.HistoryTarget, error) {
+	out := make(map[uint][]*model.HistoryTarget, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return out, nil
+	}
+	var targets []*model.HistoryTarget
+	if err := d.db.Where("channel_id IN ?", channelIDs).
+		Order("id ASC").Find(&targets).Error; err != nil {
+		return nil, err
+	}
+	for _, t := range targets {
+		out[t.ChannelID] = append(out[t.ChannelID], t)
+	}
+	return out, nil
+}
+
 // HistoryRunRepository 历史同步执行记录。
 type HistoryRunRepository struct {
 	base[model.HistoryRun, uint]
@@ -113,6 +141,14 @@ func (d *HistoryRunRepository) Create(run *model.HistoryRun) error {
 func (d *HistoryRunRepository) Update(run *model.HistoryRun) error {
 	return d.update(run)
 }
+
+// UpdateInTx 同 Update,但在调用方事务内执行。
+func (d *HistoryRunRepository) UpdateInTx(tx *gorm.DB, run *model.HistoryRun) error {
+	return d.updateInTx(tx, run)
+}
+
+// DB 暴露底层句柄,供跨 Repo 事务使用。
+func (d *HistoryRunRepository) DB() *gorm.DB { return d.db }
 
 // ListPendingProductDirs 返回「还没推送成功」的 apply 记录各自的产物路径。
 //

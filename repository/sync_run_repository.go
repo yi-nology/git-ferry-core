@@ -156,6 +156,27 @@ func (d *SyncRunRepository) FindLatestByTaskKeys(taskKeys []string) (map[string]
 	return out, nil
 }
 
+// FindRunSummary 按 run_id 取轻量摘要(不预加载 Steps)。
+// outbox 重投只需要状态/错误/触发/耗时,原实现 Preload Steps 让每条
+// 事件多一次查询并搬来无人使用的步骤明细。
+func (d *SyncRunRepository) FindRunSummary(taskKey string, runID uint) (*model.SyncRun, error) {
+	var run model.SyncRun
+	q := d.db.Select(
+		"id, task_key, trigger_source, status, error_message, error_type, "+
+			"retry_total, backup_status, start_time, end_time, duration_ms",
+	).Where("id = ?", runID)
+	if taskKey != "" {
+		q = q.Where("task_key = ?", taskKey)
+	}
+	if err := q.First(&run).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &run, nil
+}
+
 // FindRecentByTaskKey 取某任务最近 N 条 run,**不预加载 Steps**。
 // 健康评分需要批量拉全部任务的历史,再统一按 run_id 批量取步骤;
 // 逐任务 Preload 会多出 N 条查询。

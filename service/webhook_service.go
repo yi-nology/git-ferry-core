@@ -119,8 +119,14 @@ func (ws *WebhookService) UpdateRule(ctx context.Context, req *model.UpdateRuleR
 		rule.Description = *req.Description
 	}
 
-	if err := ws.ruleRepository.Update(rule); err != nil {
-		return nil, err
+	var uerr error
+	if req.TaskKeys != nil {
+		uerr = ws.ruleRepository.Update(rule)
+	} else {
+		uerr = ws.ruleRepository.UpdateRuleOnly(rule)
+	}
+	if uerr != nil {
+		return nil, uerr
 	}
 
 	return rule, nil

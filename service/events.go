@@ -127,7 +127,7 @@ func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned
 	if len(subs) == 0 {
 		return false, false, nil
 	}
-	run, gerr := s.tasks.runRepository.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
+	run, gerr := s.tasks.runRepository.FindRunSummary(ev.TaskKey, ev.RunID)
 	if gerr != nil {
 		if errors.Is(gerr, repository.ErrNotFound) {
 			// run 记录已被清理(保留期) ⇒ 事件失去意义,跳过投递并闭环。

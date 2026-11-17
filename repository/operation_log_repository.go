@@ -1,10 +1,13 @@
 package repository
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // OperationLogFilter 审计日志过滤条件。
@@ -27,6 +30,30 @@ func NewOperationLogRepository(db *gorm.DB) *OperationLogRepository {
 // Create 写入一条审计日志。
 func (d *OperationLogRepository) Create(log *model.OperationLog) error {
 	return d.create(log)
+}
+
+// CreateChained 事务内续接哈希链并写入。
+//
+// 「读最新一条 → 算 prev_hash → 插入」是读改写序列:并发写会各自读到
+// 同一个链尾,产生两条 prev_hash 相同的分叉,校验时被误报为篡改。
+// 这里对最新一条做锁定读(MySQL `SELECT ... FOR UPDATE`),跨实例串行化;
+// sqlite 由单写者事务 + 服务层互斥兜底。
+func (d *OperationLogRepository) CreateChained(ctx context.Context, entry *model.OperationLog) error {
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var last model.OperationLog
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Order("id DESC").First(&last).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			entry.PrevHash = ""
+		case err != nil:
+			return err
+		default:
+			entry.PrevHash = last.EntryHash
+		}
+		entry.EntryHash = model.ComputeEntryHash(entry.PrevHash, entry)
+		return tx.Create(entry).Error
+	})
 }
 
 // Latest 返回最新一条审计(用于哈希链续接);无记录时返回 nil,nil。

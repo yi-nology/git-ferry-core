@@ -44,6 +44,13 @@ func (d *WebhookRuleRepository) Update(rule *model.WebhookRule) error {
 	})
 }
 
+// UpdateRuleOnly 只回写规则业务列,不动任务关联。
+// 更新请求未提交 task_keys 时调用 —— 否则每次改 enabled 都会把
+// rule_task 全删重插,产生无意义的写放大与短暂"无关联"窗口。
+func (d *WebhookRuleRepository) UpdateRuleOnly(rule *model.WebhookRule) error {
+	return d.db.Model(rule).Select(d.updateCols).Updates(rule).Error
+}
+
 func (d *WebhookRuleRepository) Delete(id uint) error {
 	return d.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("rule_id = ?", id).Delete(&model.WebhookRuleTask{}).Error; err != nil {

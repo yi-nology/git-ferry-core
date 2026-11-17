@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
@@ -10,6 +11,9 @@ import (
 
 // OperationLogService 处理审计日志相关操作。
 type OperationLogService struct {
+	// mu 进程内串行化哈希链写入:sqlite 没有 SELECT ... FOR UPDATE,
+	// 事务 + 单写者仍可能让两个 goroutine 同时读到旧链尾。
+	mu              sync.Mutex
 	opLogRepository *repository.OperationLogRepository
 }
 
@@ -36,11 +40,10 @@ func (s *OperationLogService) Record(ctx context.Context, entry *model.Operation
 			entry.CreatedAt = time.Now()
 		}
 		entry.CreatedAt = model.TruncateDBTime(entry.CreatedAt)
-		prev, err := s.opLogRepository.Latest()
-		if err == nil && prev != nil {
-			entry.PrevHash = prev.EntryHash
-		}
-		entry.EntryHash = model.ComputeEntryHash(entry.PrevHash, entry)
+		// 锁定读 + 事务提交:链尾读取与插入是原子的,不再分叉。
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.opLogRepository.CreateChained(ctx, entry)
 	}
 	return s.opLogRepository.Create(entry)
 }

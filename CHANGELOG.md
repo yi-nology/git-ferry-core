@@ -2,6 +2,35 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed（并发分叉 / 锚点一致性）
+
+- **审计哈希链并发写入不再分叉**：`OperationLogRepository.CreateChained`
+  在事务内对链尾做锁定读（MySQL `SELECT ... FOR UPDATE`），进程内再加
+  互斥兜底 sqlite；并发写不再各自读到同一链尾产生同 `prev_hash` 的两条
+  记录（此前会被 `VerifyAuditChain` 误报篡改）。
+- **历史通道链尾锚点与 run 入链同事务提交**：`finishRun` 的
+  `UpdateInTx + UpdateLastEntryHashInTx` 原子提交，消除「run 已入链、
+  锚点仍旧」导致完好链被误报不匹配的窗口。
+
+### Changed（查询与安全收口）
+
+- **outbox 重投改轻量 run 摘要**：`FindRunSummary` 不再 `Preload Steps`，
+  每条事件少一次查询，且不再搬运未使用的步骤明细。
+- **通道列表目标批量加载**：`FindByChannelIDs` 一次 `IN` 查询替代逐通道
+  查询（默认 50 通道从 51 条降到 2 条）。
+- **漂移检测任务上限修正**：显式传 `repository.MaxPageSize(200)`，不再
+  因 `DefaultPageSize(50)` 少扫 3/4 的任务。
+- **本地 git 回落加正向白名单**：只有 bundle/lfs/for-each-ref/update-ref/
+  reset/rev-parse/rev-list/fsck 才允许在 SDK「未列出」时回落；不再仅凭
+  SDK 错误文案授权回落。
+- **Webhook 规则更新不再无脑重建任务关联**：请求未带 `task_keys` 时走
+  `UpdateRuleOnly`，避免改 enabled 也全删重插 rule_task。
+- **清单不再猜 TaskKey**：`BuildManifest` 移除按 '-' 切第一段的
+  `inferTaskKey`（taskKey 允许含 '-'，必然截错）；归属由 service 用
+  最长前缀匹配回填。
+
 ## [v0.53.0] - 2026-11-17
 
 ### Fixed（数据不丢 / 不误判）
