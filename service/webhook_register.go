@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 
 	"github.com/oekit/pkg/errors"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
@@ -36,7 +36,7 @@ func (s *Service) RegisterPlatformWebhook(ctx context.Context, repoKey, callback
 	if secret != "" {
 		if err := s.repos.SetWebhookSecret(repoKey, secret); err != nil {
 			// webhook 已在平台侧生效,密钥持久化失败仅告警,不回滚注册
-			slog.Warn("persist webhook secret failed", "repoKey", repoKey, "error", err)
+			logx.Warn("persist webhook secret failed", "repoKey", repoKey, "error", err)
 		}
 	}
 

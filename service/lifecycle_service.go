@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,7 +285,7 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 	// ⇒ **该任务的漂移检测被永久打瞎**(而报告里 Checked 不增,看着像"没问题")。
 	if !driftRepoUsable(ctx, backend, dir) {
 		if err := os.RemoveAll(dir); err != nil {
-			slog.Warn("漂移仓库清理失败,重建", "dir", dir, "error", err)
+			logx.Warn("漂移仓库清理失败,重建", "dir", dir, "error", err)
 		}
 		if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
 			return "", err
@@ -525,7 +525,7 @@ func lifecycleBackend() gitbackend.GitBackend {
 	lifeBackendOnce.Do(func() {
 		b, err := gitbackend.NewGitBackend(gitbackend.Options{})
 		if err != nil {
-			slog.Warn("init git backend for lifecycle checks failed", "error", err)
+			logx.Warn("init git backend for lifecycle checks failed", "error", err)
 			return
 		}
 		lifeBackend = b

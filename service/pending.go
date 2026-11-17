@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/async"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -32,10 +32,10 @@ func (s *Service) markPendingWebhook(taskKey string) {
 		return
 	}
 	if err := s.pending.Upsert(taskKey); err != nil {
-		slog.Error("待补跑触发落库失败", "taskKey", taskKey, "error", err)
+		logx.Error("待补跑触发落库失败", "taskKey", taskKey, "error", err)
 		return
 	}
-	slog.Info("任务正在执行,webhook 触发已合并记入待补跑", "taskKey", taskKey)
+	logx.Info("任务正在执行,webhook 触发已合并记入待补跑", "taskKey", taskKey)
 }
 
 // runPendingWebhook 认领并补跑一笔待补跑触发。
@@ -47,7 +47,7 @@ func (s *Service) runPendingWebhook(taskKey string) {
 	}
 	claimed, err := s.pending.Claim(taskKey)
 	if err != nil {
-		slog.Error("待补跑认领失败", "taskKey", taskKey, "error", err)
+		logx.Error("待补跑认领失败", "taskKey", taskKey, "error", err)
 		return
 	}
 	if !claimed {
@@ -64,11 +64,11 @@ func (s *Service) sweepPendingTriggersOnStartup() {
 	}
 	keys, err := s.pending.ClaimAll()
 	if err != nil {
-		slog.Warn("启动扫描待补跑触发失败", "error", err)
+		logx.Warn("启动扫描待补跑触发失败", "error", err)
 		return
 	}
 	for _, key := range keys {
-		slog.Info("启动补跑遗留的 webhook 触发", "taskKey", key)
+		logx.Info("启动补跑遗留的 webhook 触发", "taskKey", key)
 		s.triggerPendingCatchup(key)
 	}
 }
@@ -83,7 +83,7 @@ func (s *Service) triggerPendingCatchup(taskKey string) {
 	}
 	async.GoSafe(func() {
 		if err := s.RunTaskWithTrigger(ctx, taskKey, model.TriggerWebhook, nil); err != nil {
-			slog.Error("补跑被合并的 webhook 触发失败", "taskKey", taskKey, "error", err)
+			logx.Error("补跑被合并的 webhook 触发失败", "taskKey", taskKey, "error", err)
 		}
 	})
 }

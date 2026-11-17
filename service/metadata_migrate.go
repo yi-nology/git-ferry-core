@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 
 	"github.com/oekit/pkg/errors"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
@@ -163,7 +163,7 @@ func (s *Service) MigrateRepoMetadata(ctx context.Context, opts MetadataMigrateO
 		}
 	}
 	if len(rep.Errors) > 0 {
-		slog.Warn("metadata migration finished with errors",
+		logx.Warn("metadata migration finished with errors",
 			"task", opts.TaskKey, "errors", len(rep.Errors))
 	}
 	return rep, nil

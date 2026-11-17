@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"github.com/oekit/logx"
 	"sync"
 	"time"
 
@@ -124,7 +124,7 @@ func (s *Service) deliverOutboxEvent(ev model.OutboxEvent) (delivered, abandoned
 	run, err := s.tasks.runRepository.FindByTaskKeyAndRunID(ev.TaskKey, ev.RunID)
 	if err != nil || run == nil {
 		// run 记录已被清理(保留期) ⇒ 事件失去意义,跳过投递并闭环。
-		slog.Warn("outbox: 重投时 run 记录不存在,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)
+		logx.Warn("outbox: 重投时 run 记录不存在,跳过并闭环", "run_id", ev.RunID, "task", ev.TaskKey)
 		return false, true
 	}
 	s.dispatchRunEvent(subs, RunEvent{TaskKey: ev.TaskKey, Run: run, Trigger: ev.Trigger, At: time.Now()})
@@ -144,7 +144,7 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 	}
 	evs, err := s.outbox.ListDue(100, time.Now().Add(-grace))
 	if err != nil {
-		slog.Error("outbox: 查询待派发事件失败", "error", err)
+		logx.Error("outbox: 查询待派发事件失败", "error", err)
 		return
 	}
 	published := make([]uint, 0, len(evs))
@@ -158,14 +158,14 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 		}
 	}
 	if noSubscriber > 0 {
-		slog.Warn("outbox: 无订阅者,事件未投递也不标记已发布(留待订阅者注册后重投)",
+		logx.Warn("outbox: 无订阅者,事件未投递也不标记已发布(留待订阅者注册后重投)",
 			"count", noSubscriber)
 	}
 	if err := s.outbox.MarkPublished(published); err != nil {
-		slog.Error("outbox: 标记已发布失败(下轮可能重复投递,订阅方需幂等)", "error", err)
+		logx.Error("outbox: 标记已发布失败(下轮可能重复投递,订阅方需幂等)", "error", err)
 	}
 	if _, err := s.outbox.CleanupPublished(context.Background(), outboxRetention); err != nil {
-		slog.Warn("outbox: 清理过期事件失败", "error", err)
+		logx.Warn("outbox: 清理过期事件失败", "error", err)
 	}
 }
 
@@ -196,7 +196,7 @@ func (s *Service) markOutboxPublishedByRun(runID uint) {
 		return
 	}
 	if err := s.outbox.MarkPublishedByRun(runID); err != nil {
-		slog.Warn("outbox: 标记已发布失败(派发器宽限后会重投一次)", "run_id", runID, "error", err)
+		logx.Warn("outbox: 标记已发布失败(派发器宽限后会重投一次)", "run_id", runID, "error", err)
 	}
 }
 
@@ -261,7 +261,7 @@ func (s *Service) deliverDriftEvent(ev model.OutboxEvent) (delivered, abandoned 
 	if ev.Payload != "" {
 		if err := json.Unmarshal([]byte(ev.Payload), &d); err != nil {
 			// payload 坏了 ⇒ 事件失去意义,跳过并闭环(不无限重试坏事件)。
-			slog.Warn("outbox: drift payload 解析失败,跳过并闭环", "task", ev.TaskKey, "error", err)
+			logx.Warn("outbox: drift payload 解析失败,跳过并闭环", "task", ev.TaskKey, "error", err)
 			return false, true
 		}
 	}

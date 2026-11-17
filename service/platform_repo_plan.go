@@ -1,7 +1,7 @@
 package service
 
 import (
-	"log/slog"
+	"github.com/oekit/logx"
 
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
@@ -91,17 +91,17 @@ func (s *PlatformService) persistRepoPlan(plan *repoUpsertPlan) int {
 	count := 0
 	if len(plan.ToUpdate) > 0 {
 		if err := s.repoRepository.BatchUpdateRepoMeta(plan.ToUpdate); err != nil {
-			slog.Error("sync repo: batch update repo meta failed", "error", err, "count", len(plan.ToUpdate))
+			logx.Error("sync repo: batch update repo meta failed", "error", err, "count", len(plan.ToUpdate))
 		} else {
 			count += len(plan.ToUpdate)
 		}
 	}
 	if len(plan.ToCreate) > 0 {
 		if err := s.repoRepository.BatchCreate(plan.ToCreate, 100); err != nil {
-			slog.Error("sync repo: batch create failed", "error", err, "count", len(plan.ToCreate))
+			logx.Error("sync repo: batch create failed", "error", err, "count", len(plan.ToCreate))
 			for _, r := range plan.ToCreate {
 				if err := s.repoRepository.Create(r); err != nil {
-					slog.Error("sync repo: single create failed", "repo", r.Key, "error", err)
+					logx.Error("sync repo: single create failed", "repo", r.Key, "error", err)
 				} else {
 					count++
 				}

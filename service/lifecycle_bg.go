@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 	"time"
 
 	"github.com/oekit/concurrency/async"
@@ -50,9 +50,9 @@ func (s *Service) runLifecycleOnce() {
 	// 1) 冷备过期清理
 	if s.config.Sync.BackupRetentionDays > 0 && !s.config.Sync.LegalHold {
 		if removed, err := s.CleanupExpiredBackups(); err != nil {
-			slog.Warn("lifecycle: backup cleanup failed", "error", err)
+			logx.Warn("lifecycle: backup cleanup failed", "error", err)
 		} else if removed > 0 {
-			slog.Info("lifecycle: expired backups cleaned", "removed", removed)
+			logx.Info("lifecycle: expired backups cleaned", "removed", removed)
 		}
 	}
 
@@ -62,7 +62,7 @@ func (s *Service) runLifecycleOnce() {
 	}
 	platforms, err := s.ListPlatforms(ctx)
 	if err != nil {
-		slog.Warn("lifecycle: list platforms failed", "error", err)
+		logx.Warn("lifecycle: list platforms failed", "error", err)
 		return
 	}
 	for _, p := range platforms {
@@ -78,11 +78,11 @@ func (s *Service) runLifecycleOnce() {
 		}
 		rep, derr := s.AutoDiscover(ctx, p.Key, opts)
 		if derr != nil {
-			slog.Warn("lifecycle: auto discover failed", "platform", p.Key, "error", derr)
+			logx.Warn("lifecycle: auto discover failed", "platform", p.Key, "error", derr)
 			continue
 		}
 		if len(rep.NewRepos) > 0 {
-			slog.Info("lifecycle: discovered new repos",
+			logx.Info("lifecycle: discovered new repos",
 				"platform", p.Key, "new", len(rep.NewRepos), "imported", rep.Imported)
 		}
 	}

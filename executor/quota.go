@@ -2,8 +2,8 @@ package executor
 
 import (
 	"fmt"
+	"github.com/oekit/logx"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -35,7 +35,7 @@ func dirSizeBytes(root string) (int64, error) {
 				return err
 			}
 			// 单个子项不可读不阻断整体统计(如被并发清理的临时文件)。
-			slog.Debug("quota: 测量跳过不可读子项", "path", path, "error", err)
+			logx.Debug("quota: 测量跳过不可读子项", "path", path, "error", err)
 			return nil
 		}
 		if d.IsDir() {

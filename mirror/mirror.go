@@ -19,7 +19,7 @@ package mirror
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"strconv"
 	"strings"
@@ -325,7 +325,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	// 策略快照在门禁通过前就绪:DryRun 预检报告也要能带出
 	// 「将应用什么规则」。
 	report.PolicySnapshot = BuildPolicySnapshot(p.opts.Mapping, p.opts.ScrubRules)
-	slog.Info("mirror: 身份改写完成", "tag", tag, "tree", treeHash.String(),
+	logx.Info("mirror: 身份改写完成", "tag", tag, "tree", treeHash.String(),
 		"files", len(b.replaced), "residual", len(b.residual))
 
 	// **有残留就中止,不推送**。
@@ -353,7 +353,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	if err = TypeCheckGate(ctx, buildDir); err != nil {
 		return nil, errors.Wrap(err, "编译门禁未通过,已中止(未推送)")
 	}
-	slog.Info("mirror: 编译门禁通过", "tag", tag)
+	logx.Info("mirror: 编译门禁通过", "tag", tag)
 
 	// --- 远端一致性检查:同名 tag 已存在且 tree 不一致时默认中止 ---
 	res, existed, overwrote, err := p.checkRemoteTag(ctx, tag, treeHash)
@@ -366,7 +366,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 		// 这类错误会把「一致性检查失败」降级成「空仓库,跳过」,
 		// 于是可能覆盖已发布的同名 tag,而报告说「没覆盖」。
 		if errors.Is(err, transport.ErrEmptyRemoteRepository) {
-			slog.Info("mirror: 远端为空仓库(首次发布),跳过一致性检查", "tag", tag)
+			logx.Info("mirror: 远端为空仓库(首次发布),跳过一致性检查", "tag", tag)
 		} else if !p.opts.AllowUnverifiedPush {
 			// 网络故障/认证失败时无法确认远端状态,拒绝盲推防覆盖已发布版本。
 			//
@@ -375,7 +375,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 			// 与「查不到远端状态」捆成一个开关。
 			return nil, errors.New("远端一致性检查失败(拒绝盲推,防覆盖已发布版本;")
 		} else {
-			slog.Warn("mirror: 远端一致性检查不可用,AllowUnverifiedPush 已开启,继续推送", "tag", tag, "error", err)
+			logx.Warn("mirror: 远端一致性检查不可用,AllowUnverifiedPush 已开启,继续推送", "tag", tag, "error", err)
 			report.Warning = "远端一致性检查不可用(远端不可达),本次推送未核对远端已有版本"
 		}
 	}
@@ -398,7 +398,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	// --- 合成孤儿 commit 与附注 tag(身份/时间戳继承源 commit,保证幂等) ---
 	if p.opts.DryRun {
 		report.VerifyCmd = "go list -m " + p.opts.Mapping.Target + "@" + tag
-		slog.Info("mirror: 预检完成(未推送)", "tag", tag, "tree", report.Tree)
+		logx.Info("mirror: 预检完成(未推送)", "tag", tag, "tree", report.Tree)
 		return report, nil
 	}
 	commitHash, tagHash, err := synthesizeRefs(p.workRepo.Storer, srcCommit, treeHash, tag, p.opts.Mapping)
@@ -433,7 +433,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 	//  但 tag 对象变了,对外就是「这个 tag 被替换过」。)
 	if res == compareMatched {
 		report.TagAlreadyPublished = true
-		slog.Info("mirror: 远端已有同内容的同名 tag,本次不重推(保持 tag 对象稳定)", "tag", tag)
+		logx.Info("mirror: 远端已有同内容的同名 tag,本次不重推(保持 tag 对象稳定)", "tag", tag)
 	} else if _, err = p.backend.Push(ctx, gitbackend.PushOptions{
 		RepoPath: p.tmpRepo,
 		Remote:   p.remote,
@@ -455,7 +455,7 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 		// 宁可 main 停在旧版本,也不能回退:main 是公开仓的默认分支,
 		// 回退是不可自愈的(已经 clone 走旧代码的人拿不到更新)。
 		if newer := p.remoteHighestVersionExcept(ctx, tag); newer != "" && compareVersions(newer, tag) > 0 {
-			slog.Info("mirror: 远端已有更高版本,本次不动 main 快照(避免默认分支回退)",
+			logx.Info("mirror: 远端已有更高版本,本次不动 main 快照(避免默认分支回退)",
 				"tag", tag, "remote_newer", newer)
 			report.Warning = appendWarning(report.Warning,
 				"远端已有更高版本("+newer+"),本次不更新 main 快照(避免默认分支回退)")
@@ -469,19 +469,19 @@ func (p *publisher) publish(ctx context.Context, tag, mirrorURL string) (*TagRep
 		}); err != nil {
 			// main 推失败**不影响发布结论**:tag 已经公开了。
 			// 报「发布失败」是假的 —— 只记警告,并在报告里说明。
-			slog.Warn("mirror: main 快照推送失败(tag 已发布)", "tag", tag, "error", err)
+			logx.Warn("mirror: main 快照推送失败(tag 已发布)", "tag", tag, "error", err)
 			report.Warning = appendWarning(report.Warning,
 				"main 快照推送失败(不影响本次 tag 的发布):"+err.Error())
 		} else {
 			report.MainUpdated = true
 		}
 	} else {
-		slog.Info("mirror: 本次 tag 不比远端已有版本新,main 快照保持不动", "tag", tag)
+		logx.Info("mirror: 本次 tag 不比远端已有版本新,main 快照保持不动", "tag", tag)
 		report.MainSkipped = "本次版本不比远端已有版本新"
 	}
 
 	report.VerifyCmd = "go list -m " + p.opts.Mapping.Target + "@" + tag
-	slog.Info("mirror: 已发布", "module", p.opts.Mapping.Target, "tag", tag, "commit", report.Commit)
+	logx.Info("mirror: 已发布", "module", p.opts.Mapping.Target, "tag", tag, "commit", report.Commit)
 	return report, nil
 }
 

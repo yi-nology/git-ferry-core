@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"net/url"
 	"strings"
 
@@ -159,7 +159,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 
 	existingRepos, existingErr := s.repoRepository.FindByPlatformID(platform.ID)
 	if existingErr != nil {
-		slog.Warn("sync repo: failed to load existing repos, treating all as new",
+		logx.Warn("sync repo: failed to load existing repos, treating all as new",
 			"platform_id", platform.ID, "error", existingErr)
 		existingRepos = nil
 	}
@@ -168,7 +168,7 @@ func (s *PlatformService) SyncPlatformReposFiltered(ctx context.Context, key str
 	count := s.persistRepoPlan(plan)
 
 	if err := s.platformRepository.UpdateRepoCount(platform.ID); err != nil {
-		slog.Warn("sync repo: failed to update platform repo count", "platform_id", platform.ID, "error", err)
+		logx.Warn("sync repo: failed to update platform repo count", "platform_id", platform.ID, "error", err)
 	}
 	return count, nil
 }

@@ -103,6 +103,15 @@
 - 依赖变化：+`github.com/oekit/core v0.15.2`；
   −`sethvargo/go-envconfig`（`gopkg.in/yaml.v3` 降为 indirect）。
 
+### Changed（业务日志统一走 oekit/logx）
+
+- 36 个文件的 `log/slog` 调用（Info/Warn/Error/Debug，共 **173 处**）
+  改为 `github.com/oekit/logx` 门面；`pkg/proclog` 仍保留 slog ↔ logx
+  桥接（`SetDefault` / `Handler` 由宿主进程配置）。
+- 生产输出不变：`proclog.Setup` 已把 logx 接到同一个 `slog.Handler`；
+  core 单独运行（未调 proclog）时走 logx 默认 std logger（`LOG_LEVEL`
+  控级），不再依赖宿主先配置 slog。
+
 ## [v0.50.0] - 2026-11-17
 
 ### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）

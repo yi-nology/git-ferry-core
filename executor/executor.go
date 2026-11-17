@@ -3,7 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,7 +146,7 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 			run.Details = run.Details[:maxDetailsSize] + "\n... (truncated)"
 		}
 		if err := e.service.CompleteRunWithTaskUpdate(run, task); err != nil {
-			slog.Error("failed to complete sync run and update task", "error", err)
+			logx.Error("failed to complete sync run and update task", "error", err)
 		}
 	}()
 
@@ -168,11 +168,11 @@ func (e *Executor) Execute(ctx context.Context, task *model.SyncTask, trigger st
 		//    ⇒ 保留,下一次走增量 fetch —— 全量克隆是大仓的主要成本,
 		//    "失败一次就退回全量克隆"等于把增量收益清零。
 		if e.workdirUsable(ctx, rc.RepoDir) {
-			slog.Info("keep workdir after failed run; next run will fetch incrementally", "dir", rc.RepoDir)
+			logx.Info("keep workdir after failed run; next run will fetch incrementally", "dir", rc.RepoDir)
 			return
 		}
 		if rmErr := os.RemoveAll(workDir); rmErr != nil {
-			slog.Error("failed to cleanup temp dir", "error", rmErr, "dir", workDir)
+			logx.Error("failed to cleanup temp dir", "error", rmErr, "dir", workDir)
 		}
 	}()
 
@@ -307,7 +307,7 @@ func (e *Executor) prefetchPlatforms(ctx context.Context, repos ...*model.Repo) 
 		}
 		p, err := e.service.GetPlatformByID(ctx, repo.PlatformID)
 		if err != nil {
-			slog.Warn("prefetch platform failed", "platformID", repo.PlatformID, "error", err)
+			logx.Warn("prefetch platform failed", "platformID", repo.PlatformID, "error", err)
 			continue
 		}
 		platforms[repo.PlatformID] = p
@@ -323,7 +323,7 @@ func (e *Executor) beginStep(runID uint, stepName string) *model.SyncRunStep {
 		StartTime: time.Now(),
 	}
 	if err := e.service.CreateRunStep(step); err != nil {
-		slog.Error("failed to create run step", "step", stepName, "error", err)
+		logx.Error("failed to create run step", "step", stepName, "error", err)
 	}
 	return step
 }
@@ -336,7 +336,7 @@ func (e *Executor) completeStep(step *model.SyncRunStep, output string) {
 	step.Status = model.StatusSuccess
 	step.Output = output
 	if err := e.service.UpdateRunStep(step); err != nil {
-		slog.Error("failed to update run step", "step", step.StepName, "error", err)
+		logx.Error("failed to update run step", "step", step.StepName, "error", err)
 	}
 }
 
@@ -349,7 +349,7 @@ func (e *Executor) failStep(step *model.SyncRunStep, err error) {
 	step.ErrorMsg = err.Error()
 	step.ErrorType = ClassifyError(err)
 	if updateErr := e.service.UpdateRunStep(step); updateErr != nil {
-		slog.Error("failed to update run step", "step", step.StepName, "error", updateErr)
+		logx.Error("failed to update run step", "step", step.StepName, "error", updateErr)
 	}
 }
 
@@ -398,7 +398,7 @@ func (e *Executor) cloneRepo(ctx context.Context, dir string, repo *model.Repo, 
 	// #27:共享仓 ensure 后消失的竞态——降级无 reference 重试一次,
 	// 不让一次缓存竞态把整跑打成失败(下轮自愈本可兜底,这里连轮都省了)。
 	if isCacheRaceNotRepo(err, cloneOpts.Reference) {
-		slog.Info("clone cache vanished mid-clone, retrying without reference", "error", err)
+		logx.Info("clone cache vanished mid-clone, retrying without reference", "error", err)
 		cloneOpts.Reference = ""
 		err = e.backend.Clone(ctx, cloneOpts)
 	}
@@ -491,7 +491,7 @@ func (e *Executor) widenOriginFetchRefspec(ctx context.Context, dir string) {
 		return
 	}
 	if err := e.backend.SetConfig(ctx, dir, "remote."+RemoteOrigin+".fetch", want); err != nil {
-		slog.Warn("widenOriginFetchRefspec 失败,源端删除分支时可能报错",
+		logx.Warn("widenOriginFetchRefspec 失败,源端删除分支时可能报错",
 			"dir", dir, "error", err)
 	}
 }
@@ -512,7 +512,7 @@ func (e *Executor) sourceBranchGone(ctx context.Context, dir string, task *model
 		Auth:     e.authConfig(ctx, repo, platform),
 	}); err != nil {
 		// 连不上就**不能**下"源端删了"的结论。
-		slog.Warn("sourceBranchGone: 全量 fetch 失败,无法判定源端是否删除了该分支",
+		logx.Warn("sourceBranchGone: 全量 fetch 失败,无法判定源端是否删除了该分支",
 			"branch", task.SourceBranch, "error", err)
 		return false
 	}
@@ -527,7 +527,7 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 	// 克隆地址在 DB 里被修正(私有实例重写/仓库迁移)后,既有 workdir 的
 	// origin 仍指向旧地址;不同步会一直从错误源 fetch。
 	if err := e.syncRemoteURL(ctx, dir, RemoteOrigin, repo.CloneURL); err != nil {
-		slog.Warn("fetchRepo: update origin URL failed", "error", err, "dir", dir)
+		logx.Warn("fetchRepo: update origin URL failed", "error", err, "dir", dir)
 	}
 
 	// glob 多分支:fetch 的 branch 参数要求完整 refspec 形态,
@@ -570,7 +570,7 @@ func (e *Executor) fetchRepo(ctx context.Context, dir string, task *model.SyncTa
 		// 源端删掉的分支其远端跟踪 ref 会被剪掉),再看 refs/remotes/origin/<src>
 		// 还在不在:不在 = 源端确实删了(不是网络/鉴权问题)。
 		if len(fetchBranches) > 0 && e.sourceBranchGone(ctx, dir, task, repo, platform) {
-			slog.Info("fetchRepo: 源端已删除该分支,按镜像语义处理(不推送)",
+			logx.Info("fetchRepo: 源端已删除该分支,按镜像语义处理(不推送)",
 				"branch", task.SourceBranch, "dir", dir)
 			return nil
 		}
@@ -609,7 +609,7 @@ func (e *Executor) alignSourceBranchesExcluded(ctx context.Context, dir, sourceB
 	}
 	if !strings.ContainsAny(sourceBranch, "*?[") {
 		if excluded(sourceBranch) {
-			slog.Info("align: 分支命中排除名单,跳过", "branch", sourceBranch)
+			logx.Info("align: 分支命中排除名单,跳过", "branch", sourceBranch)
 			return nil
 		}
 		return e.alignSourceBranch(ctx, dir, sourceBranch)
@@ -634,7 +634,7 @@ func (e *Executor) alignSourceBranchesExcluded(ctx context.Context, dir, sourceB
 			continue
 		}
 		if excluded(name) {
-			slog.Info("align: 分支命中排除名单,跳过", "branch", name)
+			logx.Info("align: 分支命中排除名单,跳过", "branch", name)
 			continue
 		}
 		if err := e.alignSourceBranch(ctx, dir, name); err != nil {
@@ -688,7 +688,7 @@ func (e *Executor) alignSourceBranch(ctx context.Context, dir, branch string) er
 	srcSHA, err := e.backend.RevParse(ctx, dir, ref)
 	if err != nil {
 		// 源端已无此分支(被删)⇒ 本地分支留在原地,push 阶段按需 prune。
-		slog.Warn("alignSourceBranch: source ref missing, skip", "branch", branch, "ref", ref, "dir", dir, "error", err)
+		logx.Warn("alignSourceBranch: source ref missing, skip", "branch", branch, "ref", ref, "dir", dir, "error", err)
 		return nil
 	}
 	if curSHA, err := e.backend.RevParse(ctx, dir, "refs/heads/"+branch); err == nil && curSHA == srcSHA {
@@ -696,7 +696,7 @@ func (e *Executor) alignSourceBranch(ctx context.Context, dir, branch string) er
 	}
 	cur, curErr := e.backend.GetCurrentBranch(ctx, dir)
 	if curErr != nil {
-		slog.Warn("alignSourceBranch: GetCurrentBranch failed", "error", curErr, "dir", dir)
+		logx.Warn("alignSourceBranch: GetCurrentBranch failed", "error", curErr, "dir", dir)
 	}
 	if cur == branch {
 		if _, err := e.gitOutput(ctx, dir, "reset", "--hard", ref); err != nil {
@@ -829,10 +829,10 @@ func (e *Executor) push(ctx context.Context, dir string, task *model.SyncTask, r
 				if perr := e.pruneRemoteBranch(ctx, dir, task.TargetBranch, repo, platform); perr != nil {
 					return false, "", "", perr
 				}
-				slog.Info("源端已删除该分支,已删除目标侧同名分支(镜像删除)",
+				logx.Info("源端已删除该分支,已删除目标侧同名分支(镜像删除)",
 					"source", task.SourceBranch, "target", task.TargetBranch)
 			} else {
-				slog.Info("源端已删除该分支,本次不推送(git_push_prune 未开启,目标侧保持不动)",
+				logx.Info("源端已删除该分支,本次不推送(git_push_prune 未开启,目标侧保持不动)",
 					"source", task.SourceBranch, "target", task.TargetBranch)
 			}
 			return false, "", "", nil
@@ -948,7 +948,7 @@ func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, ta
 		return err
 	}
 	if len(srcBranches) == 0 {
-		slog.Warn("镜像删除跳过:源端分支列表为空(源端 fetch 未成功?)",
+		logx.Warn("镜像删除跳过:源端分支列表为空(源端 fetch 未成功?)",
 			"task", task.Key, "sourcePattern", task.SourceBranch)
 		return nil
 	}
@@ -974,7 +974,7 @@ func (e *Executor) pruneRemoteBranchesMirror(ctx context.Context, dir string, ta
 	if len(failures) > 0 {
 		return oekiterrors.New(fmt.Sprintf("镜像删除失败 %d 项:%s", len(failures), strings.Join(failures, "; ")))
 	}
-	slog.Info("已删除目标上源端已不存在的分支",
+	logx.Info("已删除目标上源端已不存在的分支",
 		"task", task.Key, "count", len(victims), "branches", strings.Join(victims, ","))
 	return nil
 }

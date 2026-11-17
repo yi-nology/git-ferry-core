@@ -2,7 +2,7 @@ package executor
 
 import (
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/gitbackend"
@@ -70,9 +70,9 @@ func (e *Executor) authConfig(ctx context.Context, repo *model.Repo, platform *m
 	}
 	auth := BuildRepoAuth(repo, p)
 	if auth.Type == gitbackend.AuthNone {
-		slog.Debug("no auth configured", "repo", repo.Key)
+		logx.Debug("no auth configured", "repo", repo.Key)
 	} else {
-		slog.Debug("using platform access token", "repo", repo.Key)
+		logx.Debug("using platform access token", "repo", repo.Key)
 	}
 	return auth
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +94,7 @@ func (c *cloneCache) ensure(ctx context.Context, backend gitbackend.GitBackend, 
 	release, ok := c.mu.Acquire(entry)
 	if !ok {
 		// 同源克隆正在种/刷:这次降级普通克隆(正确性不变),留痕便于运维识别。
-		slog.Info("clone cache contended, cloning without reference", "entry", entry)
+		logx.Info("clone cache contended, cloning without reference", "entry", entry)
 		return "", false, nil, nil
 	}
 	path, usable, err = c.ensureLocked(ctx, backend, cloneURL, filter, auth, entry)
@@ -114,10 +114,10 @@ func (c *cloneCache) ensureLocked(ctx context.Context, backend gitbackend.GitBac
 			Tags:     true,
 			Auth:     auth,
 		}); ferr != nil {
-			slog.Warn("clone cache refresh failed, using stale cache",
+			logx.Warn("clone cache refresh failed, using stale cache",
 				"entry", entry, "error", ferr)
 		}
-		slog.Info("clone cache reused", "entry", entry)
+		logx.Info("clone cache reused", "entry", entry)
 		// #22:命中即「最近使用」——刷新写的是 entry/.git 内部,不改 entry
 		// 目录 mtime,不显式触摸的话淘汰排序永远等于种入序(FIFO)。
 		touchEntry(entry)
@@ -132,7 +132,7 @@ func (c *cloneCache) ensureLocked(ctx context.Context, backend gitbackend.GitBac
 		if rerr := os.RemoveAll(entry); rerr != nil {
 			return "", false, oekiterrors.Wrap(rerr, "remove damaged clone cache entry failed", "entry", entry)
 		}
-		slog.Info("clone cache damaged entry removed for re-seed", "entry", entry)
+		logx.Info("clone cache damaged entry removed for re-seed", "entry", entry)
 	}
 
 	if err := os.MkdirAll(c.dir, 0o750); err != nil {
@@ -154,7 +154,7 @@ func (c *cloneCache) ensureLocked(ctx context.Context, backend gitbackend.GitBac
 		if isUsableEntry(entry) {
 			// 跨进程抢先种入了完整条目:采纳它,清掉自己的 tmp。
 			_ = os.RemoveAll(tmp)
-			slog.Info("clone cache seeded", "entry", entry, "adopted", true)
+			logx.Info("clone cache seeded", "entry", entry, "adopted", true)
 			c.evictOverCap(entry)
 			return entry, true, nil
 		}
@@ -165,7 +165,7 @@ func (c *cloneCache) ensureLocked(ctx context.Context, backend gitbackend.GitBac
 			return "", false, oekiterrors.Wrap(err2, "commit clone cache entry failed")
 		}
 	}
-	slog.Info("clone cache seeded", "entry", entry)
+	logx.Info("clone cache seeded", "entry", entry)
 	c.evictOverCap(entry)
 	return entry, true, nil
 }
@@ -204,10 +204,10 @@ func (c *cloneCache) sweepOrphanTmp() {
 		rerr := os.RemoveAll(tmpPath)
 		rel()
 		if rerr != nil {
-			slog.Warn("clone cache orphan tmp sweep failed", "tmp", tmpPath, "error", rerr)
+			logx.Warn("clone cache orphan tmp sweep failed", "tmp", tmpPath, "error", rerr)
 			continue
 		}
-		slog.Info("clone cache orphan tmp swept", "tmp", tmpPath)
+		logx.Info("clone cache orphan tmp swept", "tmp", tmpPath)
 	}
 }
 
@@ -225,7 +225,7 @@ func (c *cloneCache) evictOverCap(keep string) {
 	limit := int64(c.maxMB) << 20
 	size, err := dirSizeBytes(c.dir)
 	if err != nil {
-		slog.Warn("clone cache size check failed", "error", err)
+		logx.Warn("clone cache size check failed", "error", err)
 		return
 	}
 	for size > limit {
@@ -233,7 +233,7 @@ func (c *cloneCache) evictOverCap(keep string) {
 		// Glob 当模式语义解析,匹配到目录外的兄弟路径(实证:cc[x] 吃到 ccx/)。
 		dents, rerr := os.ReadDir(c.dir)
 		if rerr != nil {
-			slog.Warn("clone cache list failed", "error", rerr)
+			logx.Warn("clone cache list failed", "error", rerr)
 			return
 		}
 		// 逐个 try-Acquire 锁定候选:拿不到=该条目正被在途克隆借用(#23),
@@ -274,18 +274,18 @@ func (c *cloneCache) evictOverCap(keep string) {
 		rerr = os.RemoveAll(oldest)
 		oldestRelease()
 		if rerr != nil {
-			slog.Warn("clone cache evict failed", "entry", oldest, "error", rerr)
+			logx.Warn("clone cache evict failed", "entry", oldest, "error", rerr)
 			break
 		}
-		slog.Info("clone cache evicted", "entry", oldest)
+		logx.Info("clone cache evicted", "entry", oldest)
 		size, err = dirSizeBytes(c.dir)
 		if err != nil {
-			slog.Warn("clone cache size recheck failed", "error", err)
+			logx.Warn("clone cache size recheck failed", "error", err)
 			return
 		}
 	}
 	if size > limit {
-		slog.Warn("clone cache single entry exceeds cap, keeping to avoid thrash",
+		logx.Warn("clone cache single entry exceeds cap, keeping to avoid thrash",
 			"entry", keep, "size_bytes", size, "cap_mb", c.maxMB)
 	}
 }

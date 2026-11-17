@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
-	"log/slog"
+	"github.com/oekit/logx"
 	"path/filepath"
 	"sync"
 	"time"
@@ -193,9 +193,9 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	// 不回收 ⇒ 它们永远停在这个状态:既没有失败记录(看不出"这次没同步"),
 	// 也没有 pending 可补 ⇒ 这次推送的提交静默丢失。
 	if n, rerr := webhookService.RecoverStuckEvents(context.Background(), 0); rerr != nil {
-		slog.Warn("回收卡住的 webhook 事件失败", "error", rerr)
+		logx.Warn("回收卡住的 webhook 事件失败", "error", rerr)
 	} else if n > 0 {
-		slog.Info("已回收卡住的 webhook 事件", "count", n)
+		logx.Info("已回收卡住的 webhook 事件", "count", n)
 	}
 
 	// **启动扫描待补跑触发**:上次进程退出(SIGKILL/崩溃)前没补跑的 webhook
@@ -218,7 +218,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	// P2 持久化执行队列:本实例负责执行时启动派发器与 reaper;
 	// execute_jobs=false 的纯 API 实例只入队(由 Worker 实例认领执行)。
 	if svc.durableQueueOn() && svc.executesJobs() {
-		slog.Info("durable execution queue enabled", "instance", svc.instanceID,
+		logx.Info("durable execution queue enabled", "instance", svc.instanceID,
 			"dispatch_interval", jobDispatchInterval, "lease", jobLeaseTTL)
 		svc.wg.Add(1)
 		async.GoSafe(func() {
@@ -290,36 +290,36 @@ func (s *Service) doStop() {
 	defer stopTimer.Stop()
 	select {
 	case <-done:
-		slog.Info("all background goroutines stopped")
+		logx.Info("all background goroutines stopped")
 	case <-stopTimer.C:
-		slog.Warn("timeout waiting for background goroutines to stop")
+		logx.Warn("timeout waiting for background goroutines to stop")
 	}
 
 	// 释放镜像通道跨实例锁的 redis 连接
 	if s.mirror != nil && s.mirror.lockClient != nil {
 		if err := s.mirror.lockClient.Close(context.Background()); err != nil {
-			slog.Error("failed to close mirror redis lock", "error", err)
+			logx.Error("failed to close mirror redis lock", "error", err)
 		}
 	}
 
 	// 释放历史同步通道跨实例锁的 redis 连接
 	if s.history != nil && s.history.lockClient != nil {
 		if err := s.history.lockClient.Close(context.Background()); err != nil {
-			slog.Error("failed to close history redis lock", "error", err)
+			logx.Error("failed to close history redis lock", "error", err)
 		}
 	}
 
 	// 释放并发控制器(关闭 redis 连接等)
 	if s.guard != nil {
 		if err := s.guard.Close(); err != nil {
-			slog.Error("failed to close concurrency guard", "error", err)
+			logx.Error("failed to close concurrency guard", "error", err)
 		}
 	}
 
 	// 关闭数据库连接池(仅 core 自建的;WithDB 注入的由调用方负责)
 	if s.sqlDB != nil && s.ownsDB {
 		if err := s.sqlDB.Close(); err != nil {
-			slog.Error("failed to close database connection", "error", err)
+			logx.Error("failed to close database connection", "error", err)
 		}
 	}
 }
@@ -421,11 +421,11 @@ func (s *Service) HealthCheck() map[string]string {
 	select {
 	case err := <-dbDone:
 		if err != nil {
-			slog.Error("healthcheck: db ping failed", "error", err)
+			logx.Error("healthcheck: db ping failed", "error", err)
 			status["database"] = "unhealthy"
 		}
 	case <-time.After(5 * time.Second):
-		slog.Error("healthcheck: db ping timed out")
+		logx.Error("healthcheck: db ping timed out")
 		status["database"] = "timeout"
 	}
 
@@ -436,11 +436,11 @@ func (s *Service) HealthCheck() map[string]string {
 		select {
 		case err := <-redisDone:
 			if err != nil {
-				slog.Error("healthcheck: redis ping failed", "error", err)
+				logx.Error("healthcheck: redis ping failed", "error", err)
 				status["redis"] = "unhealthy"
 			}
 		case <-time.After(5 * time.Second):
-			slog.Error("healthcheck: redis ping timed out")
+			logx.Error("healthcheck: redis ping timed out")
 			status["redis"] = "timeout"
 		}
 	} else {

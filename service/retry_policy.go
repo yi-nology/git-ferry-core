@@ -1,7 +1,7 @@
 package service
 
 import (
-	"log/slog"
+	"github.com/oekit/logx"
 	"slices"
 	"sync"
 	"time"
@@ -104,7 +104,7 @@ func (t *RetryTracker) ShouldRetry(run *model.SyncRun, p AutoRetryPolicy) Decisi
 		n, end, err := chain(run.TaskKey, run.ID, run.TriggerSource == model.TriggerAutoRetry)
 		if err != nil {
 			// 链事实查不出来时不放行:宁可少重试,不可超预算(fail-closed)。
-			slog.Warn("auto retry: chain stats unavailable, refuse to retry",
+			logx.Warn("auto retry: chain stats unavailable, refuse to retry",
 				"run_id", run.ID, "task", run.TaskKey, "error", err)
 			return Decision{Reason: "chain stats unavailable"}
 		}

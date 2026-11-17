@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -160,7 +160,7 @@ func (h *HistoryService) lockChannel(ctx context.Context, chID uint) (func(), er
 				uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				defer cancel()
 				if uerr := h.locker.Unlock(uctx, key, ownerID); uerr != nil {
-					slog.Debug("history: 释放跨实例锁", "channel", chID, "error", uerr)
+					logx.Debug("history: 释放跨实例锁", "channel", chID, "error", uerr)
 				}
 			}
 			releaseLocal()
@@ -177,7 +177,7 @@ func (h *HistoryService) lockChannel(ctx context.Context, chID uint) (func(), er
 			return func() {}, oekiterrors.New(fmt.Sprintf("通道 %d 正在其它实例执行,请稍后重试", chID))
 		default:
 			// redis 抖动:降级为进程内互斥,不阻断操作。
-			slog.Warn("history: 抢跨实例锁失败,降级为进程内互斥", "channel", chID, "error", lerr)
+			logx.Warn("history: 抢跨实例锁失败,降级为进程内互斥", "channel", chID, "error", lerr)
 		}
 	}
 	return unlock, nil
@@ -1343,7 +1343,7 @@ func (h *HistoryService) productRoot() string {
 func (h *HistoryService) pendingProductDirs() []string {
 	dirs, err := h.runs.ListPendingProductDirs()
 	if err != nil {
-		slog.Debug("history: 取待推送产物失败", "error", err)
+		logx.Debug("history: 取待推送产物失败", "error", err)
 		return nil
 	}
 	return dirs
@@ -1514,7 +1514,7 @@ func (h *HistoryService) resolveRepoDir(ctx context.Context, ch *model.HistoryCh
 		// 发布一律被判"远端已分叉"拦下(只能强推,强推又会丢掉远端的提交)。
 		if ffErr := fastForwardMirrorBranches(dir, "origin"); ffErr != nil {
 			// 快进失败不致命:推送闸门会按实际远端状态判定(分叉时报错而不是放行)。
-			slog.Warn("history: 快进镜像分支失败(基线可能陈旧)", "dir", dir, "error", ffErr)
+			logx.Warn("history: 快进镜像分支失败(基线可能陈旧)", "dir", dir, "error", ffErr)
 		}
 	} else {
 		if rmErr := os.RemoveAll(dir); rmErr != nil {

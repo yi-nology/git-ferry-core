@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"github.com/oekit/logx"
 	"time"
 
 	"github.com/oekit/concurrency/loop"
@@ -96,7 +96,7 @@ func reconcileBranches(ctx context.Context,
 	if err != nil {
 		res.Status = model.ReconcileDrift
 		res.Message = "SHA 不一致,且 CompareCommits 失败: " + err.Error()
-		slog.Warn("reconcile: compare failed", "src_sha", srcSHA, "tgt_sha", tgtSHA, "error", err)
+		logx.Warn("reconcile: compare failed", "src_sha", srcSHA, "tgt_sha", tgtSHA, "error", err)
 		return res
 	}
 	res.Status = model.ReconcileDrift
@@ -148,18 +148,18 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 	}
 	tasks, err := s.tasks.taskRepository.FindAllEnabled()
 	if err != nil {
-		slog.Error("reconcile: 列出启用任务失败", "error", err)
+		logx.Error("reconcile: 列出启用任务失败", "error", err)
 		return
 	}
 	var drift int
 	for _, task := range tasks {
 		res, rerr := s.ReconcileTask(ctx, task.Key)
 		if rerr != nil {
-			slog.Error("reconcile: 任务对账失败", "task", task.Key, "error", rerr)
+			logx.Error("reconcile: 任务对账失败", "task", task.Key, "error", rerr)
 			continue
 		}
 		if werr := s.recordReconcile(res); werr != nil {
-			slog.Error("reconcile: 结果落库失败", "task", task.Key, "error", werr)
+			logx.Error("reconcile: 结果落库失败", "task", task.Key, "error", werr)
 		}
 		if res.Status != model.ReconcileInSync {
 			drift++
@@ -172,7 +172,7 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 		}
 	}
 	if drift > 0 {
-		slog.Warn("reconcile: 本轮发现漂移/缺失", "drift", drift, "total", len(tasks))
+		logx.Warn("reconcile: 本轮发现漂移/缺失", "drift", drift, "total", len(tasks))
 	}
 }
 
@@ -198,7 +198,7 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 	if res.Status == model.ReconcileInSync {
 		return nil
 	}
-	slog.Warn("reconcile: 漂移/缺失", "task", res.TaskKey, "status", res.Status,
+	logx.Warn("reconcile: 漂移/缺失", "task", res.TaskKey, "status", res.Status,
 		"source_ahead", res.SourceAhead, "target_ahead", res.TargetAhead, "msg", res.Message)
 	if s.outbox == nil {
 		return nil

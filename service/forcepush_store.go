@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"sync"
 	"time"
 
@@ -38,7 +38,7 @@ func (s *Service) ForcePushApprovals() *ForcePushStore { return s.approvals }
 func (st *ForcePushStore) List() []ForcePushApproval {
 	list, err := st.repo.All()
 	if err != nil {
-		slog.Error("list force-push approvals failed", "error", err)
+		logx.Error("list force-push approvals failed", "error", err)
 		return []ForcePushApproval{}
 	}
 	return list
@@ -125,7 +125,7 @@ func (st *ForcePushStore) Approve(id, actor string) (found bool, err error) {
 func (st *ForcePushStore) IsForcePushApproved(taskKey, branch, targetRef string) bool {
 	ok, err := st.repo.IsApproved(taskKey, branch, targetRef)
 	if err != nil {
-		slog.Error("query force-push approval failed", "error", err)
+		logx.Error("query force-push approval failed", "error", err)
 		return false
 	}
 	return ok
@@ -143,11 +143,11 @@ func (st *ForcePushStore) ConsumeForcePushApproval(taskKey, branch, targetRef st
 	defer st.mu.Unlock()
 	found, err := st.repo.ConsumeApproved(taskKey, branch, targetRef, time.Now().UTC())
 	if err != nil {
-		slog.Error("consume force-push approval failed", "error", err, "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
+		logx.Error("consume force-push approval failed", "error", err, "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
 		return
 	}
 	if found {
-		slog.Info("force-push approval consumed", "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
+		logx.Info("force-push approval consumed", "taskKey", taskKey, "branch", branch, "targetRef", targetRef)
 	}
 }
 
@@ -164,7 +164,7 @@ func (st *ForcePushStore) Revoke(id, actor string) (found bool, err error) {
 		return false, err
 	}
 	if found {
-		slog.Info("force-push approval revoked", "id", id, "actor", actor)
+		logx.Info("force-push approval revoked", "id", id, "actor", actor)
 	}
 	return found, nil
 }

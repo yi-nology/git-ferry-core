@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"time"
 
@@ -73,9 +73,9 @@ func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) 
 		return err
 	}
 	if enqueued {
-		slog.Info("执行任务已入队", "task", taskKey, "trigger", trigger)
+		logx.Info("执行任务已入队", "task", taskKey, "trigger", trigger)
 	} else {
-		slog.Info("触发已合并:任务已有待执行作业", "task", taskKey, "trigger", trigger)
+		logx.Info("触发已合并:任务已有待执行作业", "task", taskKey, "trigger", trigger)
 	}
 	return nil
 }
@@ -111,13 +111,13 @@ func (s *Service) dispatchOnce() {
 	}
 	ids, err := s.jobs.ListPendingIDs(jobClaimBatch)
 	if err != nil {
-		slog.Error("job: 查询待执行作业失败", "error", err)
+		logx.Error("job: 查询待执行作业失败", "error", err)
 		return
 	}
 	for _, id := range ids {
 		claimed, err := s.jobs.Claim(id, s.instanceID, jobLeaseTTL)
 		if err != nil {
-			slog.Error("job: 认领失败", "id", id, "error", err)
+			logx.Error("job: 认领失败", "id", id, "error", err)
 			continue
 		}
 		if !claimed {
@@ -125,7 +125,7 @@ func (s *Service) dispatchOnce() {
 		}
 		job, err := s.jobs.FindByID(id)
 		if err != nil {
-			slog.Error("job: 认领后读取失败", "id", id, "error", err)
+			logx.Error("job: 认领后读取失败", "id", id, "error", err)
 			continue
 		}
 		s.executeJob(*job)
@@ -146,13 +146,13 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 		if err != nil {
 			// 执行权被占(本实例或跨实例有执行在跑)——良性繁忙:退避重排,
 			// 作业放回 pending 且 attempt 不增(毒丸预算只留给崩溃接管)。
-			slog.Warn("job: 执行权被占,退避重排(不占接管预算)", "id", job.ID, "task", job.TaskKey, "error", err)
+			logx.Warn("job: 执行权被占,退避重排(不占接管预算)", "id", job.ID, "task", job.TaskKey, "error", err)
 			if rerr := s.jobs.Reschedule(job.ID, s.instanceID, jobBusyBackoff); rerr != nil {
 				if oekiterrors.Is(rerr, repository.ErrLeaseLost) {
-					slog.Warn("job: 退避重排时已失锁(作业已被其它实例接管),本实例停手", "id", job.ID)
+					logx.Warn("job: 退避重排时已失锁(作业已被其它实例接管),本实例停手", "id", job.ID)
 					return
 				}
-				slog.Error("job: 退避重排失败", "id", job.ID, "error", rerr)
+				logx.Error("job: 退避重排失败", "id", job.ID, "error", rerr)
 			}
 			return
 		}
@@ -188,10 +188,10 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 		}
 		if cerr := s.jobs.Complete(job.ID, s.instanceID, runID, execErr); cerr != nil {
 			if oekiterrors.Is(cerr, repository.ErrLeaseLost) {
-				slog.Error("job: 完成落库时已失锁(执行结果未入终态,作业已被其它实例接管重试)", "id", job.ID)
+				logx.Error("job: 完成落库时已失锁(执行结果未入终态,作业已被其它实例接管重试)", "id", job.ID)
 				return
 			}
-			slog.Error("job: 完成落库失败", "id", job.ID, "error", cerr)
+			logx.Error("job: 完成落库失败", "id", job.ID, "error", cerr)
 		}
 	})
 }
@@ -200,13 +200,13 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 // 不放行执行权后直接失败终态 —— 这类失败重试无意义,重放会被毒丸拦。
 func (s *Service) failJobAndRelease(job model.ExecutionJob, release func(), cause error) {
 	release()
-	slog.Warn("job: 执行前失败,作业判失败", "id", job.ID, "task", job.TaskKey, "error", cause)
+	logx.Warn("job: 执行前失败,作业判失败", "id", job.ID, "task", job.TaskKey, "error", cause)
 	if cerr := s.jobs.Complete(job.ID, s.instanceID, 0, cause); cerr != nil {
 		if oekiterrors.Is(cerr, repository.ErrLeaseLost) {
-			slog.Warn("job: 失败落库时已失锁(作业已被其它实例接管重试)", "id", job.ID)
+			logx.Warn("job: 失败落库时已失锁(作业已被其它实例接管重试)", "id", job.ID)
 			return
 		}
-		slog.Error("job: 失败落库失败", "id", job.ID, "error", cerr)
+		logx.Error("job: 失败落库失败", "id", job.ID, "error", cerr)
 	}
 }
 
@@ -238,13 +238,13 @@ func (s *Service) renewLeaseTick(id uint, onLost func()) bool {
 		return true
 	case oekiterrors.Is(err, repository.ErrLeaseLost):
 		// 失锁:执行权已被其它实例接管,继续执行 = 脑裂分叉推送。
-		slog.Error("job: 续租发现已失锁,中止本次执行", "id", id, "error", err)
+		logx.Error("job: 续租发现已失锁,中止本次执行", "id", id, "error", err)
 		if onLost != nil {
 			onLost()
 		}
 		return false
 	default:
-		slog.Warn("job: 续租失败(lease 过期将被接管重试)", "id", id, "error", err)
+		logx.Warn("job: 续租失败(lease 过期将被接管重试)", "id", id, "error", err)
 		return true
 	}
 }
@@ -269,13 +269,13 @@ func (s *Service) reapExpiredJobs() {
 	}
 	requeued, poisoned, err := s.jobs.RequeueExpired(time.Now())
 	if err != nil {
-		slog.Error("job: 接管过期作业失败", "error", err)
+		logx.Error("job: 接管过期作业失败", "error", err)
 		return
 	}
 	if requeued > 0 || poisoned > 0 {
-		slog.Info("job: 接管过期作业", "requeued", requeued, "poisoned", poisoned)
+		logx.Info("job: 接管过期作业", "requeued", requeued, "poisoned", poisoned)
 	}
 	if _, err := s.jobs.CleanupFinished(context.Background(), jobFinishedRetention); err != nil {
-		slog.Warn("job: 清理已完成作业失败", "error", err)
+		logx.Warn("job: 清理已完成作业失败", "error", err)
 	}
 }

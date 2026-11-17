@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"sort"
@@ -273,7 +273,7 @@ func (s *Service) knownTaskPrefixes() map[string]string {
 	ctx := context.Background()
 	tasks, _, err := s.ListTasks(ctx, "", 0, repository.MaxPageSize)
 	if err != nil {
-		slog.Warn("RPO 报告:取任务列表失败,冷备将按文件名归组(可能不精确)", "error", err)
+		logx.Warn("RPO 报告:取任务列表失败,冷备将按文件名归组(可能不精确)", "error", err)
 		return out
 	}
 	for _, t := range tasks {

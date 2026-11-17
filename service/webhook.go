@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 	"net/http"
 	"strings"
 
@@ -163,7 +163,7 @@ func (s *Service) applyRules(ctx context.Context, repoKey string, event *model.W
 	// 此前只在 RetryEvent 里标记 processed,首次接收的事件会永远停在
 	// received,历史列表无法区分「待处理」和「已处理完」。
 	if _, err := s.webhooks.MarkEventProcessing(ctx, eventID); err != nil {
-		slog.Warn("mark event processing failed", "eventID", eventID, "error", err)
+		logx.Warn("mark event processing failed", "eventID", eventID, "error", err)
 	}
 	// **触发失败 ⇒ 事件落 failed 终态**(而不是 processed):
 	// 否则事件列表里与成功事件无法区分,运维看不出"这次没同步",
@@ -171,15 +171,15 @@ func (s *Service) applyRules(ctx context.Context, repoKey string, event *model.W
 	if err := s.webhooks.ApplyRules(ctx, repoKey, event, &s.lastTriggerTime, func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error {
 		return s.RunTaskWithTrigger(ctx, taskKey, trigger, webhookEventID)
 	}, &eventID); err != nil {
-		slog.Error("webhook 触发失败,事件标记为 failed", "eventID", eventID, "error", err)
+		logx.Error("webhook 触发失败,事件标记为 failed", "eventID", eventID, "error", err)
 		if mErr := s.webhooks.MarkEventFailed(event, err.Error()); mErr != nil {
-			slog.Error("mark event failed failed", "eventID", eventID, "error", mErr)
+			logx.Error("mark event failed failed", "eventID", eventID, "error", mErr)
 		}
 		return
 	}
 
 	if err := s.webhooks.MarkEventProcessed(event); err != nil {
-		slog.Error("mark event processed failed", "eventID", eventID, "error", err)
+		logx.Error("mark event processed failed", "eventID", eventID, "error", err)
 	}
 }
 

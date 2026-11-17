@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"sort"
 
 	"github.com/oekit/pkg/errors"
@@ -22,13 +22,13 @@ func (m *MirrorService) loadTagCommits(ctx context.Context, ch *model.MirrorChan
 	tagCommits := map[string]string{}
 	dir, cleanup, err := m.ensureRepo(ctx, ch)
 	if err != nil {
-		slog.Warn("mirror: 源仓库不可用,仅展示历史记录", "channel", channelID, "error", err)
+		logx.Warn("mirror: 源仓库不可用,仅展示历史记录", "channel", channelID, "error", err)
 		return tagCommits
 	}
 	defer cleanup()
 	infos, listErr := m.backend.GetTagList(ctx, dir)
 	if listErr != nil {
-		slog.Warn("mirror: 列出 tag 失败", "channel", channelID, "error", listErr)
+		logx.Warn("mirror: 列出 tag 失败", "channel", channelID, "error", listErr)
 		return tagCommits
 	}
 	for _, ti := range infos {

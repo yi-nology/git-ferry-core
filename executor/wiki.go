@@ -3,7 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,7 +94,7 @@ func (e *Executor) syncWiki(ctx context.Context, workDir string, task *model.Syn
 			// 降级无 reference 重试一次(与同源争用降级同形),绝不让
 			// "does not exist" 关键词把竞态吞成静默 skip。
 			if isCacheRaceNotRepo(err, cloneOpts.Reference) {
-				slog.Info("clone cache vanished mid-clone, retrying wiki clone without reference",
+				logx.Info("clone cache vanished mid-clone, retrying wiki clone without reference",
 					"error", err)
 				cloneOpts.Reference = ""
 				err = e.backend.Clone(ctx, cloneOpts)

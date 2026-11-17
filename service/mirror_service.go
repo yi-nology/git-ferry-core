@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/oekit/logx"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
-	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -151,7 +151,7 @@ func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release f
 			// 解锁不能挂在请求 ctx 上:请求早已取消 ⇒ 解锁必失败 ⇒ 锁要等 TTL。
 			if uerr := m.locker.Unlock(context.WithoutCancel(ctx), key, id); uerr != nil {
 				// 已过期易主或 redis 抖动：仅告警，TTL 会兜底
-				slog.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
+				logx.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
 			}
 		}, true, nil
 	case oekiterrors.Is(lerr, distlock.ErrLockNotAcquired):
@@ -164,7 +164,7 @@ func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release f
 			return func() {}, false, oekiterrors.New(fmt.Sprintf("通道 %d 跨实例锁不可用(Redis 异常),已按 mirror_lock_fail_closed 拒绝执行", chID))
 		}
 		// 默认可用性优先(单实例场景):降级为进程内互斥,不阻断镜像任务。
-		slog.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
+		logx.Warn("mirror: 跨实例锁获取失败,降级为进程内互斥", "channel", chID, "error", lerr)
 		return func() {}, true, nil
 	}
 }
@@ -574,13 +574,13 @@ func (m *MirrorService) ensureRepoLocked(ctx context.Context, ch *model.MirrorCh
 		if err = m.backend.Clone(ctx, gitbackend.CloneOptions{URL: repo.CloneURL, Path: dir, Auth: auth}); err != nil {
 			return "", cleanup, oekiterrors.Wrap(err, fmt.Sprintf("clone %s 失败", repo.CloneURL))
 		}
-		slog.Info("mirror: 已克隆源仓库", "channel", ch.ID, "dir", dir)
+		logx.Info("mirror: 已克隆源仓库", "channel", ch.ID, "dir", dir)
 		return dir, cleanup, nil
 	}
 
 	// 增量:fetch 全部 tag(远端固定 origin;失败则尝试重建)
 	if _, err = m.backend.Fetch(ctx, gitbackend.FetchOptions{RepoPath: dir, Remote: "origin", Tags: true, Auth: auth}); err != nil {
-		slog.Warn("mirror: 增量 fetch 失败,重建克隆", "channel", ch.ID, "error", err)
+		logx.Warn("mirror: 增量 fetch 失败,重建克隆", "channel", ch.ID, "error", err)
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
 			return "", cleanup, rmErr
 		}
@@ -863,7 +863,7 @@ func (m *MirrorService) ExecuteMirrorRun(ctx context.Context, channelID uint, in
 func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.MirrorChannel, t *model.MirrorTarget, in ExecuteMirrorRunInput) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("mirror run panic", "run", runID, "panic", r)
+			logx.Error("mirror run panic", "run", runID, "panic", r)
 			m.failRun(runID, fmt.Sprintf("内部错误: %v", r))
 		}
 	}()
@@ -877,7 +877,7 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 	// 再抢一次会因"自己已持有"而被判为占用 ⇒ 反而死锁。
 	unlock, lerr := m.lockChannelLocal(ctx, ch.ID)
 	if lerr != nil {
-		slog.Error("mirror run 等待通道闸门失败", "run", runID, "channel", ch.ID, "error", lerr)
+		logx.Error("mirror run 等待通道闸门失败", "run", runID, "channel", ch.ID, "error", lerr)
 		m.failRun(runID, fmt.Sprintf("等待通道锁失败: %v", lerr))
 		return
 	}
@@ -885,7 +885,7 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 
 	run, err := m.runs.FindByID(runID)
 	if err != nil {
-		slog.Error("mirror run load failed", "run", runID, "error", err)
+		logx.Error("mirror run load failed", "run", runID, "error", err)
 		return
 	}
 	now := time.Now()
@@ -914,7 +914,7 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 		run.Status = model.MirrorRunSuccess
 	}
 	_ = m.runs.Update(run)
-	slog.Info("mirror run finished", "run", runID, "status", run.Status)
+	logx.Info("mirror run finished", "run", runID, "status", run.Status)
 }
 
 // executePublish 逐 tag 调用 core Publish,行级结果互不阻塞。

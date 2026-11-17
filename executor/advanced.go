@@ -3,7 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -177,7 +177,7 @@ func (e *Executor) fetchTargetForDivergence(ctx context.Context, dir string,
 		if ferr := e.fetchTargetAll(ctx, dir, repo, platform); ferr != nil {
 			return false, oekiterrors.Wrap(err, "cannot verify divergence: target fetch failed")
 		}
-		slog.Info("目标端没有这些分支(首次推送),按无分歧处理",
+		logx.Info("目标端没有这些分支(首次推送),按无分歧处理",
 			"branches", strings.Join(knownBranches, ","), "error", err)
 		// 目标端可达、取回成功 ⇒ 状态已知(目标端确实没这些分支)
 		return true, nil

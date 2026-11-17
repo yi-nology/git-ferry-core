@@ -3,7 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/repository"
@@ -30,7 +30,7 @@ type dbTemplateStore struct {
 func (s *dbTemplateStore) List() []tpl.Template {
 	list, err := s.repo.All()
 	if err != nil {
-		slog.Error("template list failed", "error", err)
+		logx.Error("template list failed", "error", err)
 		return []tpl.Template{}
 	}
 	return list

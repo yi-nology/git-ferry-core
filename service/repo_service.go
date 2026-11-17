@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"net/url"
 	"strings"
 
@@ -128,7 +128,7 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 	// Update platform repo count
 	if repo.PlatformID > 0 && rs.platformRepository != nil {
 		if err := rs.platformRepository.UpdateRepoCount(repo.PlatformID); err != nil {
-			slog.Warn("create repo: failed to update platform repo count", "platform_id", repo.PlatformID, "error", err)
+			logx.Warn("create repo: failed to update platform repo count", "platform_id", repo.PlatformID, "error", err)
 		}
 	}
 
@@ -170,7 +170,7 @@ func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 	// Update platform repo count
 	if platformID > 0 && rs.platformRepository != nil {
 		if err := rs.platformRepository.UpdateRepoCount(platformID); err != nil {
-			slog.Warn("delete repo: failed to update platform repo count", "platform_id", platformID, "error", err)
+			logx.Warn("delete repo: failed to update platform repo count", "platform_id", platformID, "error", err)
 		}
 	}
 

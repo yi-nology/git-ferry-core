@@ -4,7 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"time"
 
 	"github.com/oekit/concurrency/loop"
@@ -50,7 +50,7 @@ func (s *Service) CleanupOldData(ctx context.Context, maxAge time.Duration) (eve
 			errs = append(errs, errors.Wrap(slot.Err, fmt.Sprintf("cleanup %s", cleanupTasks[i].name)))
 		}
 	}
-	slog.Info("data cleanup completed", "events_deleted", events, "runs_deleted", runs, "steps_deleted", steps)
+	logx.Info("data cleanup completed", "events_deleted", events, "runs_deleted", runs, "steps_deleted", steps)
 	return events, runs, steps, stderrors.Join(errs...)
 }
 
@@ -70,11 +70,11 @@ func (s *Service) recoverStuckWebhookEvents() {
 	}, func(ctx context.Context) {
 		n, err := s.webhooks.RecoverStuckEvents(ctx, stuckTimeout)
 		if err != nil {
-			slog.Error("回收卡住的 webhook 事件失败", "error", err)
+			logx.Error("回收卡住的 webhook 事件失败", "error", err)
 			return
 		}
 		if n > 0 {
-			slog.Info("已回收卡住的 webhook 事件", "count", n)
+			logx.Info("已回收卡住的 webhook 事件", "count", n)
 		}
 	}).Wait()
 }
@@ -99,11 +99,11 @@ func (s *Service) cleanupOldHistory() {
 		}
 		events, runs, steps, err := s.CleanupOldData(ctx, maxAge)
 		if err != nil {
-			slog.Error("清理过期执行历史失败", "error", err)
+			logx.Error("清理过期执行历史失败", "error", err)
 			return
 		}
 		if events+runs+steps > 0 {
-			slog.Info("已清理过期执行历史",
+			logx.Info("已清理过期执行历史",
 				"events", events, "runs", runs, "steps", steps,
 				"retention", maxAge)
 		}

@@ -3,7 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 	"sort"
@@ -224,7 +224,7 @@ func readGitBackend() gitbackend.GitBackend {
 	readBackendOnce.Do(func() {
 		b, err := gitbackend.NewGitBackend(gitbackend.Options{})
 		if err != nil {
-			slog.Warn("init git backend for read-only git failed", "error", err)
+			logx.Warn("init git backend for read-only git failed", "error", err)
 			return
 		}
 		readBackend = b

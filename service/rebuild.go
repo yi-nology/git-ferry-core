@@ -1,7 +1,7 @@
 package service
 
 import (
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 
 	"github.com/oekit/pkg/errors"
@@ -29,7 +29,7 @@ func (s *Service) prepareRebuildWorkDir(taskKey string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return errors.Wrap(err, "rebuild: 清空工作目录失败")
 	}
-	slog.Info("rebuild: 工作目录已清空,本次将从源重新克隆", "task", taskKey, "dir", dir)
+	logx.Info("rebuild: 工作目录已清空,本次将从源重新克隆", "task", taskKey, "dir", dir)
 	return nil
 }
 

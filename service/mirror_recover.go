@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 	"time"
 
 	"github.com/oekit/concurrency/loop"
@@ -36,7 +36,7 @@ func (m *MirrorService) RecoverStuckMirrorRuns(ctx context.Context, olderThan ti
 			return n, err
 		}
 		n++
-		slog.Warn("已回收卡住的镜像执行", "run", r.ID, "channel", r.ChannelID, "status", r.Status)
+		logx.Warn("已回收卡住的镜像执行", "run", r.ID, "channel", r.ChannelID, "status", r.Status)
 	}
 	return n, nil
 }
@@ -57,11 +57,11 @@ func (s *Service) recoverStuckMirrorRuns() {
 		}
 		n, err := s.mirror.RecoverStuckMirrorRuns(ctx, stuckTimeout)
 		if err != nil {
-			slog.Error("回收卡住的镜像执行失败", "error", err)
+			logx.Error("回收卡住的镜像执行失败", "error", err)
 			return
 		}
 		if n > 0 {
-			slog.Info("已回收卡住的镜像执行", "count", n)
+			logx.Info("已回收卡住的镜像执行", "count", n)
 		}
 	}).Wait()
 }

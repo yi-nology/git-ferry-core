@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 
 	"github.com/oekit/concurrency/async"
@@ -86,7 +86,7 @@ func (s *Service) DeleteTask(ctx context.Context, key string) error {
 	}
 	// 清理该任务残留的 workdir(成功执行后保留的增量 fetch 工作区),避免磁盘泄漏
 	if err := os.RemoveAll(s.GetTempDir(key)); err != nil {
-		slog.Error("failed to cleanup workdir on task delete", "error", err, "taskKey", key)
+		logx.Error("failed to cleanup workdir on task delete", "error", err, "taskKey", key)
 	}
 	return nil
 }
@@ -137,13 +137,13 @@ func (s *Service) RunTaskAsync(taskKey, trigger string, webhookEventID *uint) er
 		// rebuild 语义:拿到执行权之后再清工作目录(见 service/rebuild.go)。
 		if err := s.runWithRebuildPrep(taskKey, trigger); err != nil {
 			release()
-			slog.Error("rebuild: 清空工作目录失败,本次执行中止", "task", taskKey, "error", err)
+			logx.Error("rebuild: 清空工作目录失败,本次执行中止", "task", taskKey, "error", err)
 			return
 		}
 		run, err := s.executor.Execute(s.bgCtx, task, trigger, webhookEventID)
 		if err != nil {
 			// 结果已落 run 记录,这里仅留痕
-			slog.Warn("async task run failed", "task", taskKey, "error", err)
+			logx.Warn("async task run failed", "task", taskKey, "error", err)
 		}
 		s.finishRun(taskKey, trigger, run, err, release)
 	})

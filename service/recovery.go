@@ -1,7 +1,7 @@
 package service
 
 import (
-	"log/slog"
+	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
 
@@ -59,7 +59,7 @@ func (s *Service) ListRecoveryPoints(taskKey string, limit int) ([]model.Recover
 	}
 	if len(stale) > 0 {
 		if _, err := s.recovery.DeleteByIDs(stale); err != nil {
-			slog.Warn("recovery: 惰性清理失败", "stale", len(stale), "error", err)
+			logx.Warn("recovery: 惰性清理失败", "stale", len(stale), "error", err)
 		}
 	}
 	return alive, nil

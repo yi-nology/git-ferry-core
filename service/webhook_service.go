@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+	"github.com/oekit/logx"
 	"strings"
 	"sync"
 	"time"
@@ -146,7 +146,7 @@ func (ws *WebhookService) MarkEventProcessing(ctx context.Context, eventID uint)
 	event.Status = model.StatusProcessing
 	// targeted UPDATE,避免全字段回写大 payload
 	if err := ws.eventRepository.UpdateStatus(event.ID, model.StatusProcessing, nil); err != nil {
-		slog.Error("failed to update event status to processing", "eventID", eventID, "error", err)
+		logx.Error("failed to update event status to processing", "eventID", eventID, "error", err)
 	}
 	return event, nil
 }
@@ -158,7 +158,7 @@ func (ws *WebhookService) MarkEventProcessed(event *model.WebhookEvent) error {
 	event.ProcessedAt = &now
 	event.Status = model.StatusProcessed
 	if err := ws.eventRepository.UpdateStatus(event.ID, model.StatusProcessed, &now); err != nil {
-		slog.Error("failed to update event status to processed", "eventID", event.ID, "error", err)
+		logx.Error("failed to update event status to processed", "eventID", event.ID, "error", err)
 		return err
 	}
 	return nil
@@ -174,7 +174,7 @@ func (ws *WebhookService) MarkEventFailed(event *model.WebhookEvent, reason stri
 	event.Status = model.StatusFailed
 	event.ErrorMessage = reason
 	if err := ws.eventRepository.UpdateStatusAndError(event.ID, model.StatusFailed, &now, reason); err != nil {
-		slog.Error("failed to update event status to failed", "eventID", event.ID, "error", err)
+		logx.Error("failed to update event status to failed", "eventID", event.ID, "error", err)
 		return err
 	}
 	return nil
@@ -226,7 +226,7 @@ func (ws *WebhookService) FindEventByID(id uint) (*model.WebhookEvent, error) {
 func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event *model.WebhookEvent, lastTriggerTime *sync.Map, runTaskFn func(ctx context.Context, taskKey, trigger string, webhookEventID *uint) error, webhookEventID *uint) error {
 	rules, err := ws.ruleRepository.FindByRepoKey(repoKey)
 	if err != nil {
-		slog.Error("find rules failed", "repoKey", repoKey, "error", err)
+		logx.Error("find rules failed", "repoKey", repoKey, "error", err)
 		return err
 	}
 
@@ -267,14 +267,14 @@ func (ws *WebhookService) ApplyRules(ctx context.Context, repoKey string, event 
 					key := fmt.Sprintf("%s:%s", rule.RepoKey, taskKey)
 					if lastTime, ok := lastTriggerTime.Load(key); ok {
 						if t, ok := lastTime.(time.Time); ok && time.Since(t) < time.Duration(rule.MinInterval)*time.Second {
-							slog.Warn("skipping due to min interval", "taskKey", taskKey, "minInterval", rule.MinInterval)
+							logx.Warn("skipping due to min interval", "taskKey", taskKey, "minInterval", rule.MinInterval)
 							continue
 						}
 					}
 					lastTriggerTime.Store(key, time.Now())
 				}
 				if err := runTaskFn(ctx, taskKey, model.TriggerWebhook, webhookEventID); err != nil {
-					slog.Error("run task failed", "taskKey", taskKey, "error", err)
+					logx.Error("run task failed", "taskKey", taskKey, "error", err)
 					failures = append(failures, fmt.Sprintf("触发任务 %s 失败:%v", taskKey, err))
 				}
 			}

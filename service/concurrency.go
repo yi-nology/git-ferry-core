@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log/slog"
+	"github.com/oekit/logx"
 	"time"
 
 	"github.com/google/uuid"
@@ -168,12 +168,12 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 		case err != nil:
 			failures++
 			if failures%3 == 1 { // 每 3 次失败记一条日志,避免刷屏
-				slog.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err, "consecutive_failures", failures)
+				logx.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err, "consecutive_failures", failures)
 			}
 		case !renewed:
 			// 槽已丢失(过期回收或已被释放):配额可能已被其他 Acquire 接管,
 			// 此时续期无意义——上游只允许续期未过期的槽,复活即超限。
-			slog.Warn("watchdog: semaphore slot lost", "semID", semID)
+			logx.Warn("watchdog: semaphore slot lost", "semID", semID)
 		default:
 			failures = 0
 		}
@@ -185,10 +185,10 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
 		if err := g.locker.Unlock(releaseCtx, lockKey, ownerID); err != nil {
-			slog.Warn("release: failed to unlock", "lockKey", lockKey, "error", err)
+			logx.Warn("release: failed to unlock", "lockKey", lockKey, "error", err)
 		}
 		if err := g.sem.Release(releaseCtx, semID); err != nil {
-			slog.Warn("release: failed to release semaphore slot", "semID", semID, "error", err)
+			logx.Warn("release: failed to release semaphore slot", "semID", semID, "error", err)
 		}
 	}, nil
 }
@@ -215,7 +215,7 @@ func (g *redisGuard) TryCronLock(ctx context.Context, taskKey string, ttl time.D
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := g.locker.Unlock(releaseCtx, key, ownerID); err != nil {
-			slog.Warn("cron lock release failed", "key", key, "error", err)
+			logx.Warn("cron lock release failed", "key", key, "error", err)
 		}
 	}
 	return release, true, nil
