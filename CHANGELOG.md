@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [v0.52.0] - 2026-11-17
 
 ### Changed（完整替换：repository 全量 gormrepo 化 + SDK RunRaw 收口）
 
@@ -15,6 +15,10 @@
   - `ReconcileRepository.Get` / `ExecutionJobRepository.FindByID` /
     `MigrationMappingRepository.Find` 统一走 `getByID` / `getByCondition`
     （查无此条 = `repository.ErrNotFound`）。
+- **`ExecutionJobRepository.Enqueue` 删除手写入队 SQL**：改为事务内锁定读
+  状态行 + `clause.OnConflict{DoNothing}` 抢占 `active_key` 唯一槽位
+  （与 #36 的 generation 合并语义配套）；`AutoRetryChainStats` 的
+  `COALESCE(MAX/MIN(id), 0)` 改用 GORM `Order + Limit + Scan`。
 - **git 执行收口到 SDK `RunRaw`**：`runGitThroughBackend` / `runGitQuiet`
   以 `gitbackend.NativeGitBackend.RunRaw` 为唯一主路径；仅当 SDK 明确
   返回「子命令不在白名单」时回落本地 git（bundle / fsck / reset /
@@ -50,7 +54,7 @@
   唯一事实源；各实例不再维护本地 robfig 表，周期扫描后以单条条件更新
   `UPDATE ... SET next_fire_at=? WHERE key=? AND next_fire_at<=now` 抢占，
   跨实例配置一致，持有者退出后任意实例下一轮接手。配置更新不会用旧快照
-  回写 `next_fire_at`（`SyncTaskDAO.Update` 显式 Omit）。迁移 v11。
+  回写 `next_fire_at`（`SyncTaskRepository.Update` 列白名单显式排除）。迁移 v11。
 - **#41 [migrate] Issue 迁移身份键改为源编号**:新增 `migration_mappings`
   表，身份键 `(source_platform, source_repo, object_type, source_number)`，
   标题只作展示字段——同标题的多个源 Issue 不再归并。迁移前先查映射：
@@ -81,6 +85,99 @@
 - v11 `sync_tasks.next_fire_at`（含索引）
 - v12 `retry_schedules`
 - v13 `migration_mappings`
+
+### Changed（repository 层收编 gormrepo + Save 丢更新防护）
+
+- **`dao` 包 → `repository` 包**：类型 `XxxDAO` → `XxxRepository`
+  （Repo 实体为 `RepoRepository`）、构造 `NewXxxRepository`、文件
+  `*_dao.go` → `*_repository.go`；服务层局部变量同步
+  （`taskRepository` / `repoRepository` 等）。壳层 `internal/corebridge`
+  已同步，随 core 升版提交。**破坏性变更**：所有
+  `github.com/yi-nology/git-ferry-core/dao` 引用改为 `.../repository`。
+- **23 个 Repository 全部嵌入 `base[T, ID]`（内嵌 `gormrepo`）**：通用
+  按主键建/读/改/删走 `gormrepo.GormRepository[T, ID]`；按业务键取单条走
+  `getByCondition`（查无此条统一 `repository.ErrNotFound`）。
+- **全部 `db.Save` 替换**（`grep '\.Save('` 已清零）：
+  - 配置实体 Update 走**列白名单**：不写回 `id/created_at/updated_at/
+    deleted_at`，且 0 行命中即结束（不再触发 Save 的 upsert 旁路）；
+  - `ForcePushApproval.ConsumeApproved` 改「候选行 + `consumed_at IS NULL`
+    条件更新」的 CAS：同一条放行不会被并发消费两次；`Revoke` 只写
+    `revoked_at/revoked_by`，不会把并发的消费状态覆盖回未消费；
+  - `HistoryOverride.Upsert` 更新分支走列白名单；`Template.Save` 改
+    `ON CONFLICT` 业务列 upsert；`WebhookRule.Update` 关联替换后按列
+    白名单回写；`SyncRunRepository.UpdateInTx` 供「run 终态 + outbox
+    同事务」路径使用。
+  - 四个特殊语义 Repository（execution_job 的 CAS/原语队列、outbox_event
+    的批标记、pending_trigger 的 upsert、reconcile 的复合主键 upsert）
+    同样嵌入基座承担单条 CRUD，特化 SQL 保留手写。
+- 回归测试：`repository/save_protection_test.go`（不 upsert /
+  `created_at` 不被覆写 / 放行只消费一次 / 撤销不覆盖消费状态）。
+
+### Changed（删除兼容层——统一 ErrNotFound + 清理死代码）
+
+- **Repository 查无此条统一返回 `repository.ErrNotFound`**：删除
+  `notFoundAsNil` 的 `(nil, nil)` 兼容映射；`service.Classify` 把该哨兵
+  归入 404。服务层公开 Get/Find 归一化为领域哨兵（`ErrTaskNotFound` /
+  `ErrRepoNotFound` / `ErrPlatformNotFound` / `ErrRuleNotFound` /
+  `ErrEventNotFound` / `tpl.ErrNotFound`）。**破坏性变更**：调用方不得
+  再用 `obj == nil` 判断缺失，统一
+  `errors.Is(err, repository.ErrNotFound)`。
+- 删除 `model.InitDB` 旧入口（统一 `InitDBWithPool`，连接池在 Open 时下发）。
+- 删除 repository 层已无调用方的冗余查询及其测试：`FindByCloneURL` /
+  `FindByPlatformAndRepo` / `FindDefault` / `FindByPath` /
+  `FindLatestByChannel`。
+- `WebhookRuleRepository.FindByID` 改用 gormrepo `GetOne + Preload`
+  查询构建器。
+- 保留的**数据格式**兼容（需要数据迁移而非删代码，不属本轮）：
+  平台/仓库密文解密失败按存量明文读取、`executor/crypt.go` 旧密文格式、
+  schema baseline 存量收敛。
+
+### Changed（深度收编 oekit——配置加载 + 子进程治理 + 小工具）
+
+- **配置加载改 `oekit/core/config`**：`model.LoadConfig` 用
+  `config.LoadFile`（YAML → tag 接线）+ `config.ApplyEnvOverlay`
+  （env 覆盖 YAML，含显式零值 false/0），删除
+  `sethvargo/go-envconfig` 与手写 `yaml.Unmarshal` 分支；新增 YAML 内
+  `${VAR}` / `${VAR:default}` 展开能力。
+- **子进程治理改 `oekit/pkg/procx`**：3 处 `exec.CommandContext` 全部替换为
+  `procx.Command`——ctx 取消/超时时**整棵进程树**终止（含跨组逃逸后代）。
+  修复 `post_exec` 脚本 fork 孙子进程时，`WaitDelay` 只能关管道、杀不掉树
+  的缺口；git 回落与 lifecycle 漂移检测同轨升级。
+- `derefStr` / `containsLine` 手写工具删除，改用
+  `oekit/pkg/ptrx.Deref` / `oekit/pkg/stringx.Contains`。
+- 依赖变化：+`github.com/oekit/core v0.15.2`；
+  −`sethvargo/go-envconfig`（`gopkg.in/yaml.v3` 降为 indirect）。
+
+### Changed（业务日志统一走 oekit/logx）
+
+- 36 个文件的 `log/slog` 调用（Info/Warn/Error/Debug，共 **173 处**）
+  改为 `github.com/oekit/logx` 门面；`pkg/proclog` 仍保留 slog ↔ logx
+  桥接（`SetDefault` / `Handler` 由宿主进程配置）。
+- 生产输出不变：`proclog.Setup` 已把 logx 接到同一个 `slog.Handler`；
+  core 单独运行（未调 proclog）时走 logx 默认 std logger（`LOG_LEVEL`
+  控级），不再依赖宿主先配置 slog。
+
+### Changed（五件收编——timex/cron / tarx / lifecycle / metrics / tracing / httpjson）
+
+- **cron 表达式解析**：`robfig/cron` → **`oekit/pkg/timex/cron`**。
+  调度本身沿用 v0.51.0 的 **DB 共享调度**（`sync_tasks.next_fire_at` +
+  条件更新抢占，#40）——`timertask/local` 是单实例本地调度器，与
+  「DB 是唯一事实源」的目标冲突，本轮明确不引入。
+- **冷备归档**：`archive/zip` → **`oekit/pkg/tarx`**；`sync.backup_format`
+  取值 `zip` → `tar`，产物后缀 `.tar` / `.tar.enc`。**破坏性变更**：
+  存量 `.zip` 冷备与 `backup_format=zip` 配置不再识别（启动校验直接拒绝）。
+- **优雅关停**：`Service.doStop` 改用 **`oekit/core/lifecycle.Manager`**：
+  后台 goroutine 先收敛，再按注册顺序关闭 Redis 锁 / 并发器 / DB
+  （逐资源超时 + 错误聚合）。
+- **指标**：**`oekit/metrics`** 注册 `gitferry_sync_runs_total`、
+  `gitferry_sync_run_duration_seconds`、`gitferry_execution_queue_pending`。
+- **追踪**：**`gormotel`**（SQL span）+ **`redisotel`**（Redis span）；
+  未调用 `tracing.Init` 时 Span 为 noop。
+- **出站上传**：手写 `http.NewRequest` + `DefaultClient` →
+  **`oekit/pkg/httpjson.DoRaw`**（S3 / WebDAV / Azure；V4/SharedKey 签名
+  在 header 钩子内完成，统一 5 分钟超时与限容读体）。
+- 依赖变化：+`tracing v0.4.7` / `metrics v0.4.1`；`oekit/core` **v0.15.3**；
+  `oekit/pkg` v0.48 → **v0.52**。
 
 ## [v0.51.0] - 2026-11-17
 
@@ -171,115 +268,6 @@
 - 依赖地板：logx v0.10.0 → v0.11.0、concurrency v0.35.0 → v0.36.0
   （gormx / redisx 传递抬升）。
 - 有意不迁：`dao.Paginate` 保持 offset 契约（gormx.Paginate 是 page 制）。
-
-### Changed（repository 层收编 gormrepo + Save 丢更新防护）
-
-- **`dao` 包 → `repository` 包**：类型 `XxxDAO` → `XxxRepository`
-  （Repo 实体为 `RepoRepository`）、构造 `NewXxxRepository`、文件
-  `*_dao.go` → `*_repository.go`；服务层局部变量同步
-  （`taskRepository` / `repoRepository` 等）。壳层 `internal/corebridge`
-  已同步，随 core 升版提交。**破坏性变更**：所有
-  `github.com/yi-nology/git-ferry-core/dao` 引用改为 `.../repository`。
-- **14 个 Repository 嵌入 gormrepo 基座**：通用按主键建/读/改/删走
-  `gormrepo.GormRepository[T, ID]`；按业务键取单条走
-  `GetByCondition`（查无此条统一 `repository.ErrNotFound`）。
-- **18 处 `db.Save` 全部替换**（`grep '\.Save('` 已清零）：
-  - 配置实体 Update 走**列白名单**：不写回 `id/created_at/updated_at/
-    deleted_at`，且 0 行命中即结束（不再触发 Save 的 upsert 旁路）；
-  - `ForcePushApproval.ConsumeApproved` 改「候选行 + `consumed_at IS NULL`
-    条件更新」的 CAS：同一条放行不会被并发消费两次；`Revoke` 只写
-    `revoked_at/revoked_by`，不会把并发的消费状态覆盖回未消费；
-  - `HistoryOverride.Upsert` 更新分支走列白名单；`Template.Save` 改
-    `ON CONFLICT` 业务列 upsert；`WebhookRule.Update` 关联替换后按列
-    白名单回写；`SyncRunRepository.UpdateInTx` 供「run 终态 + outbox
-    同事务」路径使用。
-  - 仍保留手写 SQL 的四个 Repository（execution_job 的 CAS/原语队列、
-    outbox_event 的批标记、pending_trigger 的 upsert、reconcile 的
-    复合主键 upsert）按设计不收编泛型层。
-- 回归测试：`repository/save_protection_test.go`（不 upsert /
-  `created_at` 不被覆写 / 放行只消费一次 / 撤销不覆盖消费状态）。
-
-### Changed（删除兼容层——统一 ErrNotFound + 清理死代码）
-
-- **Repository 查无此条统一返回 `repository.ErrNotFound`**：删除
-  `notFoundAsNil` 的 `(nil, nil)` 兼容映射；`service.Classify` 把该哨兵
-  归入 404。服务层公开 Get/Find 归一化为领域哨兵（`ErrTaskNotFound` /
-  `ErrRepoNotFound` / `ErrPlatformNotFound` / `ErrRuleNotFound` /
-  `ErrEventNotFound` / `tpl.ErrNotFound`）。**破坏性变更**：调用方不得
-  再用 `obj == nil` 判断缺失，统一
-  `errors.Is(err, repository.ErrNotFound)`。
-- 删除 `model.InitDB` 旧入口（统一 `InitDBWithPool`，连接池在 Open 时下发）。
-- 删除 repository 层已无调用方的冗余查询及其测试：`FindByCloneURL` /
-  `FindByPlatformAndRepo` / `FindDefault` / `FindByPath` /
-  `FindLatestByChannel`。
-- `WebhookRuleRepository.FindByID` 改用 gormrepo `GetOne + Preload`
-  查询构建器。
-- 保留的**数据格式**兼容（需要数据迁移而非删代码，不属本轮）：
-  平台/仓库密文解密失败按存量明文读取、`executor/crypt.go` 旧密文格式、
-  schema baseline 存量收敛。
-
-### Changed（手写 SQL 收编——execution_jobs 活动槽唯一约束）
-
-- `ExecutionJobRepository.Enqueue` 不再执行手写
-  `INSERT ... SELECT ... WHERE NOT EXISTS`：`execution_jobs` 新增
-  `active_task_key` 唯一索引（数据库级活动槽），入队改
-  `clause.OnConflict{DoNothing}`，由唯一约束保证「每任务至多一条
-  pending/claimed 作业」；`Complete` 与毒丸分支置 NULL 释放槽位。
-- schema **v7** 迁移：加列 + 唯一索引 + 回填存量 pending/claimed 行。
-  **破坏性变更（滚动升级）**：旧版本不写 `active_task_key`，新旧混跑
-  窗口去重失效——与上一节迁移锁变更一起，先停旧副本再启新副本。
-- 移除 `enqueueJobSQL` 及其语句文本测试（反引号钉死测试随裸 SQL 一并删除）；
-  `AutoRetryChainStats` 的 `COALESCE(MAX/MIN(id), 0)` 改用 GORM
-  `Order + Limit + Scan` 构建器。
-- 其余 SQL 片段均为 GORM 构建器形态（`CountByStatus` 的 `count(*)`
-  聚合、列投影、`gorm.Expr` 原子自增），无字符串拼接、无用户输入。
-
-### Changed（深度收编 oekit——配置加载 + 子进程治理 + 小工具）
-
-- **配置加载改 `oekit/core/config`**：`model.LoadConfig` 用
-  `config.LoadFile`（YAML → tag 接线）+ `config.ApplyEnvOverlay`
-  （env 覆盖 YAML，含显式零值 false/0），删除
-  `sethvargo/go-envconfig` 与手写 `yaml.Unmarshal` 分支；新增 YAML 内
-  `${VAR}` / `${VAR:default}` 展开能力。
-- **子进程治理改 `oekit/pkg/procx`**：3 处 `exec.CommandContext` 全部替换为
-  `procx.Command`——ctx 取消/超时时**整棵进程树**终止（含跨组逃逸后代）。
-  修复 `post_exec` 脚本 fork 孙子进程时，`WaitDelay` 只能关管道、杀不掉树
-  的缺口；git 回落与 lifecycle 漂移检测同轨升级。
-- `derefStr` / `containsLine` 手写工具删除，改用
-  `oekit/pkg/ptrx.Deref` / `oekit/pkg/stringx.Contains`。
-- 依赖变化：+`github.com/oekit/core v0.15.2`；
-  −`sethvargo/go-envconfig`（`gopkg.in/yaml.v3` 降为 indirect）。
-
-### Changed（业务日志统一走 oekit/logx）
-
-- 36 个文件的 `log/slog` 调用（Info/Warn/Error/Debug，共 **173 处**）
-  改为 `github.com/oekit/logx` 门面；`pkg/proclog` 仍保留 slog ↔ logx
-  桥接（`SetDefault` / `Handler` 由宿主进程配置）。
-- 生产输出不变：`proclog.Setup` 已把 logx 接到同一个 `slog.Handler`；
-  core 单独运行（未调 proclog）时走 logx 默认 std logger（`LOG_LEVEL`
-  控级），不再依赖宿主先配置 slog。
-
-### Changed（五件收编——timex/cron / tarx / lifecycle / metrics / tracing / httpjson）
-
-- **cron 表达式解析**：`robfig/cron` → **`oekit/pkg/timex/cron`**。
-  调度本身沿用 v0.51.0 的 **DB 共享调度**（`sync_tasks.next_fire_at` +
-  条件更新抢占，#40）——`timertask/local` 是单实例本地调度器，与
-  「DB 是唯一事实源」的目标冲突，本轮明确不引入。
-- **冷备归档**：`archive/zip` → **`oekit/pkg/tarx`**；`sync.backup_format`
-  取值 `zip` → `tar`，产物后缀 `.tar` / `.tar.enc`。**破坏性变更**：
-  存量 `.zip` 冷备与 `backup_format=zip` 配置不再识别（启动校验直接拒绝）。
-- **优雅关停**：`Service.doStop` 改用 **`oekit/core/lifecycle.Manager`**：
-  后台 goroutine 先收敛，再按注册顺序关闭 Redis 锁 / 并发器 / DB
-  （逐资源超时 + 错误聚合）。
-- **指标**：**`oekit/metrics`** 注册 `gitferry_sync_runs_total`、
-  `gitferry_sync_run_duration_seconds`、`gitferry_execution_queue_pending`。
-- **追踪**：**`gormotel`**（SQL span）+ **`redisotel`**（Redis span）；
-  未调用 `tracing.Init` 时 Span 为 noop。
-- **出站上传**：手写 `http.NewRequest` + `DefaultClient` →
-  **`oekit/pkg/httpjson.DoRaw`**（S3 / WebDAV / Azure；V4/SharedKey 签名
-  在 header 钩子内完成，统一 5 分钟超时与限容读体）。
-- 依赖变化：+`tracing v0.4.7` / `metrics v0.4.1`；`oekit/core` **v0.15.3**；
-  `oekit/pkg` v0.48 → **v0.52**。
 
 ## [v0.50.0] - 2026-11-17
 
