@@ -62,9 +62,9 @@ func TestRecordRecoveryPoint(t *testing.T) {
 	require.Len(t, rec.got, 1)
 	assert.Contains(t, rec.got[0], "t-rec|a.bundle|bundle|deadbeef")
 
-	// format 显式传 zip 时透传
-	e.recordRecoveryPoint(rc, bundlePath, "zip")
-	assert.Contains(t, rec.got[1], "|zip|")
+	// format 显式传 tar 时透传
+	e.recordRecoveryPoint(rc, bundlePath, "tar")
+	assert.Contains(t, rec.got[1], "|tar|")
 }
 
 // TestRecordRecoveryPoint_Degrades 三种降级:未接线/RevParse 失败/记录失败

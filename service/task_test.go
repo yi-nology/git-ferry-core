@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/robfig/cron/v3"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
@@ -37,9 +36,9 @@ func setupTaskTestService(t *testing.T) (*Service, *gorm.DB) {
 	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, nil)
 
 	svc := &Service{
-		tasks:        taskService,
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
+		tasks:    taskService,
+		cron:     newTestCronScheduler(t),
+		cronKeys: make(map[string]string),
 		config: &model.Config{
 			Sync: model.SyncConfig{
 				DefaultTimeout: 300,
@@ -120,7 +119,7 @@ func TestCreateTask_WithCron(t *testing.T) {
 	}
 
 	// Verify cron job was added
-	if _, exists := svc.cronEntryIDs[task.Key]; !exists {
+	if _, exists := svc.cronKeys[task.Key]; !exists {
 		t.Error("expected cron job to be added")
 	}
 }
@@ -281,7 +280,7 @@ func TestDeleteTask(t *testing.T) {
 	}
 
 	// Verify cron job exists
-	if _, exists := svc.cronEntryIDs[created.Key]; !exists {
+	if _, exists := svc.cronKeys[created.Key]; !exists {
 		t.Error("expected cron job to exist before deletion")
 	}
 
@@ -301,7 +300,7 @@ func TestDeleteTask(t *testing.T) {
 	}
 
 	// Verify cron job is removed
-	if _, exists := svc.cronEntryIDs[created.Key]; exists {
+	if _, exists := svc.cronKeys[created.Key]; exists {
 		t.Error("expected cron job to be removed after deletion")
 	}
 }
@@ -400,9 +399,9 @@ func TestPreviewSync_WithRepoRepo(t *testing.T) {
 	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
 
 	svc := &Service{
-		tasks:        taskService,
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
+		tasks:    taskService,
+		cron:     newTestCronScheduler(t),
+		cronKeys: make(map[string]string),
 	}
 
 	ctx := context.Background()
@@ -464,9 +463,9 @@ func TestPreviewSync_MissingRepo(t *testing.T) {
 	taskService := NewTaskService(taskRepository, runRepository, runStepRepository, repoRepository)
 
 	svc := &Service{
-		tasks:        taskService,
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
+		tasks:    taskService,
+		cron:     newTestCronScheduler(t),
+		cronKeys: make(map[string]string),
 	}
 
 	ctx := context.Background()

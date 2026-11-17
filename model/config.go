@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/oekit/core/config"
 	"github.com/oekit/pkg/errors"
@@ -115,7 +116,7 @@ type SyncConfig struct {
 	// PostExecScript 同步结束（成功或失败）后执行的脚本；
 	// 注入 GITFERRY_TASK / GITFERRY_RESULT / GITFERRY_RUN_ID / GITFERRY_TRIGGER。
 	PostExecScript string `yaml:"post_exec_script" env:"GIT_SYNC_POST_EXEC_SCRIPT"`
-	// BackupFormat 冷备形态:bundle(默认,git 语义) | zip(人工取件友好)
+	// BackupFormat 冷备形态:bundle(默认,git 语义) | tar(人工取件友好)
 	BackupFormat string `yaml:"backup_format" env:"GIT_SYNC_BACKUP_FORMAT"`
 	// BackupRemotes 额外备份远端（GitHub/GitLab 等），同步成功后 push 镜像副本。
 	// 与「镜像中心开源发布」区分：此处不改写 module 身份，纯备份。
@@ -257,6 +258,11 @@ func (c *Config) Validate() error {
 	// IsAbs 同时挡住这两种形态;空=关闭放行。
 	if c.Sync.CloneCacheDir != "" && !filepath.IsAbs(c.Sync.CloneCacheDir) {
 		return errors.New(fmt.Sprintf("sync.clone_cache_dir must be an absolute path (got %q; ~ is not expanded)", c.Sync.CloneCacheDir))
+	}
+	switch strings.ToLower(c.Sync.BackupFormat) {
+	case "", "bundle", "tar":
+	default:
+		return errors.New(fmt.Sprintf("unsupported sync.backup_format %q (bundle|tar)", c.Sync.BackupFormat))
 	}
 	if c.Webhook.RateLimit <= 0 {
 		c.Webhook.RateLimit = DefaultWebhookRateLimit

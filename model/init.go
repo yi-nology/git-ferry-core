@@ -9,6 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/oekit/gormx"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/tracing/gormotel"
 	"github.com/yi-nology/git-ferry-core/tpl"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -88,6 +89,10 @@ func InitDBWithPool(driver, dsn string, pool DBPoolOptions) (*gorm.DB, error) {
 	db, err := gormx.Open(dialector, opts...)
 	if err != nil {
 		return nil, err
+	}
+	// SQL Span:显式装饰器(未 tracing.Init 时 noop,无实害)。
+	if err := db.Use(gormotel.NewPlugin()); err != nil {
+		return nil, oekiterrors.Wrap(err, "install gorm otel plugin")
 	}
 
 	// schema 迁移:基线(AutoMigrate)+ 版本化迁移,见 migrate.go。

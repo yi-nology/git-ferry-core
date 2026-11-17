@@ -112,6 +112,28 @@
   core 单独运行（未调 proclog）时走 logx 默认 std logger（`LOG_LEVEL`
   控级），不再依赖宿主先配置 slog。
 
+### Changed（五件收编——timertask / tarx / lifecycle / metrics / tracing / httpjson）
+
+- **cron 调度器**：`robfig/cron` → **`oekit/timertask/local`**（业务键
+  `ScheduleFor` / `UnscheduleFor`）；新增 30s「DB 启用集 → 调度器」
+  `Reconcile` 对账，跨实例新建/改/停用 cron 在 30s 内生效（#40）；
+  cron 表达式校验改 `oekit/pkg/timex/cron`。
+- **冷备归档**：`archive/zip` → **`oekit/pkg/tarx`**；`sync.backup_format`
+  取值 `zip` → `tar`，产物后缀 `.tar` / `.tar.enc`。**破坏性变更**：
+  存量 `.zip` 冷备与 `backup_format=zip` 配置不再识别（启动校验直接拒绝）。
+- **优雅关停**：`Service.doStop` 改用 **`oekit/core/lifecycle.Manager`**：
+  后台 goroutine 先收敛，再按注册顺序关闭 Redis 锁 / 并发器 / DB
+  （逐资源超时 + 错误聚合）。
+- **指标**：**`oekit/metrics`** 注册 `gitferry_sync_runs_total`、
+  `gitferry_sync_run_duration_seconds`、`gitferry_execution_queue_pending`。
+- **追踪**：**`gormotel`**（SQL span）+ **`redisotel`**（Redis span）；
+  未调用 `tracing.Init` 时 Span 为 noop。
+- **出站上传**：手写 `http.NewRequest` + `DefaultClient` →
+  **`oekit/pkg/httpjson.DoRaw`**（S3 / WebDAV / Azure；V4/SharedKey 签名
+  在 header 钩子内完成，统一 5 分钟超时与限容读体）。
+- 依赖变化：+`timertask v0.5.5` / `tracing v0.4.7` / `metrics v0.4.1`；
+  `oekit/pkg` v0.48 → **v0.52**。
+
 ## [v0.50.0] - 2026-11-17
 
 ### Changed（go-git-platform v0.143.0——四层布局重构全量迁移）

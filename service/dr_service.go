@@ -301,7 +301,7 @@ func resolveBundleTaskKey(name string, known map[string]string) string {
 		return bestKey
 	}
 	base := name
-	for _, suf := range []string{".bundle.enc", ".zip.enc", ".bundle", ".zip"} {
+	for _, suf := range []string{".bundle.enc", ".tar.enc", ".bundle", ".tar"} {
 		if strings.HasSuffix(base, suf) {
 			base = strings.TrimSuffix(base, suf)
 			break

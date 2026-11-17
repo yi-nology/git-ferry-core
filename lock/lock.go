@@ -6,10 +6,12 @@
 package lock
 
 import (
+	"context"
 	"time"
 
 	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
+	"github.com/oekit/tracing/redisotel"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -74,7 +76,16 @@ func NewRedisClient(addr, password string, db int, opts ...Option) (*redisx.Clie
 	for _, opt := range opts {
 		opt(o)
 	}
-	return redisx.NewClient(o, redisx.WithPrefix(RedisKeyPrefix))
+	client, err := redisx.NewClient(o, redisx.WithPrefix(RedisKeyPrefix))
+	if err != nil {
+		return nil, err
+	}
+	// Redis Span:显式装饰器(未 tracing.Init 时 noop)。
+	if err := redisotel.InstrumentTracing(client.Client()); err != nil {
+		_ = client.Close(context.Background())
+		return nil, err
+	}
+	return client, nil
 }
 
 // ⚠️ **WithMaxAutoRenew 的「最大生命周期安全网」现已可用**:

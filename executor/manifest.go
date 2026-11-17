@@ -181,7 +181,7 @@ func VerifyManifest(backupDir string) (*ManifestVerifyResult, error) {
 	// 运维看到的是**绿色通过**,而实际什么都没校验(发到异地的密文件也不在覆盖范围)。
 	if res.OK && len(fresh.Entries) == 0 {
 		res.OK = false
-		res.Message = "没有可校验的冷备产物(备份目录里没有 .bundle/.zip 产物)—— 校验未实际执行"
+		res.Message = "没有可校验的冷备产物(备份目录里没有 .bundle/.tar 产物)—— 校验未实际执行"
 	} else if res.OK {
 		res.Message = "backup integrity verified: merkle root matches"
 	} else {

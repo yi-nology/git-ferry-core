@@ -16,7 +16,7 @@ type RecoveryPoint struct {
 	// 存文件名而非绝对路径——backup_dir 配置迁移后仍可按当前配置定位;
 	// 文件被轮转删除后由查询侧惰性清理。
 	FileName string `json:"fileName" gorm:"size:255;not null"`
-	// Format bundle | zip(与 sync.backup_format 一致)。
+	// Format bundle | tar(与 sync.backup_format 一致)。
 	Format string `json:"format" gorm:"size:10"`
 	// SourceSHA 冷备时源分支 HEAD(RevParse)——恢复点的「状态锚」。
 	SourceSHA string `json:"sourceSha" gorm:"size:64"`

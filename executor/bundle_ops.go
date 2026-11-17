@@ -32,10 +32,10 @@ type BundleInfo struct {
 // **必须一处定义**:清单扫描(ListBundles / BuildManifest)、轮转(rotateBundles)、
 // 保留策略清理、灾备演练各扫各的后缀,就会出现
 // 「清单只认 .bundle、轮转认 4 种」的错位 ——
-// 配了 backup_format=zip 或加密的部署,清单里一条都没有,
+// 配了 backup_format=tar 或加密的部署,清单里一条都没有,
 // 校验却回"完整性校验通过"(零校验的假绿灯),真正发到异地的密文件
 // 也不在任何哈希覆盖范围内。
-var backupProductSuffixes = []string{".bundle", ".zip", ".bundle.enc", ".zip.enc"}
+var backupProductSuffixes = []string{".bundle", ".tar", ".bundle.enc", ".tar.enc"}
 
 // IsBackupProduct 该文件名是不是冷备产物。
 func IsBackupProduct(name string) bool {

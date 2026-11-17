@@ -2,14 +2,39 @@ package executor
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/httpjson"
 )
+
+// uploadHTTPClient 出站上传专用客户端:统一超时,避免默认客户端无限挂起。
+var uploadHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+
+// putViaHTTPJSON 统一出站 PUT:oekit/pkg/httpjson 负责 ctx 感知请求、
+// 限容读体与状态码可见性;调用方只准备 URL/body/headers。
+func putViaHTTPJSON(ctx context.Context, url string, body []byte, prepare func(http.Header)) error {
+	resp, err := httpjson.DoRaw(ctx, uploadHTTPClient, httpjson.Request{
+		Method: http.MethodPut,
+		URL:    url,
+		Body:   body,
+		Header: prepare,
+	}, 1<<20)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 300 {
+		return errors.New(fmt.Sprintf("PUT %s: status %d: %s",
+			url, resp.StatusCode, strings.TrimSpace(string(resp.Body))))
+	}
+	return nil
+}
 
 // Uploader 单目的地上传策略(注册表驱动,新增目的地只需实现此接口)。
 type Uploader interface {
@@ -110,22 +135,14 @@ func (webdavUploader) Upload(ctx context.Context, d Destination, objectKey strin
 		return "", errors.New("webdav: url required")
 	}
 	url := strings.TrimRight(d.URL, "/") + "/" + path.Base(objectKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(string(data)))
+	err := putViaHTTPJSON(ctx, url, data, func(h http.Header) {
+		h.Set("Content-Type", "application/octet-stream")
+		if d.Username != "" {
+			h.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(d.Username+":"+d.Password)))
+		}
+	})
 	if err != nil {
 		return "", err
-	}
-	req.ContentLength = int64(len(data))
-	req.Header.Set("Content-Type", "application/octet-stream")
-	if d.Username != "" {
-		req.SetBasicAuth(d.Username, d.Password)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 300 {
-		return "", errors.New(fmt.Sprintf("webdav put %s: status %d", url, resp.StatusCode))
 	}
 	return url, nil
 }

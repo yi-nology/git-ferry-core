@@ -1,13 +1,13 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -49,9 +49,9 @@ func s3PutObject(ctx context.Context, cfg *S3Config, key string, body []byte) er
 	if endpoint == "" {
 		endpoint = "https://s3.amazonaws.com"
 	}
-	var url string
+	var objectURL string
 	if cfg.PathStyle {
-		url = fmt.Sprintf("%s/%s/%s", endpoint, cfg.Bucket, strings.TrimPrefix(key, "/"))
+		objectURL = fmt.Sprintf("%s/%s/%s", endpoint, cfg.Bucket, strings.TrimPrefix(key, "/"))
 	} else {
 		// virtual-host style
 		u := strings.TrimPrefix(endpoint, "https://")
@@ -60,59 +60,46 @@ func s3PutObject(ctx context.Context, cfg *S3Config, key string, body []byte) er
 		if strings.HasPrefix(endpoint, "http://") {
 			scheme = "http"
 		}
-		url = fmt.Sprintf("%s://%s.%s/%s", scheme, cfg.Bucket, u, strings.TrimPrefix(key, "/"))
+		objectURL = fmt.Sprintf("%s://%s.%s/%s", scheme, cfg.Bucket, u, strings.TrimPrefix(key, "/"))
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.ContentLength = int64(len(body))
-	req.Header.Set("Content-Type", "application/octet-stream")
 
 	region := cfg.Region
 	if region == "" {
 		region = "us-east-1"
 	}
-	signS3V4(req, body, cfg.AccessKey, cfg.SecretKey, region, "s3")
-
-	resp, err := http.DefaultClient.Do(req)
+	u, err := url.Parse(objectURL)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 300 {
-		return errors.New(fmt.Sprintf("s3 put %s: status %d", key, resp.StatusCode))
-	}
-	return nil
+	return putViaHTTPJSON(ctx, objectURL, body, func(h http.Header) {
+		h.Set("Content-Type", "application/octet-stream")
+		signS3V4Header(h, http.MethodPut, u, body, cfg.AccessKey, cfg.SecretKey, region, "s3")
+	})
 }
 
-// signS3V4 AWS Signature Version 4(简化:只覆盖 PUT object)。
-func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, service string) {
+// signS3V4Header AWS Signature Version 4(简化:只覆盖 PUT object)。
+func signS3V4Header(h http.Header, method string, u *url.URL, payload []byte, accessKey, secretKey, region, service string) {
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
 
-	req.Header.Set("X-Amz-Date", amzDate)
-	req.Header.Set("X-Amz-Content-Sha256", encoding.Sha256Hex(payload))
+	h.Set("X-Amz-Date", amzDate)
+	h.Set("X-Amz-Content-Sha256", encoding.Sha256Hex(payload))
 
 	// canonical headers
-	host := req.URL.Host
-	if host == "" {
-		host = req.Host
-	}
+	host := u.Host
 	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
 		host, encoding.Sha256Hex(payload), amzDate)
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 
-	canonicalURI := req.URL.EscapedPath()
+	canonicalURI := u.EscapedPath()
 	if canonicalURI == "" {
 		canonicalURI = "/"
 	}
-	canonicalQuery := req.URL.RawQuery
+	canonicalQuery := u.RawQuery
 
 	canonicalRequest := strings.Join([]string{
-		req.Method,
+		method,
 		canonicalURI,
 		canonicalQuery,
 		canonicalHeaders,
@@ -131,7 +118,7 @@ func signS3V4(req *http.Request, payload []byte, accessKey, secretKey, region, s
 	signingKey := s3SigningKey(secretKey, dateStamp, region, service)
 	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
-	req.Header.Set("Authorization", fmt.Sprintf(
+	h.Set("Authorization", fmt.Sprintf(
 		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		accessKey, scope, signedHeaders, signature))
 }

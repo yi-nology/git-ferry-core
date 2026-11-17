@@ -109,6 +109,10 @@ func (s *Service) dispatchOnce() {
 	if s.jobs == nil {
 		return
 	}
+	// 队列深度观测:每轮派发前刷新一次(查询失败不影响派发)。
+	if n, cerr := s.jobs.CountPending(); cerr == nil {
+		executionQueuePending.Set(float64(n))
+	}
 	ids, err := s.jobs.ListPendingIDs(jobClaimBatch)
 	if err != nil {
 		logx.Error("job: 查询待执行作业失败", "error", err)

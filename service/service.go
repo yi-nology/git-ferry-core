@@ -4,13 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"github.com/oekit/logx"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/core/lifecycle"
 	oekiterrors "github.com/oekit/pkg/errors"
-	"github.com/robfig/cron/v3"
+	"github.com/oekit/timertask/local"
 	"github.com/yi-nology/git-ferry-core/executor"
 	"github.com/yi-nology/git-ferry-core/lock"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -60,8 +62,8 @@ type Service struct {
 	webhooks        *WebhookService
 	platforms       *PlatformService
 	opLogs          *OperationLogService
-	cron            *cron.Cron
-	cronEntryIDs    map[string]cron.EntryID
+	cron            *local.Scheduler
+	cronKeys        map[string]string
 	cronMu          sync.RWMutex
 	executor        *executor.Executor
 	mirror          *MirrorService
@@ -69,6 +71,7 @@ type Service struct {
 	lastTriggerTime sync.Map
 	// guard 统一封装”同 taskKey 互斥 + 全局并发上限”;配 redis 时为分布式,否则进程内。
 	guard    concurrencyGuard
+	shutdown *lifecycle.Manager
 	stopOnce sync.Once
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -111,6 +114,14 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	repos.provider.StartJanitor(bgCtx, 10*time.Minute)
 
+	// cron 调度器统一走 oekit/timertask/local:零 Redis 依赖,
+	// 并发度与全局同步并发上限一致;业务键形态支持运行期 upsert/对账。
+	sched, err := local.New(local.Config{Concurrency: cfg.Sync.MaxConcurrent})
+	if err != nil {
+		bgCancel()
+		return nil, oekiterrors.Wrap(err, "init cron scheduler")
+	}
+
 	svc := &Service{
 		config:        cfg,
 		db:            db,
@@ -121,17 +132,19 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		webhooks:      webhookService,
 		platforms:     platformService,
 		opLogs:        opLogService,
-		// 标准 5 字段 crontab(分 时 日 月 周),与前端预设一致。
-		cron:         cron.New(),
-		cronEntryIDs: make(map[string]cron.EntryID),
-		bgCtx:        bgCtx,
-		bgCancel:     bgCancel,
-		pending:      repos.pending,
-		outbox:       repos.outbox,
-		jobs:         repos.jobs,
-		instanceID:   newInstanceID(),
-		reconciles:   repos.reconcile,
-		recovery:     repos.recovery,
+		// 调度器:oekit/timertask/local(零 Redis 依赖,支持业务键 upsert/对账)。
+		cron:       sched,
+		cronKeys:   make(map[string]string),
+		bgCtx:      bgCtx,
+		bgCancel:   bgCancel,
+		pending:    repos.pending,
+		outbox:     repos.outbox,
+		jobs:       repos.jobs,
+		instanceID: newInstanceID(),
+		reconciles: repos.reconcile,
+		recovery:   repos.recovery,
+		shutdown: lifecycle.New(10*time.Second,
+			lifecycle.WithLogger(slog.New(logx.SlogHandler(logx.Default())))),
 	}
 	// sqlDB 仅在 Close 时用到
 	if sqlDB, err := db.DB(); err == nil {
@@ -186,6 +199,40 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		return nil, oekiterrors.Wrap(err, "init history service failed")
 	}
 	svc.history = historySvc
+
+	// 优雅关停注册(oekit/core/lifecycle):按注册顺序执行 ——
+	// 先等后台 goroutine 收敛,再依次关闭连接类资源。
+	svc.shutdown.Add("background-goroutines", func(ctx context.Context) error {
+		done := make(chan struct{})
+		go func() {
+			svc.wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}, 10*time.Second)
+	if mirrorSvc.lockClient != nil {
+		lc := mirrorSvc.lockClient
+		svc.shutdown.Add("mirror-redis-lock", func(ctx context.Context) error {
+			return lc.Close(ctx)
+		}, 5*time.Second)
+	}
+	if historySvc.lockClient != nil {
+		lc := historySvc.lockClient
+		svc.shutdown.Add("history-redis-lock", func(ctx context.Context) error {
+			return lc.Close(ctx)
+		}, 5*time.Second)
+	}
+	if svc.guard != nil {
+		svc.shutdown.AddCloser("concurrency-guard", svc.guard, 5*time.Second)
+	}
+	if svc.sqlDB != nil && svc.ownsDB {
+		svc.shutdown.AddCloser("database", svc.sqlDB, 5*time.Second)
+	}
 
 	// **启动时回收卡在 processing 的 webhook 事件**:
 	// 进程刚起,不可能有正在处理的事件 ⇒ 此刻仍是 processing 的,
@@ -267,7 +314,16 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 }
 
 func (s *Service) Start() error {
-	return s.startCronJobs()
+	if err := s.startCronJobs(); err != nil {
+		return err
+	}
+	// 周期把 DB 启用集收敛到本地调度器:其它实例的 cron 变更 30s 内生效(#40)。
+	s.wg.Add(1)
+	async.GoSafe(func() {
+		defer s.wg.Done()
+		s.cronReconcileLoop()
+	})
+	return nil
 }
 
 func (s *Service) Stop() {
@@ -275,52 +331,11 @@ func (s *Service) Stop() {
 }
 
 func (s *Service) doStop() {
-	// Cancel background context to signal all goroutines
-	// (后台周期循环统一挂在 bgCtx 上,取消即退出)
+	// 取消后台 ctx,再停调度器;资源关闭/后台收敛统一交给 lifecycle.Manager。
 	s.bgCancel()
 	s.stopCronJobs()
-
-	// Wait for background goroutines to finish (with timeout)
-	done := make(chan struct{})
-	async.GoSafe(func() {
-		s.wg.Wait()
-		close(done)
-	})
-	stopTimer := time.NewTimer(10 * time.Second)
-	defer stopTimer.Stop()
-	select {
-	case <-done:
-		logx.Info("all background goroutines stopped")
-	case <-stopTimer.C:
-		logx.Warn("timeout waiting for background goroutines to stop")
-	}
-
-	// 释放镜像通道跨实例锁的 redis 连接
-	if s.mirror != nil && s.mirror.lockClient != nil {
-		if err := s.mirror.lockClient.Close(context.Background()); err != nil {
-			logx.Error("failed to close mirror redis lock", "error", err)
-		}
-	}
-
-	// 释放历史同步通道跨实例锁的 redis 连接
-	if s.history != nil && s.history.lockClient != nil {
-		if err := s.history.lockClient.Close(context.Background()); err != nil {
-			logx.Error("failed to close history redis lock", "error", err)
-		}
-	}
-
-	// 释放并发控制器(关闭 redis 连接等)
-	if s.guard != nil {
-		if err := s.guard.Close(); err != nil {
-			logx.Error("failed to close concurrency guard", "error", err)
-		}
-	}
-
-	// 关闭数据库连接池(仅 core 自建的;WithDB 注入的由调用方负责)
-	if s.sqlDB != nil && s.ownsDB {
-		if err := s.sqlDB.Close(); err != nil {
-			logx.Error("failed to close database connection", "error", err)
-		}
+	if s.shutdown != nil {
+		s.shutdown.Shutdown(context.Background())
 	}
 }
 

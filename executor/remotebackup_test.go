@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,11 +45,12 @@ func TestUploadBundle_S3Put(t *testing.T) {
 }
 
 func TestSignS3V4_Deterministic(t *testing.T) {
-	req, _ := http.NewRequest("PUT", "https://s3.example.com/b/k", nil)
-	signS3V4(req, []byte("x"), "AK", "SK", "us-east-1", "s3")
-	a1 := req.Header.Get("Authorization")
-	signS3V4(req, []byte("x"), "AK", "SK", "us-east-1", "s3")
-	a2 := req.Header.Get("Authorization")
+	u, _ := url.Parse("https://s3.example.com/b/k")
+	h := http.Header{}
+	signS3V4Header(h, http.MethodPut, u, []byte("x"), "AK", "SK", "us-east-1", "s3")
+	a1 := h.Get("Authorization")
+	signS3V4Header(h, http.MethodPut, u, []byte("x"), "AK", "SK", "us-east-1", "s3")
+	a2 := h.Get("Authorization")
 	// 时间戳变了签名可能变,但格式必须合法
 	assert.True(t, strings.HasPrefix(a1, "AWS4-HMAC-SHA256 Credential=AK/"))
 	_ = a2

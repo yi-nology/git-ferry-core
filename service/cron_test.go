@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/robfig/cron/v3"
+	"github.com/oekit/timertask/local"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -29,6 +29,14 @@ func setupCronTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// newTestCronScheduler 构造测试用 oekit/timertask/local 调度器(与生产同源)。
+func newTestCronScheduler(t *testing.T) *local.Scheduler {
+	t.Helper()
+	sched, err := local.New(local.Config{Concurrency: 4})
+	require.NoError(t, err)
+	return sched
+}
+
 func setupCronTestService(t *testing.T) (*Service, *gorm.DB) {
 	t.Helper()
 
@@ -38,10 +46,10 @@ func setupCronTestService(t *testing.T) (*Service, *gorm.DB) {
 	taskService := NewTaskService(taskRepository, nil, nil, nil)
 
 	return &Service{
-		tasks:        taskService,
-		cron:         cron.New(), // 与生产一致:标准 5 字段解析
-		cronEntryIDs: make(map[string]cron.EntryID),
-		cronMu:       sync.RWMutex{},
+		tasks:    taskService,
+		cron:     newTestCronScheduler(t), // 与生产一致:标准 5 字段解析
+		cronKeys: make(map[string]string),
+		cronMu:   sync.RWMutex{},
 	}, db
 }
 
@@ -57,7 +65,7 @@ func TestAddCronJob(t *testing.T) {
 	require.NoError(t, err, "addCronJob failed")
 
 	// Verify the cron job was added
-	_, exists := svc.cronEntryIDs[task.Key]
+	_, exists := svc.cronKeys[task.Key]
 	assert.True(t, exists, "expected cron job to be added")
 }
 
@@ -73,16 +81,16 @@ func TestAddCronJob_UpdateExisting(t *testing.T) {
 	err := svc.addCronJob(task)
 	require.NoError(t, err, "addCronJob failed")
 
-	initialEntryID := svc.cronEntryIDs[task.Key]
+	initialSpec := svc.cronKeys[task.Key]
 
 	// Update the cron job
 	task.Cron = "*/2 * * * *"
 	err = svc.addCronJob(task)
 	require.NoError(t, err, "addCronJob update failed")
 
-	// Verify the entry ID changed
-	newEntryID := svc.cronEntryIDs[task.Key]
-	assert.NotEqual(t, initialEntryID, newEntryID, "expected entry ID to change after update")
+	// 同 key 改 spec ⇒ 调度器摘旧装新
+	newSpec := svc.cronKeys[task.Key]
+	assert.NotEqual(t, initialSpec, newSpec, "expected cron spec to change after update")
 }
 
 func TestAddCronJob_InvalidCron(t *testing.T) {
@@ -110,14 +118,14 @@ func TestRemoveCronJob(t *testing.T) {
 	require.NoError(t, err, "addCronJob failed")
 
 	// Verify it exists
-	_, exists := svc.cronEntryIDs[task.Key]
+	_, exists := svc.cronKeys[task.Key]
 	require.True(t, exists, "expected cron job to exist before removal")
 
 	// Remove the cron job
 	svc.removeCronJob(task.Key)
 
 	// Verify it's removed
-	_, exists = svc.cronEntryIDs[task.Key]
+	_, exists = svc.cronKeys[task.Key]
 	assert.False(t, exists, "expected cron job to be removed")
 }
 
@@ -156,7 +164,7 @@ func TestStartCronJobs(t *testing.T) {
 	require.NoError(t, err, "startCronJobs failed")
 
 	// Verify cron jobs were added
-	assert.Equal(t, 2, len(svc.cronEntryIDs), "expected 2 cron jobs")
+	assert.Equal(t, 2, len(svc.cronKeys), "expected 2 cron jobs")
 
 	// Cleanup
 	svc.stopCronJobs()
@@ -205,7 +213,7 @@ func TestStartCronJobs_WithDisabledTasks(t *testing.T) {
 	require.NoError(t, err, "startCronJobs failed")
 
 	// Only enabled tasks should have cron jobs
-	assert.Equal(t, 1, len(svc.cronEntryIDs), "expected 1 cron job (only enabled)")
+	assert.Equal(t, 1, len(svc.cronKeys), "expected 1 cron job (only enabled)")
 
 	// Cleanup
 	svc.stopCronJobs()
@@ -226,7 +234,7 @@ func TestStartCronJobs_WithTasksWithoutCron(t *testing.T) {
 	require.NoError(t, err, "startCronJobs failed")
 
 	// No cron jobs should be added
-	assert.Equal(t, 0, len(svc.cronEntryIDs), "expected 0 cron jobs")
+	assert.Equal(t, 0, len(svc.cronKeys), "expected 0 cron jobs")
 
 	// Cleanup
 	svc.stopCronJobs()

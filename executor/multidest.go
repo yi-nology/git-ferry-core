@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -69,53 +68,39 @@ func azureBlobPut(ctx context.Context, account, accountKey, container, blob stri
 		return errors.New("azure: account_key required")
 	}
 	url := fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s", account, container, strings.TrimPrefix(blob, "/"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.ContentLength = int64(len(body))
-	req.Header.Set("x-ms-blob-type", "BlockBlob")
-	req.Header.Set("x-ms-version", "2020-10-02")
-	req.Header.Set("x-ms-date", time.Now().UTC().Format(http.TimeFormat))
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	sig := azureSharedKey(account, accountKey, req, container, blob)
-	req.Header.Set("Authorization", "SharedKey "+account+":"+sig)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 300 {
-		return errors.New(fmt.Sprintf("azure put %s: status %d", blob, resp.StatusCode))
-	}
-	return nil
+	return putViaHTTPJSON(ctx, url, body, func(h http.Header) {
+		h.Set("x-ms-blob-type", "BlockBlob")
+		h.Set("x-ms-version", "2020-10-02")
+		h.Set("x-ms-date", time.Now().UTC().Format(http.TimeFormat))
+		h.Set("Content-Type", "application/octet-stream")
+		sig := azureSharedKey(account, accountKey, http.MethodPut, h, int64(len(body)), container, blob)
+		h.Set("Authorization", "SharedKey "+account+":"+sig)
+	})
 }
 
 // azureSharedKey 构造 Azure Blob Shared Key 签名(PUT blob)。
-func azureSharedKey(account, key string, req *http.Request, container, blob string) string {
+func azureSharedKey(account, key, method string, h http.Header, contentLength int64, container, blob string) string {
 	// StringToSign (2015-02-21+):
 	// VERB\n Content-Encoding\n Content-Language\n Content-Length\n Content-MD5\n Content-Type\n
 	// Date\n If-Modified-Since\n If-Match\n If-None-Match\n If-Unmodified-Since\n Range\n
 	// CanonicalizedHeaders + CanonicalizedResource
 	blob = strings.TrimPrefix(blob, "/")
-	canonicalHeaders := "x-ms-blob-type:" + req.Header.Get("x-ms-blob-type") + "\n" +
-		"x-ms-date:" + req.Header.Get("x-ms-date") + "\n" +
-		"x-ms-version:" + req.Header.Get("x-ms-version") + "\n"
+	canonicalHeaders := "x-ms-blob-type:" + h.Get("x-ms-blob-type") + "\n" +
+		"x-ms-date:" + h.Get("x-ms-date") + "\n" +
+		"x-ms-version:" + h.Get("x-ms-version") + "\n"
 	canonicalResource := "/" + account + "/" + container + "/" + blob
 
 	length := ""
-	if req.ContentLength > 0 {
-		length = fmt.Sprintf("%d", req.ContentLength)
+	if contentLength > 0 {
+		length = fmt.Sprintf("%d", contentLength)
 	}
 	stringToSign := strings.Join([]string{
-		req.Method,
+		method,
 		"",     // Content-Encoding
 		"",     // Content-Language
 		length, // Content-Length
 		"",     // Content-MD5
-		req.Header.Get("Content-Type"),
+		h.Get("Content-Type"),
 		"", // Date (using x-ms-date)
 		"", // If-Modified-Since
 		"", // If-Match

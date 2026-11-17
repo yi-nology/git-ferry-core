@@ -8,7 +8,7 @@ import (
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/errors"
-	"github.com/robfig/cron/v3"
+	cronx "github.com/oekit/pkg/timex/cron"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -35,7 +35,7 @@ func (s *Service) CreateTask(ctx context.Context, req *model.CreateTaskRequest) 
 	// 预校验 cron 表达式,避免写入 DB 后才发现无效
 	// (创建路径:cron 是普通字符串,空串=不设定时)
 	if req.Cron != "" {
-		if _, err := cron.ParseStandard(req.Cron); err != nil {
+		if _, err := cronx.Parse(req.Cron); err != nil {
 			return nil, errors.Wrap(err, fmt.Sprintf("invalid cron expression %q", req.Cron))
 		}
 	}
@@ -58,7 +58,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 	// 预校验 cron 表达式,避免写入 DB 后才发现无效
 	// (nil=不修改;空串=清空定时,不需要校验)
 	if req.Cron != nil && *req.Cron != "" {
-		if _, err := cron.ParseStandard(*req.Cron); err != nil {
+		if _, err := cronx.Parse(*req.Cron); err != nil {
 			return nil, errors.Wrap(err, fmt.Sprintf("invalid cron expression %q", *req.Cron))
 		}
 	}
@@ -166,6 +166,7 @@ func (s *Service) finishRun(taskKey, trigger string, run *model.SyncRun, err err
 	if delivered && run != nil {
 		s.markOutboxPublishedByRun(run.ID)
 	}
+	observeRunMetrics(run)
 	// RunTaskAsync 路径(手动/重试/auto_retry)在这里消费待补跑 —— 旧实现
 	// 只有 RunTaskWithTrigger 消费,手动执行期间积压的 webhook 永远补不上(P0)。
 	s.runPendingWebhook(taskKey)
@@ -217,6 +218,7 @@ func (s *Service) RunTaskWithTrigger(ctx context.Context, taskKey, trigger strin
 		return s.executor.Execute(ctx, task, trigger, webhookEventID)
 	}()
 	s.emitRunCompleted(taskKey, trigger, run, execErr)
+	observeRunMetrics(run)
 	if run != nil {
 		// 快速路径已投递 ⇒ 闭环 outbox 行(与 finishRun 同语义)。
 		s.markOutboxPublishedByRun(run.ID)

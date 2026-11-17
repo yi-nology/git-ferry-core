@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"archive/zip"
 	"context"
 	stderrors "errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/tarx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 )
@@ -21,7 +21,7 @@ import (
 // 不引入新的存储格式,恢复时 `git clone bundle` 即可。
 //
 // 命名: <taskKey>-<branch>-<yyyyMMdd-HHmmss>.bundle
-// BackupFormat=zip 时改为打包 workdir 为 .zip(gickup 风格,便于人工取件)。
+// BackupFormat=tar 时改为打包 workdir 为 .tar(便于人工取件;写出走 oekit/tarx)。
 func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, task *model.SyncTask, details *strings.Builder) (string, error) {
 	if backupDir == "" {
 		return "", oekiterrors.New("backup dir not configured")
@@ -40,14 +40,14 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	if cfg := e.service.GetConfig(); cfg != nil {
 		format = cfg.Sync.BackupFormat
 	}
-	if strings.EqualFold(format, "zip") {
-		zipName := strings.TrimSuffix(name, ".bundle") + ".zip"
-		zipPath := filepath.Join(backupDir, zipName)
-		if err := zipDir(repoDir, zipPath); err != nil {
-			return "", oekiterrors.Wrap(err, "zip archive")
+	if strings.EqualFold(format, "tar") {
+		tarName := strings.TrimSuffix(name, ".bundle") + ".tar"
+		tarPath := filepath.Join(backupDir, tarName)
+		if err := tarDir(repoDir, tarPath); err != nil {
+			return "", oekiterrors.Wrap(err, "tar archive")
 		}
-		fmt.Fprintf(details, "  archive: %s\n", zipPath)
-		return zipPath, nil
+		fmt.Fprintf(details, "  archive: %s\n", tarPath)
+		return tarPath, nil
 	}
 
 	// 打当前同步分支 + HEAD(缺 HEAD 则 clone 后无法 checkout) + 标签
@@ -78,37 +78,18 @@ func (e *Executor) writeBundle(ctx context.Context, workDir, backupDir string, t
 	return outPath, nil
 }
 
-// zipDir 将目录打包为 zip(相对路径,便于解压还原)。
-func zipDir(srcDir, dest string) error {
+// tarDir 将目录打包为 tar(相对路径,便于解压还原)。
+// 写出走 oekit/tarx:同口径预扫/流式写出,条目名相对 root。
+func tarDir(srcDir, dest string) error {
 	f, err := os.Create(dest) //nolint:gosec // dest 由 backupDir+任务 key 构造
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	zw := zip.NewWriter(f)
-	defer func() { _ = zw.Close() }()
-	return filepath.Walk(srcDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, rerr := filepath.Rel(srcDir, p)
-		if rerr != nil {
-			return rerr
-		}
-		w, cerr := zw.Create(rel)
-		if cerr != nil {
-			return cerr
-		}
-		data, rerr := os.ReadFile(p) //nolint:gosec // workdir 内文件
-		if rerr != nil {
-			return rerr
-		}
-		_, werr := w.Write(data)
-		return werr
-	})
+	if _, err := tarx.Write(f, srcDir); err != nil {
+		return err
+	}
+	return nil
 }
 
 // expandBundleRefs 把 glob 分支模式展开成实际的 refs/heads/<b> 列表。
@@ -131,7 +112,7 @@ func (e *Executor) expandBundleRefs(ctx context.Context, repoDir string, task *m
 }
 
 // rotateBundles 每任务保留最近 keep 份,按文件名时间戳排序删除旧的。
-// 借鉴 gickup zip keep N:防冷备目录无限膨胀。
+// 借鉴 gickup tar keep N:防冷备目录无限膨胀。
 func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error) {
 	if keep <= 0 {
 		return 0, nil
@@ -146,8 +127,8 @@ func rotateBundles(backupDir, taskKey string, keep int) (removed int, err error)
 		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
 			continue
 		}
-		if !strings.HasSuffix(e.Name(), ".bundle") && !strings.HasSuffix(e.Name(), ".zip") &&
-			!strings.HasSuffix(e.Name(), ".bundle.enc") && !strings.HasSuffix(e.Name(), ".zip.enc") {
+		if !strings.HasSuffix(e.Name(), ".bundle") && !strings.HasSuffix(e.Name(), ".tar") &&
+			!strings.HasSuffix(e.Name(), ".bundle.enc") && !strings.HasSuffix(e.Name(), ".tar.enc") {
 			continue
 		}
 		names = append(names, e.Name())
