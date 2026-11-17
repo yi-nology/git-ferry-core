@@ -19,7 +19,7 @@ require (
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v0.143.0
+	github.com/yi-nology/go-git-platform v1.0.0
 	golang.org/x/tools v0.52.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.6.0
