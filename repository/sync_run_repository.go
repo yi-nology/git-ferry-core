@@ -122,6 +122,87 @@ func (d *SyncRunRepository) FindRecentLimit(limit int) ([]*model.SyncRun, error)
 	return runs, err
 }
 
+// FindLatestByTaskKeys 批量取每个任务最新一条 run(只选轻量列)。
+// 仓库盘点等聚合场景用:逐任务 ListHistory(含 COUNT/Preload)是 N+1。
+func (d *SyncRunRepository) FindLatestByTaskKeys(taskKeys []string) (map[string]*model.SyncRun, error) {
+	out := make(map[string]*model.SyncRun, len(taskKeys))
+	if len(taskKeys) == 0 {
+		return out, nil
+	}
+	var latest []struct {
+		TaskKey string
+		MaxID   uint
+	}
+	if err := d.db.Model(&model.SyncRun{}).
+		Select("task_key, MAX(id) AS max_id").
+		Where("task_key IN ?", taskKeys).
+		Group("task_key").Scan(&latest).Error; err != nil {
+		return nil, err
+	}
+	if len(latest) == 0 {
+		return out, nil
+	}
+	ids := make([]uint, 0, len(latest))
+	for _, l := range latest {
+		ids = append(ids, l.MaxID)
+	}
+	var runs []*model.SyncRun
+	if err := d.db.Select("id, task_key, status, end_time").Where("id IN ?", ids).Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range runs {
+		out[r.TaskKey] = r
+	}
+	return out, nil
+}
+
+// FindRecentByTaskKey 取某任务最近 N 条 run,**不预加载 Steps**。
+// 健康评分需要批量拉全部任务的历史,再统一按 run_id 批量取步骤;
+// 逐任务 Preload 会多出 N 条查询。
+func (d *SyncRunRepository) FindRecentByTaskKey(taskKey string, limit int) ([]*model.SyncRun, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	var runs []*model.SyncRun
+	err := d.db.Where("task_key = ?", taskKey).Order("id DESC").Limit(limit).Find(&runs).Error
+	return runs, err
+}
+
+// FindLastBackupSuccessBatch 批量取每个任务最近一次备份成功的 run。
+// 两条查询(分组取 MAX(id) + 按 id 取行)替代逐任务查询;
+// 返回 map[task_key]*SyncRun,无成功备份的任务不在 map 中。
+func (d *SyncRunRepository) FindLastBackupSuccessBatch(taskKeys []string) (map[string]*model.SyncRun, error) {
+	out := make(map[string]*model.SyncRun, len(taskKeys))
+	if len(taskKeys) == 0 {
+		return out, nil
+	}
+	var latest []struct {
+		TaskKey string
+		MaxID   uint
+	}
+	if err := d.db.Model(&model.SyncRun{}).
+		Select("task_key, MAX(id) AS max_id").
+		Where("task_key IN ? AND backup_status = ?", taskKeys, model.BackupStatusSuccess).
+		Group("task_key").Scan(&latest).Error; err != nil {
+		return nil, err
+	}
+	if len(latest) == 0 {
+		return out, nil
+	}
+	ids := make([]uint, 0, len(latest))
+	for _, l := range latest {
+		ids = append(ids, l.MaxID)
+	}
+	var runs []*model.SyncRun
+	if err := d.db.Where("id IN ?", ids).Find(&runs).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range runs {
+		out[r.TaskKey] = r
+	}
+	return out, nil
+}
+
 func (d *SyncRunRepository) CleanupOlderThan(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	var total int64

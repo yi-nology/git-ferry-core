@@ -7,6 +7,7 @@ import (
 	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -228,61 +229,59 @@ func (c *cloneCache) evictOverCap(keep string) {
 		logx.Warn("clone cache size check failed", "error", err)
 		return
 	}
-	for size > limit {
-		// 枚举用 os.ReadDir 而非 filepath.Glob(#26):配置路径里的 *?[ 会被
-		// Glob 当模式语义解析,匹配到目录外的兄弟路径(实证:cc[x] 吃到 ccx/)。
-		dents, rerr := os.ReadDir(c.dir)
-		if rerr != nil {
-			logx.Warn("clone cache list failed", "error", rerr)
-			return
+	// 枚举用 os.ReadDir 而非 filepath.Glob(#26):配置路径里的 *?[ 会被
+	// Glob 当模式语义解析,匹配到目录外的兄弟路径(实证:cc[x] 吃到 ccx/)。
+	dents, err := os.ReadDir(c.dir)
+	if err != nil {
+		logx.Warn("clone cache list failed", "error", err)
+		return
+	}
+	// 一次性按 mtime 排序候选,逐条扣减大小 —— 原实现每删一条就重走
+	// 整棵缓存目录(dirSizeBytes),淘汰 N 条是 O(N²) 文件遍历。
+	type cacheCand struct {
+		path string
+		mod  time.Time
+	}
+	cands := make([]cacheCand, 0, len(dents))
+	for _, de := range dents {
+		if !de.IsDir() || !strings.HasSuffix(de.Name(), ".git") {
+			continue
 		}
-		// 逐个 try-Acquire 锁定候选:拿不到=该条目正被在途克隆借用(#23),
-		// 跳过;拿到则持锁选出 mtime 最旧者,其余候选立即释放。
-		oldest, oldestM := "", time.Time{}
-		var oldestRelease func()
-		for _, de := range dents {
-			if !de.IsDir() || !strings.HasSuffix(de.Name(), ".git") {
-				continue
-			}
-			p := filepath.Join(c.dir, de.Name())
-			if p == keep {
-				continue
-			}
-			rel, aok := c.mu.Acquire(p)
-			if !aok {
-				continue // 在途使用中,不可删
-			}
-			st, serr := os.Stat(p)
-			if serr != nil {
-				rel() // 已被并发移除
-				continue
-			}
-			if oldest == "" || st.ModTime().Before(oldestM) {
-				if oldestRelease != nil {
-					oldestRelease() // 释放上一个候选,只保留最旧者
-				}
-				oldest, oldestM, oldestRelease = p, st.ModTime(), rel
-			} else {
-				rel()
-			}
+		p := filepath.Join(c.dir, de.Name())
+		if p == keep {
+			continue
 		}
-		if oldest == "" {
-			break // 只剩 keep 或全部在途(单条超限)
+		st, serr := os.Stat(p)
+		if serr != nil {
+			continue
 		}
-		// 持最旧者的键锁删除:期间并发 ensure 该键会降级普通克隆(不借用),
-		// 不会拿到一个正在消失的 path。
-		rerr = os.RemoveAll(oldest)
-		oldestRelease()
-		if rerr != nil {
-			logx.Warn("clone cache evict failed", "entry", oldest, "error", rerr)
+		cands = append(cands, cacheCand{path: p, mod: st.ModTime()})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].mod.Before(cands[j].mod) })
+	for _, cand := range cands {
+		if size <= limit {
 			break
 		}
-		logx.Info("clone cache evicted", "entry", oldest)
-		size, err = dirSizeBytes(c.dir)
-		if err != nil {
-			logx.Warn("clone cache size recheck failed", "error", err)
-			return
+		// try-Acquire:拿不到 = 该条目正被在途克隆借用(#23),跳过。
+		// 持锁删除:期间并发 ensure 该键会降级普通克隆(不借用),
+		// 不会拿到一个正在消失的 path。
+		rel, aok := c.mu.Acquire(cand.path)
+		if !aok {
+			continue
 		}
+		entrySize, serr := dirSizeBytes(cand.path)
+		if serr != nil {
+			rel()
+			continue
+		}
+		if rerr := os.RemoveAll(cand.path); rerr != nil {
+			rel()
+			logx.Warn("clone cache evict failed", "entry", cand.path, "error", rerr)
+			continue
+		}
+		rel()
+		size -= entrySize
+		logx.Info("clone cache evicted", "entry", cand.path, "size_bytes", entrySize)
 	}
 	if size > limit {
 		logx.Warn("clone cache single entry exceeds cap, keeping to avoid thrash",

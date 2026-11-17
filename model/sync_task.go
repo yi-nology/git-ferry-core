@@ -8,7 +8,7 @@ import (
 
 type SyncTask struct {
 	ID            uint   `json:"id" gorm:"primaryKey"`
-	Key           string `json:"key" gorm:"uniqueIndex;size:36;not null;default:''"`
+	Key           string `json:"key" gorm:"uniqueIndex;size:64;not null;default:''"`
 	Name          string `json:"name" gorm:"size:100;not null;default:''"`
 	SourceRepoKey string `json:"source_repo_key" gorm:"size:255;not null;index;default:''"`
 	SourceBranch  string `json:"source_branch" gorm:"size:255;not null;default:''"`

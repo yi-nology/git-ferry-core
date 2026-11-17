@@ -4,7 +4,7 @@ import "time"
 
 type SyncRun struct {
 	ID             uint       `json:"id" gorm:"primaryKey"`
-	TaskKey        string     `json:"taskKey" gorm:"size:36;not null;index:idx_sync_runs_task_key_created,priority:1"`
+	TaskKey        string     `json:"taskKey" gorm:"size:64;not null;index:idx_sync_runs_task_key_created,priority:1"`
 	TriggerSource  string     `json:"triggerSource" gorm:"size:20;not null"`
 	Status         string     `json:"status" gorm:"size:20;not null;index"`
 	StartTime      time.Time  `json:"startTime"`

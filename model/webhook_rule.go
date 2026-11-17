@@ -29,7 +29,7 @@ func (WebhookRule) TableName() string {
 type WebhookRuleTask struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	RuleID    uint      `json:"ruleId" gorm:"not null;index;uniqueIndex:idx_rule_task"`
-	TaskKey   string    `json:"taskKey" gorm:"size:36;not null;uniqueIndex:idx_rule_task"`
+	TaskKey   string    `json:"taskKey" gorm:"size:64;not null;uniqueIndex:idx_rule_task"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

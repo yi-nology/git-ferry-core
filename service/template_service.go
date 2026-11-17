@@ -180,13 +180,20 @@ func (s *Service) RepoInventory(ctx context.Context) (*InventoryResult, error) {
 		return nil, err
 	}
 	taskByRepo := map[string][]string{}
+	taskKeys := make([]string, 0, len(tasks))
 	for _, t := range tasks {
+		taskKeys = append(taskKeys, t.Key)
 		if t.SourceRepoKey != "" {
 			taskByRepo[t.SourceRepoKey] = append(taskByRepo[t.SourceRepoKey], t.Key)
 		}
 		if t.TargetRepoKey != "" && t.TargetRepoKey != t.SourceRepoKey {
 			taskByRepo[t.TargetRepoKey] = append(taskByRepo[t.TargetRepoKey], t.Key)
 		}
+	}
+	// 一次取全部任务的最新 run,替代逐任务 ListHistory(COUNT+SELECT+Preload)。
+	latestRuns, err := s.tasks.runRepository.FindLatestByTaskKeys(taskKeys)
+	if err != nil {
+		return nil, err
 	}
 
 	res := &InventoryResult{Items: make([]InventoryItem, 0, len(repos))}
@@ -205,17 +212,17 @@ func (s *Service) RepoInventory(ctx context.Context) (*InventoryResult, error) {
 			res.Orphan++
 		} else {
 			res.Covered++
-			// 取任一任务最近历史
+			// 取任一任务最近历史(已批量取好)
 			for _, tk := range item.TaskKeys {
-				runs, _, herr := s.ListHistory(ctx, tk, 0, 1)
-				if herr != nil || len(runs) == 0 {
+				run := latestRuns[tk]
+				if run == nil {
 					continue
 				}
-				item.LastRunStatus = runs[0].Status
-				if runs[0].EndTime != nil {
-					item.LastRunAt = runs[0].EndTime.Format(inventoryTimeFormat)
+				item.LastRunStatus = run.Status
+				if run.EndTime != nil {
+					item.LastRunAt = run.EndTime.Format(inventoryTimeFormat)
 				}
-				if runs[0].Status == model.StatusFailed {
+				if run.Status == model.StatusFailed {
 					item.Coverage = "failing"
 					res.Failing++
 					res.Covered--

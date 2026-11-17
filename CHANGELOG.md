@@ -31,6 +31,24 @@
 - git 命令收口去重：service 的 `runGitQuiet` 复用
   `executor.RunGitThroughBackend`，RunRaw 白名单/参数加固不回落规则
   只保留一份实现。
+- **健康评分与仓库盘点批量化**：健康评分不再逐任务 Preload steps，
+  改为 run 本体并行拉取 + 1 条 `run_id IN (...)` 批量取步骤；
+  RPO 最近备份成功改为 `FindLastBackupSuccessBatch`（分组 MAX(id)）。
+  仓库盘点改用 `FindLatestByTaskKeys` 一次取全部任务最新 run，
+  去掉逐任务 `ListHistory(COUNT+SELECT+Preload)`。
+- **Clone Cache 淘汰从 O(N²) 降为 O(N)**：候选条目只按 mtime 排序一次，
+  逐条持锁删除并扣减已知条目大小，不再每次删除后重走整棵缓存目录。
+
+### Migration
+
+- v14 热路径复合索引：`execution_jobs(status,lease_until)` /
+  `execution_jobs(status,finished_at)` / `outbox_events(published_at,created_at)` /
+  `outbox_events(run_id)` / `retry_schedules(status,next_attempt_at)` /
+  `webhook_events(status,created_at)` / `recovery_points(task_key,created_at)` /
+  `sync_runs(task_key,backup_status)`。
+- v15 任务 key 列宽 36 → 64（MySQL `MODIFY`；sqlite 无长度约束）：
+  `sync_tasks.key` / `sync_runs.task_key` / `webhook_rule_tasks.task_key`，
+  与校验器允许的 64 字符对齐，避免严格模式写入失败或截断碰撞。
 
 ## [v0.52.0] - 2026-11-17
 

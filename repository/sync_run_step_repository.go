@@ -31,6 +31,23 @@ func (d *SyncRunStepRepository) FindByRunID(runID uint) ([]*model.SyncRunStep, e
 	return steps, err
 }
 
+// FindByRunIDs 一次取多条 run 的步骤并按 run_id 分组。
+// 供健康评分等批量聚合路径使用,避免逐 run 查询。
+func (d *SyncRunStepRepository) FindByRunIDs(runIDs []uint) (map[uint][]*model.SyncRunStep, error) {
+	out := make(map[uint][]*model.SyncRunStep, len(runIDs))
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	var steps []*model.SyncRunStep
+	if err := d.db.Where("run_id IN ?", runIDs).Order("id ASC").Find(&steps).Error; err != nil {
+		return nil, err
+	}
+	for _, s := range steps {
+		out[s.RunID] = append(out[s.RunID], s)
+	}
+	return out, nil
+}
+
 func (d *SyncRunStepRepository) CleanupOlderThan(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	var total int64

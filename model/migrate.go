@@ -166,6 +166,83 @@ var migrations = []Migration{
 		Apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&MigrationMapping{})
 		}},
+	// v14 (2026-11-17):热路径复合索引。此前只有单列索引,派发/认领/
+	// reaper/清理/对账恢复都是「status + 时间/状态」组合过滤,单列索引
+	// 只能过滤一半条件。纯增量 DDL,HasIndex 幂等;不挂模型 tag(存量库
+	// 的 baseline AutoMigrate 早于本版本,迁移必须显式补建)。
+	{Version: 14, Name: "add hot-path composite indexes",
+		Apply: migrateV14HotPathIndexes},
+	// v15 (2026-11-17):任务 key 列宽 36 → 64。校验器/策略回放允许
+	// [a-zA-Z0-9-]{1,64},但 sync_tasks.key / sync_runs.task_key /
+	// webhook_rule_tasks.task_key 仍是 varchar(36):MySQL 严格模式下
+	// 37-64 字符的 key 写入失败,非严格模式可能截断成碰撞。
+	{Version: 15, Name: "widen task key columns to 64",
+		Apply: migrateV15WidenTaskKeys},
+}
+
+// hotPathIndex 一条热路径复合索引定义。
+// (v15 紧接其后:任务 key 列宽 36→64,见 migrations 列表。)
+type hotPathIndex struct {
+	model   any
+	table   string
+	name    string
+	columns string
+}
+
+// migrateV15WidenTaskKeys 把任务 key 列扩到 varchar(64)。
+// sqlite 的长度声明不参与约束(任意长度可存),只需处理 MySQL;
+// 索引随 MODIFY 自动保留,无需重建。
+func migrateV15WidenTaskKeys(tx *gorm.DB) error {
+	if tx.Name() != "mysql" {
+		return nil
+	}
+	specs := []struct {
+		table string
+		col   string
+		def   string
+	}{
+		{TableSyncTasks, "key", "varchar(64) NOT NULL DEFAULT ''"},
+		{TableSyncRuns, "task_key", "varchar(64) NOT NULL"},
+		{TableWebhookRuleTasks, "task_key", "varchar(64) NOT NULL"},
+	}
+	for _, s := range specs {
+		if err := tx.Exec("ALTER TABLE `" + s.table + "` MODIFY `" + s.col + "` " + s.def).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateV14HotPathIndexes 为高频「状态 + 时间」查询补复合索引。
+func migrateV14HotPathIndexes(tx *gorm.DB) error {
+	specs := []hotPathIndex{
+		// 派发/认领/接管:status=pending + lease_until not-before;
+		// claimed + lease_until 过期(reaper)。
+		{&ExecutionJob{}, TableExecutionJobs, "idx_execution_jobs_status_lease", "status, lease_until"},
+		// 终态清理:status IN (succeeded,failed) + finished_at < cutoff。
+		{&ExecutionJob{}, TableExecutionJobs, "idx_execution_jobs_status_finished", "status, finished_at"},
+		// outbox 派发:published_at IS NULL + created_at <= grace。
+		{&OutboxEvent{}, TableOutboxEvents, "idx_outbox_events_pending", "published_at, created_at"},
+		// outbox 按 run 闭环:run_id 等值。
+		{&OutboxEvent{}, TableOutboxEvents, "idx_outbox_events_run", "run_id"},
+		// 延迟重试:status=pending + next_attempt_at 到点。
+		{&RetrySchedule{}, TableRetrySchedules, "idx_retry_schedules_due", "status, next_attempt_at"},
+		// 卡死事件恢复:status=processing + created_at < cutoff。
+		{&WebhookEvent{}, TableWebhookEvents, "idx_webhook_events_status_created", "status, created_at"},
+		// 恢复点列表:task_key 等值 + created_at 排序。
+		{&RecoveryPoint{}, TableRecoveryPoints, "idx_recovery_points_task_created", "task_key, created_at"},
+		// RPO 事实键:task_key + backup_status。
+		{&SyncRun{}, TableSyncRuns, "idx_sync_runs_task_backup", "task_key, backup_status"},
+	}
+	for _, s := range specs {
+		if tx.Migrator().HasIndex(s.model, s.name) {
+			continue
+		}
+		if err := tx.Exec("CREATE INDEX " + s.name + " ON " + s.table + " (" + s.columns + ")").Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // activeSlotIndexName execution_jobs 活动槽唯一索引(每任务至多一条

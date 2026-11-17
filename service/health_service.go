@@ -118,23 +118,51 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	}
 	now := time.Now()
 
-	// 历史按任务并行拉取(并发上限 8)——每任务各自取最近 N 条,保持既有语义。
-	// 用 oekit concurrency/syncx.FanInLimitCtx:并发上限由引擎内建(不必自维护
-	// 信号量),结果按 index 序返回(与原「逐任务 channel 保序」等价),
-	// panic 落槽不丢结果;ctx 取消时不再启动新工作——原实现的 goroutine
-	// 会在信号量上一直排队直到 ListHistory 自己超时。
+	// RPO 事实键与评分窗口解耦:批量取每个任务全历史最近一次备份成功
+	// (两次查询替代逐任务 N 次查询)。
+	taskKeys := make([]string, len(tasks))
+	for i := range tasks {
+		taskKeys[i] = tasks[i].Key
+	}
+	backups, err := s.tasks.runRepository.FindLastBackupSuccessBatch(taskKeys)
+	if err != nil {
+		return nil, err
+	}
+
+	// 历史按任务并行拉取(并发上限 8),但**不逐任务 Preload steps**:
+	// 先取 run 本体,全部任务收齐后按 run_id 一次批量取步骤再回填。
+	// 原实现每任务一次 ListHistory(含 Preload)⇒ 最多 200×3 条查询;
+	// 现在 200 条 run 查询(并行) + 1 条步骤查询。
 	histSlots := syncx.FanInLimitCtx(ctx, len(tasks), 8, func(ctx context.Context, i int) (taskHealthInput, error) {
-		runs, _, err := s.ListHistory(ctx, tasks[i].Key, 0, healthHistoryLimit)
+		runs, err := s.tasks.runRepository.FindRecentByTaskKey(tasks[i].Key, healthHistoryLimit)
 		if err != nil {
 			return taskHealthInput{}, err
 		}
-		// RPO 事实键与评分窗口解耦:全历史单独取最近一次备份成功。
-		lastBackup, err := s.tasks.runRepository.FindLastBackupSuccess(tasks[i].Key)
-		if err != nil && !isRepositoryNotFound(err) {
-			return taskHealthInput{}, err
-		}
-		return taskHealthInput{runs: runs, lastBackup: lastBackup}, nil
+		return taskHealthInput{runs: runs, lastBackup: backups[tasks[i].Key]}, nil
 	})
+
+	var runIDs []uint
+	for i := range histSlots {
+		if histSlots[i].Err != nil {
+			continue
+		}
+		for _, r := range histSlots[i].Val.runs {
+			runIDs = append(runIDs, r.ID)
+		}
+	}
+	stepsByRun, err := s.tasks.runStepRepository.FindByRunIDs(runIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range histSlots {
+		for _, r := range histSlots[i].Val.runs {
+			steps := stepsByRun[r.ID]
+			r.Steps = make([]model.SyncRunStep, 0, len(steps))
+			for _, sp := range steps {
+				r.Steps = append(r.Steps, *sp)
+			}
+		}
+	}
 
 	items := make([]HealthScoreItem, 0, len(tasks))
 	for i, t := range tasks {
