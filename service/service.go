@@ -18,6 +18,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/repository"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 	"gorm.io/gorm"
 )
 
@@ -32,9 +33,11 @@ type Service struct {
 	sqlDB         *sql.DB
 	ownsDB        bool
 	providerHooks *sdkprov.Hooks
-	templates     TemplateStore
-	approvals     *ForcePushStore
-	retryTracker  *RetryTracker
+	// providers SDK provider 缓存(健康检查顺带刷新缓存指标)。
+	providers    *sdkrt.Manager
+	templates    TemplateStore
+	approvals    *ForcePushStore
+	retryTracker *RetryTracker
 	// pending 待补跑 webhook 触发的持久化存储(pending_triggers 表,见 pending.go)。
 	pending *repository.PendingTriggerRepository
 	// outbox 事务外发盒(outbox_events 表,见 events.go):运行完成事件
@@ -147,6 +150,7 @@ func NewService(cfg *Config, opts ...Option) (*Service, error) {
 		db:                db,
 		ownsDB:            ownsDB,
 		providerHooks:     so.providerHooks,
+		providers:         repositories.provider,
 		repos:             repoService,
 		tasks:             taskService,
 		webhooks:          webhookService,
@@ -486,6 +490,16 @@ func (s *Service) HealthCheck() map[string]string {
 		}
 	} else {
 		status["redis"] = "not configured"
+	}
+
+	// 刷新 provider 缓存指标(命中/未命中/淘汰/条目数)。挂在健康检查上,
+	// k8s 探针与 /health 调用会持续更新,不需要额外后台循环。
+	if s.providers != nil {
+		st := s.providers.Stats()
+		providerCacheHits.Set(float64(st.Hits))
+		providerCacheMisses.Set(float64(st.Misses))
+		providerCacheEvictions.Set(float64(st.Evictions))
+		providerCacheSize.Set(float64(st.Size))
 	}
 
 	return status

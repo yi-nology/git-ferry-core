@@ -313,6 +313,8 @@ const maxDivergentLog = 5
 // 只用于错误详情的条数与列表,解析失败按“无附加信息”处理(原实现同样忽略
 // log 的错误)。
 func targetOnlyCommits(ctx context.Context, backend gitbackend.GitBackend, dir, sourceBranch, targetRef string) []string {
+	// SDK v1.0.3 起 GetCommitsBetween 的契约是 **newest-first**(git log 语义),
+	// 下面取前 maxDivergentLog 条才是"最近 5 个独有提交";依赖此顺序。
 	commits, err := backend.GetCommitsBetween(ctx, dir, sourceBranch, targetRef)
 	if err != nil {
 		return nil

@@ -14,8 +14,9 @@ import (
 // 必须是真实数量,不是展示列表的长度。
 //
 // 回归背景:文案用 len(Extra),而 Extra 是**有上限截断的展示列表**
-// (maxDivergentLog=5),且不同 git 后端对"独有"的判定不一致
-// (gogit 的 GetCommitsBetween 会把共同祖先也带进来)。
+// (maxDivergentLog=5),而条数必须来自真实独有数。
+// (gogit 共同祖先误判已由 SDK merge-base 边界修复;本条只钉"展示截断不得
+// 污染真实条数"。)
 // ⇒ 目标侧只有 1 个独有提交时,文案却写 "has 5 commit(s) not in source",
 // 运维按这个数字判断影响面会判错。
 func TestCheckDivergencePolicy_ErrorReportsRealCount(t *testing.T) {

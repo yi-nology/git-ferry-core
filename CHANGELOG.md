@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.57.0] - 2026-11-18
+
+### Changed（最后一批升级红利）
+
+- **provider 缓存可观测**：新增
+  `gitferry_provider_cache_hits_total` / `_misses_total` /
+  `_evictions_total` / `gitferry_provider_cache_size`，健康检查顺带刷新
+  `sdkrt.Manager.Stats()`（无需额外后台循环）。
+- WebDAV 上传 URL 改用 `pathx.JoinURL`（统一 base/path 拼接规则）。
+- 标注 SDK `GetCommitsBetween` 的 **newest-first** 契约（错误详情取最近 5 条
+  依赖该顺序），并修正 divergence 测试里过时的 gogit 共同祖先说明。
+
 ## [v0.56.0] - 2026-11-18
 
 ### Changed（吃掉升级红利）

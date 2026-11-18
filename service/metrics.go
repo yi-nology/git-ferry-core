@@ -27,12 +27,35 @@ var (
 		Name: "gitferry_execution_queue_pending",
 		Help: "持久化执行队列中待认领作业数。",
 	})
+
+	// provider 缓存(SDK runtime.Manager,64 条 LRU/30min TTL)。
+	// 累计计数器用 Gauge 暴露当前快照:值只增不减,抓取方按 counter 用法读即可。
+	providerCacheHits = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gitferry_provider_cache_hits_total",
+		Help: "provider 缓存命中累计数。",
+	})
+	providerCacheMisses = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gitferry_provider_cache_misses_total",
+		Help: "provider 缓存未命中累计数。",
+	})
+	providerCacheEvictions = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gitferry_provider_cache_evictions_total",
+		Help: "provider 缓存淘汰累计数。",
+	})
+	providerCacheSize = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gitferry_provider_cache_size",
+		Help: "provider 缓存当前条目数。",
+	})
 )
 
 func init() {
 	metrics.RegisterReuse(metrics.Registry, syncRunsTotal)
 	metrics.RegisterReuse(metrics.Registry, syncRunDuration)
 	metrics.RegisterReuse(metrics.Registry, executionQueuePending)
+	metrics.RegisterReuse(metrics.Registry, providerCacheHits)
+	metrics.RegisterReuse(metrics.Registry, providerCacheMisses)
+	metrics.RegisterReuse(metrics.Registry, providerCacheEvictions)
+	metrics.RegisterReuse(metrics.Registry, providerCacheSize)
 }
 
 // observeRunMetrics 记录一次完成的同步运行。

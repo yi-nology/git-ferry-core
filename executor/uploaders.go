@@ -12,6 +12,7 @@ import (
 
 	"github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/httpjson"
+	"github.com/oekit/pkg/pathx"
 )
 
 // uploadHTTPClient 出站上传专用客户端:统一超时,避免默认客户端无限挂起。
@@ -134,7 +135,7 @@ func (webdavUploader) Upload(ctx context.Context, d Destination, objectKey strin
 	if d.URL == "" {
 		return "", errors.New("webdav: url required")
 	}
-	url := strings.TrimRight(d.URL, "/") + "/" + path.Base(objectKey)
+	url := pathx.JoinURL(d.URL, path.Base(objectKey))
 	err := putViaHTTPJSON(ctx, url, data, func(h http.Header) {
 		h.Set("Content-Type", "application/octet-stream")
 		if d.Username != "" {
