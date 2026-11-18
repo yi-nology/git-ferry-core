@@ -131,6 +131,12 @@ func (d *RepoRepository) Delete(key string) error {
 	return d.db.Where("`key` = ?", key).Delete(&model.Repo{}).Error
 }
 
+// FindByCloneURL 按 clone URL 精确查仓库(批量镜像幂等用)。
+// 查无此条返回 ErrNotFound。
+func (d *RepoRepository) FindByCloneURL(cloneURL string) (*model.Repo, error) {
+	return d.getByCondition("clone_url = ?", cloneURL)
+}
+
 // FindByPlatformID 根据平台 ID 查找仓库
 func (d *RepoRepository) FindByPlatformID(platformID uint) ([]*model.Repo, error) {
 	var repos []*model.Repo

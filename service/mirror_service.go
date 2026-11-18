@@ -759,7 +759,10 @@ func (m *MirrorService) PreviewMirrorRun(ctx context.Context, channelID, targetI
 		return nil, err
 	}
 	defer cleanup()
-	rep, err := m.publishOne(ctx, ch, t, dir, tag, false, true)
+	if err := m.ensureTargetRemote(ctx, dir, t, gitbackend.AuthConfig{Type: gitbackend.AuthNone}); err != nil {
+		return nil, oekiterrors.Wrap(err, "配置目标远端失败")
+	}
+	rep, err := m.publishOne(ctx, ch, t, dir, tag, false, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -917,6 +920,40 @@ func (m *MirrorService) execute(ctx context.Context, runID uint, ch *model.Mirro
 	logx.Info("mirror run finished", "run", runID, "status", run.Status)
 }
 
+// mirrorPublishPlan 一轮发布中与 tag 无关的准备结果。
+//
+// 凭据解密 / 平台 TLS 查找(ListPlatforms + 全部 token 解密) / scrub 规则
+// 编译 / 源仓自毁校验都与具体 tag 无关:按 tag 重算会让 N 个 tag 做 N 份
+// 全表加载与 AES 解密。
+type mirrorPublishPlan struct {
+	auth       gitbackend.AuthConfig
+	scrubRules []mirror.ScrubRule
+}
+
+// prepareMirrorPublish 计算一轮发布共享的准备结果(含自毁预检)。
+func (m *MirrorService) prepareMirrorPublish(ctx context.Context, ch *model.MirrorChannel, t *model.MirrorTarget) (*mirrorPublishPlan, error) {
+	auth, err := m.targetAuth(t)
+	if err != nil {
+		return nil, err
+	}
+	// 目标远端的 TLS 策略在**它所属的平台**上(自建实例常见自签/过期证书),
+	// 目标记录本身没有这个字段 ⇒ 必须在这里按 host 找回平台并补上。
+	auth = m.applyTargetPlatformTLS(ctx, t, auth)
+	scrubRules, err := channelScrubRules(ch)
+	if err != nil {
+		return nil, err
+	}
+	// **自毁预检(发布时)**:建通道后源仓库 URL 可能改过,再验一次。
+	repo, rerr := m.svc.GetRepoByKey(ch.RepoKey)
+	if rerr != nil || repo == nil {
+		return nil, oekiterrors.New(fmt.Sprintf("源仓库不存在: %s", ch.RepoKey))
+	}
+	if err := mirror.CheckTargetAgainstSource(repo.CloneURL, t.RepoURL); err != nil {
+		return nil, err
+	}
+	return &mirrorPublishPlan{auth: auth, scrubRules: scrubRules}, nil
+}
+
 // executePublish 逐 tag 调用 core Publish,行级结果互不阻塞。
 //
 // 调用方(execute)已持有通道闸门 ⇒ 这里用 ensureRepoLocked(不再嵌套加锁)。
@@ -933,6 +970,10 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 	if err := m.ensureTargetRemote(ctx, dir, t, gitbackend.AuthConfig{Type: gitbackend.AuthNone}); err != nil {
 		return oekiterrors.Wrap(err, "配置目标远端失败")
 	}
+	plan, err := m.prepareMirrorPublish(ctx, ch, t)
+	if err != nil {
+		return err
+	}
 
 	var divergent, failed int
 	var lastReport *mirror.TagReport
@@ -947,7 +988,7 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 		run.Steps = marshalSteps(steps)
 		_ = m.runs.Update(run)
 
-		rep, tagErr := m.publishOne(ctx, ch, t, dir, tag, in.AllowOverwrite, false)
+		rep, tagErr := m.publishOne(ctx, ch, t, dir, tag, in.AllowOverwrite, false, plan)
 		idx := len(steps) - 1
 		if tagErr != nil {
 			if isDivergentError(tagErr) {
@@ -986,30 +1027,13 @@ func (m *MirrorService) executePublish(ctx context.Context, run *model.MirrorRun
 // dir 是**已准备好**的源仓库工作目录(调用方负责 prepare 与加锁):
 // 之前这里自己调 ensureRepo ⇒ 每个 tag 都会重新 fetch 一次(同一轮 run 里 N+1 次),
 // 而且会和调用方持有的通道闸门嵌套(死锁)。
-func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel, t *model.MirrorTarget, dir, tag string, allowOverwrite, dryRun bool) (*mirror.TagReport, error) {
-	// 预检/发布都要先把目标仓库接为本地克隆的远端
-	if err := m.ensureTargetRemote(ctx, dir, t, gitbackend.AuthConfig{Type: gitbackend.AuthNone}); err != nil {
-		return nil, oekiterrors.Wrap(err, "配置目标远端失败")
-	}
-	auth, err := m.targetAuth(t)
-	if err != nil {
-		return nil, err
-	}
-	// 目标远端的 TLS 策略在**它所属的平台**上(自建实例常见自签/过期证书),
-	// 目标记录本身没有这个字段 ⇒ 必须在这里按 host 找回平台并补上,
-	// 否则"远端一致性检查"会因证书问题直接中止发布。
-	auth = m.applyTargetPlatformTLS(ctx, t, auth)
-	scrubRules, err := channelScrubRules(ch)
-	if err != nil {
-		return nil, err
-	}
-	// **自毁预检(发布时)**:建通道后源仓库 URL 可能改过,再验一次。
-	repo, rerr := m.svc.GetRepoByKey(ch.RepoKey)
-	if rerr != nil || repo == nil {
-		return nil, oekiterrors.New(fmt.Sprintf("源仓库不存在: %s", ch.RepoKey))
-	}
-	if err := mirror.CheckTargetAgainstSource(repo.CloneURL, t.RepoURL); err != nil {
-		return nil, err
+func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel, t *model.MirrorTarget, dir, tag string, allowOverwrite, dryRun bool, plan *mirrorPublishPlan) (*mirror.TagReport, error) {
+	if plan == nil {
+		var err error
+		plan, err = m.prepareMirrorPublish(ctx, ch, t)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rep2, err := mirror.Publish(ctx, mirror.Options{
 		RepoDir: dir,
@@ -1018,12 +1042,12 @@ func (m *MirrorService) publishOne(ctx context.Context, ch *model.MirrorChannel,
 		Mapping:        mirror.Mapping{Source: ch.Module, Target: t.TargetModule},
 		Tags:           []string{tag},
 		Remote:         t.Remote,
-		Auth:           auth,
+		Auth:           plan.auth,
 		AllowOverwrite: allowOverwrite,
 		DryRun:         dryRun,
 		// 痕迹清理:身份改写只管 module path;
 		// 内网 registry / 部署代号 / 令牌得靠规则清。
-		ScrubRules: scrubRules,
+		ScrubRules: plan.scrubRules,
 	})
 	if err != nil {
 		return nil, err

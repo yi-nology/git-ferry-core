@@ -337,6 +337,36 @@ func TestBulkMirrorOrg_CreateRepoAndTask(t *testing.T) {
 
 // TestBulkMirrorOrg_MappingStrategies 落点策略表驱动（壳 org-mirror 语义）：
 // preserve 恒等、single 落 target_org、flat 落 target_user、mixed 组织仓落 target_org。
+// TestBulkMirrorOrg_RerunIsIdempotent 重跑同一组织镜像必须复用已有目标仓与任务,
+// 不得再建一份（此前 CreateRepo 无 clone_url 唯一约束 ⇒ 每次重跑都产生重复）。
+func TestBulkMirrorOrg_RerunIsIdempotent(t *testing.T) {
+	svc, db, dst := setupMirrorFixture(t)
+	req := BulkMirrorRequest{
+		SourcePlatformKey: "src-plat", SourceOrg: "acme",
+		TargetPlatform: dst, Strategy: OrgMapSingle, TargetOrg: "backup",
+		CreateTasks: true, DryRun: false,
+	}
+	first, err := svc.BulkMirrorOrg(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Imported)
+	require.Equal(t, 2, first.TasksCreated)
+
+	second, err := svc.BulkMirrorOrg(context.Background(), req)
+	require.NoError(t, err)
+	assert.Zero(t, second.Imported, "重跑不得新建目标仓")
+	assert.Zero(t, second.TasksCreated, "重跑不得新建任务")
+	for _, it := range second.Items {
+		assert.Equal(t, "task_exists", it.Action, "item=%+v", it)
+	}
+
+	var dstRepos []*model.Repo
+	require.NoError(t, db.Where("platform_id = ?", dst.ID).Find(&dstRepos).Error)
+	assert.Len(t, dstRepos, 2, "目标仓数量不得随重跑增长")
+	var tasks []*model.SyncTask
+	require.NoError(t, db.Find(&tasks).Error)
+	assert.Len(t, tasks, 2, "任务数量不得随重跑增长")
+}
+
 func TestBulkMirrorOrg_MappingStrategies(t *testing.T) {
 	cases := []struct {
 		name       string

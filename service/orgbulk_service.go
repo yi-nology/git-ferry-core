@@ -6,6 +6,7 @@ import (
 
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
+	"github.com/yi-nology/git-ferry-core/repository"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
 )
@@ -236,23 +237,41 @@ func (s *Service) BulkMirrorOrg(ctx context.Context, req BulkMirrorRequest) (*Bu
 		if tURL == "" {
 			tURL = RewriteRepoURL(req.TargetPlatform.InstanceURL, tOwner, tRepo)
 		}
-		tRepoRec, terr := s.CreateRepo(ctx, &model.CreateRepoRequest{
-			Name:       tName,
-			RemoteURL:  tURL,
-			PlatformID: req.TargetPlatform.ID,
-		})
-		if terr != nil {
-			// 已存在等错误：尝试按名称找
-			item.Action = "skipped"
-			item.Message = terr.Error()
+		// 先按 clone URL 查已有目标仓：重跑同一组织镜像必须复用,
+		// 否则每次执行都会新建一条 repo(无 clone_url 唯一约束)。
+		var tRepoRec *model.Repo
+		existingRepo, ferr := s.repos.repoRepository.FindByCloneURL(tURL)
+		switch {
+		case ferr == nil && existingRepo != nil:
+			tRepoRec = existingRepo
+			item.Action = "existing"
+		case ferr != nil && !errors.Is(ferr, repository.ErrNotFound):
+			item.Action = "failed"
+			item.Message = ferr.Error()
 			res.Items = append(res.Items, item)
-			res.Warnings = append(res.Warnings, tName+": "+terr.Error())
+			res.Warnings = append(res.Warnings, tName+": "+ferr.Error())
 			continue
+		default:
+			created, terr := s.CreateRepo(ctx, &model.CreateRepoRequest{
+				Name:       tName,
+				RemoteURL:  tURL,
+				PlatformID: req.TargetPlatform.ID,
+			})
+			if terr != nil {
+				item.Action = "failed"
+				item.Message = terr.Error()
+				res.Items = append(res.Items, item)
+				res.Warnings = append(res.Warnings, tName+": "+terr.Error())
+				continue
+			}
+			tRepoRec = created
+			res.Imported++
 		}
-		res.Imported++
 
 		if !req.CreateTasks {
-			item.Action = "imported"
+			if item.Action == "" {
+				item.Action = "imported"
+			}
 			res.Items = append(res.Items, item)
 			continue
 		}
@@ -265,8 +284,20 @@ func (s *Service) BulkMirrorOrg(ctx context.Context, req BulkMirrorRequest) (*Bu
 			res.Items = append(res.Items, item)
 			continue
 		}
+		// 任务按 (源仓,源分支,目标仓,目标分支) 去重：重跑同一镜像是幂等的。
+		if existingTask, terr := s.tasks.taskRepository.FindByRoute(srcKey, "*", tRepoRec.Key, "*"); terr == nil && existingTask != nil {
+			item.Action = "task_exists"
+			res.Items = append(res.Items, item)
+			continue
+		} else if terr != nil && !errors.Is(terr, repository.ErrNotFound) {
+			item.Action = "failed"
+			item.Message = terr.Error()
+			res.Items = append(res.Items, item)
+			res.Warnings = append(res.Warnings, tName+": "+terr.Error())
+			continue
+		}
 		taskName := "org-mirror-" + tRepo
-		_, terr = s.CreateTask(ctx, &model.CreateTaskRequest{
+		_, terr := s.CreateTask(ctx, &model.CreateTaskRequest{
 			Name:          taskName,
 			SourceRepoKey: srcKey,
 			SourceBranch:  "*",

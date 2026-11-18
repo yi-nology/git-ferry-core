@@ -102,6 +102,15 @@ func (d *SyncTaskRepository) Delete(key string) error {
 	return d.db.Where("`key` = ?", key).Delete(&model.SyncTask{}).Error
 }
 
+// FindByRoute 按「源仓+源分支+目标仓+目标分支」查任务(批量镜像幂等用)。
+// 查无此条返回 ErrNotFound。
+func (d *SyncTaskRepository) FindByRoute(sourceRepoKey, sourceBranch, targetRepoKey, targetBranch string) (*model.SyncTask, error) {
+	return d.getByCondition(
+		"source_repo_key = ? AND source_branch = ? AND target_repo_key = ? AND target_branch = ?",
+		sourceRepoKey, sourceBranch, targetRepoKey, targetBranch,
+	)
+}
+
 func (d *SyncTaskRepository) FindAll(page Pagination) ([]*model.SyncTask, int64, error) {
 	var tasks []*model.SyncTask
 	total, err := Paginate(d.db, page, &tasks)

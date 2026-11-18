@@ -107,7 +107,52 @@ func (s *Service) cleanupOldHistory() {
 				"events", events, "runs", runs, "steps", steps,
 				"retention", maxAge)
 		}
+		s.cleanupAuxTables(ctx, maxAge)
 	}).Wait()
+}
+
+// cleanupAuxTables 清理同样会随运行次数增长的辅助表：
+//   - retry_schedules 终态行(dispatched/cancelled)；
+//   - reconcile_results 过期对账行。
+//
+// 两者的 Cleanup 方法此前零调用 ⇒ 表只增不减。按 1000 行/批循环到
+// 不足一批为止，避免单轮只清 1000 行追不上写入。
+func (s *Service) cleanupAuxTables(ctx context.Context, maxAge time.Duration) {
+	cutoff := time.Now().Add(-maxAge)
+	if s.retrySchedules != nil {
+		var total int64
+		for ctx.Err() == nil {
+			n, err := s.retrySchedules.CleanupTerminal(cutoff)
+			if err != nil {
+				logx.Error("清理过期重试排程失败", "error", err)
+				break
+			}
+			total += n
+			if n < 1000 {
+				break
+			}
+		}
+		if total > 0 {
+			logx.Info("已清理过期重试排程", "count", total, "retention", maxAge)
+		}
+	}
+	if s.reconciles != nil {
+		var total int64
+		for ctx.Err() == nil {
+			n, err := s.reconciles.Cleanup(ctx, maxAge)
+			if err != nil {
+				logx.Error("清理过期对账结果失败", "error", err)
+				break
+			}
+			total += n
+			if n < 1000 {
+				break
+			}
+		}
+		if total > 0 {
+			logx.Info("已清理过期对账结果", "count", total, "retention", maxAge)
+		}
+	}
 }
 
 // cleanupTriggerTimes 周期清理过期的触发时间缓存。

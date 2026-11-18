@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.58.0] - 2026-11-18
+
+### Fixed
+
+- **组织镜像重跑幂等**：`BulkMirrorOrg` 建仓前按 `clone_url` 复用已有目标仓
+  （新增 `RepoRepository.FindByCloneURL`），建任务前按
+  `(source_repo_key, source_branch, target_repo_key, target_branch)` 去重
+  （新增 `SyncTaskRepository.FindByRoute`）；重跑返回 `existing` /
+  `task_exists`，不再重复造仓造任务。新增回归测试钉住。
+
+### Changed
+
+- **辅助表清理接线**：`cleanupAuxTables` 把此前零调用的
+  `RetryScheduleRepository.CleanupTerminal` 与 `ReconcileRepository.Cleanup`
+  接进历史清理循环，按 1000 行/批循环到不足一批，避免 `retry_schedules` /
+  `reconcile_results` 只增不减。
+- **镜像发布按轮预计算**：新增 `mirrorPublishPlan`，把凭据解密、目标平台
+  TLS 查找（`ListPlatforms` + 全部 token 解密）、scrub 规则编译、源仓自毁
+  校验从「每 tag 一次」降到「每轮一次」；`ensureTargetRemote` 也只在
+  prepare 阶段执行，N 个 tag 不再重复全表加载与 AES 解密。
+
 ## [v0.57.0] - 2026-11-18
 
 ### Changed（最后一批升级红利）
