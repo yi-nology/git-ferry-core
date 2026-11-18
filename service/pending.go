@@ -1,10 +1,10 @@
 package service
 
 import (
-	"context"
 	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/pkg/contextx"
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
@@ -77,10 +77,7 @@ func (s *Service) sweepPendingTriggersOnStartup() {
 // 补跑走 RunTaskWithTrigger(trigger=webhook):若执行权被占(另一实例正在跑),
 // 它内部的 ErrTaskRunning 分支会重新记账 ⇒ 最终收敛,不丢触发。
 func (s *Service) triggerPendingCatchup(taskKey string) {
-	ctx := s.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := contextx.OrBackground(s.bgCtx)
 	async.GoSafe(func() {
 		if err := s.RunTaskWithTrigger(ctx, taskKey, model.TriggerWebhook, nil); err != nil {
 			logx.Error("补跑被合并的 webhook 触发失败", "taskKey", taskKey, "error", err)

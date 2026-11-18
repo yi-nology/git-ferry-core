@@ -687,7 +687,8 @@ func RedactRepoURL(raw string) string {
 		q := u.Query()
 		for key := range q {
 			switch strings.ToLower(key) {
-			case "token", "access_token", "private_token", "password", "passwd", "secret", "api_key":
+			case "token", "access_token", "private_token", "password", "passwd",
+				"secret", "api_key", "apikey", "key":
 				q.Set(key, "***")
 			}
 		}

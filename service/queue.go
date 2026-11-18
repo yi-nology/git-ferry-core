@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"github.com/oekit/logx"
 	"os"
@@ -12,6 +10,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"
 )
@@ -88,11 +87,11 @@ func newInstanceID() string {
 	if err != nil {
 		host = "unknown"
 	}
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	suffix, err := stringx.RandomToken(4, stringx.TokenHex)
+	if err != nil {
 		return fmt.Sprintf("%s-%d", host, os.Getpid())
 	}
-	return fmt.Sprintf("%s-%d-%s", host, os.Getpid(), hex.EncodeToString(b[:]))
+	return fmt.Sprintf("%s-%d-%s", host, os.Getpid(), suffix)
 }
 
 // dispatchJobLoop 派发器:周期认领并执行待处理作业。

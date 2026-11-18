@@ -15,6 +15,7 @@ import (
 	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
+	sdkrt "github.com/yi-nology/go-git-platform/runtime"
 )
 
 // 元数据回灌引擎（壳 MetadataRestore 端点下沉）：将 metadata-backup 快照
@@ -455,12 +456,13 @@ func restoreMilestones(ctx context.Context, t restoreTarget, dir string, stat *R
 
 // restoreIssues 回灌 issues；asPR=true 时读 pull_requests.json 并以 issue 形态落盘（标注来源）。
 
-// listExistingIssueTitles 拉取目标仓**全部** issue 的标题(去重用)。
+// listExistingIssueTitles 拉取目标仓**全部** issue,按标题建索引。
 //
 // 必须翻页:只取第 1 页会让第 2 页以后的同名 issue 漏出去 ⇒ 重跑回灌产生重复。
+// 保存整条 issue(不只 bool)是为了 overwrite 时能拿到 number 直接 update。
 // 一侧失败时如实告警(调用方要能知道"去重表不完整")。
-func listExistingIssueTitles(ctx context.Context, im sdkprov.IssueManager, owner, repo string) (map[string]bool, []string) {
-	out := map[string]bool{}
+func listExistingIssueTitles(ctx context.Context, im sdkprov.IssueManager, owner, repo string) (map[string]*sdkmodel.Issue, []string) {
+	out := map[string]*sdkmodel.Issue{}
 	var warns []string
 	const perPage = 100
 	page := 1
@@ -475,7 +477,7 @@ func listExistingIssueTitles(ctx context.Context, im sdkprov.IssueManager, owner
 		}
 		for _, iss := range items {
 			if iss != nil {
-				out[iss.Title] = true
+				out[iss.Title] = iss
 			}
 		}
 		if len(items) < perPage {
@@ -488,6 +490,30 @@ func listExistingIssueTitles(ctx context.Context, im sdkprov.IssueManager, owner
 			return out, warns
 		}
 	}
+}
+
+// updateIssueFromSnapshot 覆盖同名 issue:标题/正文/标签 + 开闭状态收敛。
+//
+// 平台若无法表达「清空标签」(ErrClearNotSupported),退化为保留原标签再更新
+// 其余字段,并让调用方按 updated 计数 —— 比整条跳过更接近 overwrite 语义。
+func updateIssueFromSnapshot(ctx context.Context, t restoreTarget, im sdkprov.IssueManager, number, title, body string, labels []string, want sdkmodel.IssueState) error {
+	opts := sdkprov.UpdateIssueOptions{Title: title, BodyPatch: &body}
+	if len(labels) > 0 {
+		opts.LabelsPatch = &labels
+	}
+	if _, err := im.UpdateIssue(ctx, t.owner, t.repo, number, opts); err != nil {
+		if !errors.Is(err, sdkprov.ErrClearNotSupported) {
+			return err
+		}
+		opts.LabelsPatch = nil
+		if _, err2 := im.UpdateIssue(ctx, t.owner, t.repo, number, opts); err2 != nil {
+			return err2
+		}
+	}
+	if _, _, err := sdkrt.EnsureIssueState(ctx, t.prov, t.owner, t.repo, number, want); err != nil {
+		return err
+	}
+	return nil
 }
 
 func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *RestoreKindStat, result *RestoreResult, asPR bool) {
@@ -521,10 +547,29 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 				result.addDetail(kind, "", "skipped", nil)
 				continue
 			}
-			if existingTitles[pr.Title] {
-				stat.Skipped++
-				result.addDetail(kind, pr.Title, "skipped", nil)
-				t.warnOverwriteUnsupported(result, kind, pr.Title)
+			if existing, found := existingTitles[pr.Title]; found {
+				if !t.overwrite {
+					stat.Skipped++
+					result.addDetail(kind, pr.Title, "skipped", nil)
+					continue
+				}
+				if t.dryRun {
+					stat.Updated++
+					result.addDetail(kind, pr.Title, "updated", nil)
+					continue
+				}
+				want := sdkmodel.IssueStateOpen
+				if pr.State == sdkmodel.CRStateMerged || pr.State == sdkmodel.CRStateClosed {
+					want = sdkmodel.IssueStateClosed
+				}
+				if err := updateIssueFromSnapshot(ctx, t, im, existing.Number, pr.Title, prBody(pr), nil, want); err != nil {
+					stat.Failed++
+					result.addDetail(kind, pr.Title, "failed", err)
+					result.Warnings = append(result.Warnings, "update pr-as-issue "+pr.Title+": "+err.Error())
+					continue
+				}
+				stat.Updated++
+				result.addDetail(kind, pr.Title, "updated", nil)
 				continue
 			}
 			body := prBody(pr)
@@ -544,8 +589,7 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 			}
 			stat.Created++
 			result.addDetail(kind, pr.Title, "created", nil)
-			existingTitles[pr.Title] = true
-			_ = created
+			existingTitles[pr.Title] = created
 			// **PR 的状态要跟着回灌**:已合并/已关闭的 PR 回灌成"开着的 issue",
 			// 看着像一条待处理的请求(issues 分支本来就处理了 closed 状态)。
 			if pr.State == sdkmodel.CRStateMerged || pr.State == sdkmodel.CRStateClosed {
@@ -569,10 +613,29 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 			result.addDetail(kind, "", "skipped", nil)
 			continue
 		}
-		if existingTitles[iss.Title] {
-			stat.Skipped++
-			result.addDetail(kind, iss.Title, "skipped", nil)
-			t.warnOverwriteUnsupported(result, kind, iss.Title)
+		if existing, found := existingTitles[iss.Title]; found {
+			if !t.overwrite {
+				stat.Skipped++
+				result.addDetail(kind, iss.Title, "skipped", nil)
+				continue
+			}
+			if t.dryRun {
+				stat.Updated++
+				result.addDetail(kind, iss.Title, "updated", nil)
+				continue
+			}
+			want := sdkmodel.IssueStateOpen
+			if strings.EqualFold(iss.State, "closed") {
+				want = sdkmodel.IssueStateClosed
+			}
+			if err := updateIssueFromSnapshot(ctx, t, im, existing.Number, iss.Title, issueBody(iss), iss.Labels, want); err != nil {
+				stat.Failed++
+				result.addDetail(kind, iss.Title, "failed", err)
+				result.Warnings = append(result.Warnings, "update issue "+iss.Title+": "+err.Error())
+				continue
+			}
+			stat.Updated++
+			result.addDetail(kind, iss.Title, "updated", nil)
 			continue
 		}
 		body := issueBody(iss)
@@ -593,7 +656,7 @@ func restoreIssues(ctx context.Context, t restoreTarget, dir string, stat *Resto
 		}
 		stat.Created++
 		result.addDetail(kind, iss.Title, "created", nil)
-		existingTitles[iss.Title] = true
+		existingTitles[iss.Title] = created
 		for _, cm := range iss.CommentList {
 			if cm == nil || cm.Body == "" {
 				continue

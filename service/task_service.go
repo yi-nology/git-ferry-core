@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"
 	"gorm.io/gorm"
@@ -103,7 +103,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 	// Key:回放路径显式指定(策略文件身份),普通创建生成 UUID。
 	key := req.Key
 	if key == "" {
-		key = uuid.New().String()
+		key = stringx.UUIDv4()
 	} else if !validTaskKey(key) {
 		return nil, errors.New(fmt.Sprintf("invalid task key %q: only [a-zA-Z0-9-]{1,64}", key))
 	}
@@ -116,7 +116,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 		TargetBranch:       req.TargetBranch,
 		SyncMode:           req.SyncMode,
 		Cron:               req.Cron,
-		WebhookToken:       uuid.New().String(),
+		WebhookToken:       stringx.UUIDv4(),
 		Enabled:            true,
 		GitTags:            req.GitTags,
 		GitForce:           req.GitForce,

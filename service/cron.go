@@ -8,6 +8,7 @@ import (
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
+	"github.com/oekit/pkg/contextx"
 	cronx "github.com/oekit/pkg/timex/cron"
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -72,10 +73,7 @@ func (s *Service) startCronJobs() error {
 		return nil
 	}
 	s.cronStarted = true
-	base := s.bgCtx
-	if base == nil {
-		base = context.Background()
-	}
+	base := contextx.OrBackground(s.bgCtx)
 	ctx, cancel := context.WithCancel(base)
 	s.cronCancel = cancel
 	s.cronMu.Unlock()

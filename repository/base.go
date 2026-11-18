@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 
+	"github.com/oekit/gormx"
 	"github.com/oekit/gormx/crud"
 	"github.com/oekit/gormx/gormrepo"
 	"gorm.io/gorm"
@@ -46,7 +47,14 @@ func writableColumns[T any](db *gorm.DB, exclude ...string) []string {
 		return nil
 	}
 	skip := map[string]struct{}{
-		"id": {}, "created_at": {}, "updated_at": {}, "deleted_at": {},
+		"created_at": {}, "updated_at": {}, "deleted_at": {},
+	}
+	// 主键列名从 schema 取,不能硬编码 "id":ReconcileResult 的主键是
+	// task_key、SchemaMigration 的是 version,硬编码会把主键写进 Update。
+	if pk, err := gormx.PrimaryKeyColumn(db, probe); err == nil && pk != "" {
+		skip[pk] = struct{}{}
+	} else {
+		skip["id"] = struct{}{} // 无主键模型沿用旧行为
 	}
 	for _, c := range exclude {
 		skip[c] = struct{}{}

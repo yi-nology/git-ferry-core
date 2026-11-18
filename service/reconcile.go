@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/oekit/concurrency/loop"
+	"github.com/oekit/pkg/timex"
 	"github.com/yi-nology/git-ferry-core/model"
 	sdkmodel "github.com/yi-nology/go-git-platform/model"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -190,10 +191,8 @@ func (s *Service) runReconcilePass(ctx context.Context) {
 			drift++
 		}
 		// 平台 API 限速:任务间小睡,宁可慢不可被限流封。
-		select {
-		case <-ctx.Done():
+		if err := timex.SleepContext(ctx, 100*time.Millisecond); err != nil {
 			return
-		case <-time.After(100 * time.Millisecond):
 		}
 	}
 	if drift > 0 || unknown > 0 {

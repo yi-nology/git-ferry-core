@@ -82,11 +82,19 @@ type fakeEngineProv struct {
 	createdIssues    []sdkprov.CreateIssueOptions
 	createdComments  []string
 	closedIssues     []string
+	updatedIssues    []issueUpdateRecord
+	reopenedIssues   []string
 	createdRelease   []sdkprov.CreateReleaseOptions
 	labelErrs        map[string]error
 	milestoneErrs    map[string]error
 	issueErrs        map[string]error
 	releaseErrs      map[string]error
+}
+
+// issueUpdateRecord 记录一次 UpdateIssue 调用(断言 overwrite 用)。
+type issueUpdateRecord struct {
+	number string
+	opts   sdkprov.UpdateIssueOptions
 }
 
 func (f *fakeEngineProv) Capabilities() sdkprov.CapabilitySet { return f.caps }
@@ -141,14 +149,23 @@ func (f *fakeEngineProv) CloseIssue(_ context.Context, _, _, number string) (*sd
 	return &sdkmodel.Issue{Number: number, State: "closed"}, nil
 }
 
-func (f *fakeEngineProv) GetIssue(context.Context, string, string, string) (*sdkmodel.Issue, error) {
-	panic("fakeEngineProv: GetIssue not expected")
+func (f *fakeEngineProv) GetIssue(_ context.Context, _, _, number string) (*sdkmodel.Issue, error) {
+	for _, iss := range f.issues {
+		if iss.Number == number {
+			return iss, nil
+		}
+	}
+	return &sdkmodel.Issue{Number: number, State: sdkmodel.IssueStateOpen}, nil
 }
-func (f *fakeEngineProv) UpdateIssue(context.Context, string, string, string, sdkprov.UpdateIssueOptions) (*sdkmodel.Issue, error) {
-	panic("fakeEngineProv: UpdateIssue not expected")
+
+func (f *fakeEngineProv) UpdateIssue(_ context.Context, _, _, number string, opts sdkprov.UpdateIssueOptions) (*sdkmodel.Issue, error) {
+	f.updatedIssues = append(f.updatedIssues, issueUpdateRecord{number: number, opts: opts})
+	return &sdkmodel.Issue{Number: number, Title: opts.Title, State: sdkmodel.IssueStateOpen}, nil
 }
-func (f *fakeEngineProv) ReopenIssue(context.Context, string, string, string) (*sdkmodel.Issue, error) {
-	panic("fakeEngineProv: ReopenIssue not expected")
+
+func (f *fakeEngineProv) ReopenIssue(_ context.Context, _, _, number string) (*sdkmodel.Issue, error) {
+	f.reopenedIssues = append(f.reopenedIssues, number)
+	return &sdkmodel.Issue{Number: number, State: sdkmodel.IssueStateOpen}, nil
 }
 func (f *fakeEngineProv) UpdateIssueComment(context.Context, string, string, string, int64, string) (*sdkmodel.IssueComment, error) {
 	panic("fakeEngineProv: UpdateIssueComment not expected")

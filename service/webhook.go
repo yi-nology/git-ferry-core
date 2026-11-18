@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/gormx"
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/go-git-platform/filter/branchfilter"
 )
@@ -34,7 +34,7 @@ func webhookEventID(raw string) (id string, needDedup bool) {
 // 只在没有可用去重键时使用(宁可重复处理,也不能丢事件);前缀 syn- 便于
 // 在库里一眼认出"这是合成 ID,不是平台投递 ID"。
 func syntheticEventID() string {
-	return "syn-" + uuid.NewString()
+	return "syn-" + stringx.UUIDv4()
 }
 
 // isDuplicateKeyErr 判断错误是否为 DB 唯一约束冲突。

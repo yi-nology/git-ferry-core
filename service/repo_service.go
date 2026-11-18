@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/google/uuid"
 	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"
 	sdkprov "github.com/yi-nology/go-git-platform/provider"
@@ -111,7 +111,7 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 	}
 
 	repo := &model.Repo{
-		Key:           uuid.New().String(),
+		Key:           stringx.UUIDv4(),
 		Name:          req.Name,
 		PlatformID:    req.PlatformID,
 		Platform:      platformType,

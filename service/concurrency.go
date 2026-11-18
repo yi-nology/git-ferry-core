@@ -5,10 +5,10 @@ import (
 	"github.com/oekit/logx"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 	"github.com/oekit/redisx"
 	"github.com/oekit/redisx/distlock"
 	"github.com/yi-nology/git-ferry-core/lock"
@@ -137,7 +137,7 @@ func newRedisGuard(addr, password string, db, maxConcurrent int, poolOpts lock.R
 
 func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, error) {
 	// 1) 全局并发槽
-	semID := uuid.NewString()
+	semID := stringx.UUIDv4()
 	ok, err := g.sem.Acquire(ctx, semID)
 	if err != nil {
 		return nil, err

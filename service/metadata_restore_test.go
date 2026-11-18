@@ -475,6 +475,38 @@ func TestRunRestore_OverwriteUnsupportedWarns(t *testing.T) {
 	assert.Contains(t, joined, "milestones", "告警要点名具体类型")
 }
 
+// TestRunRestore_OverwriteIssueUpdates 同名 issue + overwrite=true 必须
+// 走 UpdateIssue 收敛标题/正文/标签,并 EnsureIssueState 把状态拉回快照值。
+func TestRunRestore_OverwriteIssueUpdates(t *testing.T) {
+	backupRoot := t.TempDir()
+	svc := newRestoreTestService(backupRoot)
+	snapDir := t.TempDir()
+	writeRestoreFixture(t, snapDir)
+	snap, err := loadMetadataSnapshot(snapDir)
+	require.NoError(t, err)
+
+	prov := &fakeEngineProv{
+		issues: []*sdkmodel.Issue{
+			{Number: "42", Title: "i1", State: sdkmodel.IssueStateClosed},
+		},
+	}
+	res := svc.runRestore(t.Context(), RestoreRequest{
+		RepoKey: "r1", DryRun: false, Overwrite: true, Kinds: []string{"issues"},
+	}, snapDir, snap, &model.Platform{Type: "github"}, "acme", "app", prov)
+
+	require.Zero(t, res.Failed, "overwrite issue 不应失败: %v", res.Warnings)
+	require.Len(t, prov.updatedIssues, 1, "同名 issue 必须走 UpdateIssue")
+	upd := prov.updatedIssues[0]
+	assert.Equal(t, "42", upd.number)
+	require.NotNil(t, upd.opts.BodyPatch)
+	assert.Contains(t, *upd.opts.BodyPatch, "gitferry-restore:issue")
+	require.NotNil(t, upd.opts.LabelsPatch)
+	assert.Equal(t, []string{"bug"}, *upd.opts.LabelsPatch)
+	assert.Contains(t, prov.reopenedIssues, "42", "快照状态 open、目标 closed ⇒ 必须重新打开")
+	require.NotNil(t, res.Stats["issues"])
+	assert.GreaterOrEqual(t, res.Stats["issues"].Updated, 1)
+}
+
 // TestRunRestore_DedupSeesAllPages 去重表必须**翻页拉全量**。
 //
 // 回归背景(P1):去重只取第 1 页(100 条)⇒ 目标仓 issue 超过 100 条后,

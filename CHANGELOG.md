@@ -2,6 +2,25 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.56.0] - 2026-11-18
+
+### Changed（吃掉升级红利）
+
+- **元数据回灌 overwrite 真正生效**：同名 issue/PR-as-issue 不再只是跳过，
+  改为 `UpdateIssue`（标题/正文/标签三态 patch）+ `sdkrt.EnsureIssueState`
+  收敛开闭状态；`ErrClearNotSupported` 时退化为保留原标签再更新其余字段。
+- **主键列从 schema 取**：`repository/base.go` 用 `gormx.PrimaryKeyColumn`
+  替代硬编码 `"id"`，非 `id` 主键模型（ReconcileResult/SchemaMigration）
+  不会再被写进 Update 列白名单。
+- **UUID/随机令牌收编 oekit/pkg/stringx**：`UUIDv4` / `RandomToken` 替代
+  `google/uuid` 与手写 `crypto/rand`+hex；`google/uuid` 直接依赖移除。
+- **ctx/sleep helper 收编**：`contextx.OrBackground`、`timex.SleepContext`
+  替代手写 nil-ctx 兜底与 `time.After` select。
+- **日志凭据脱敏启用 logx v0.12 Filter**：`proclog.Setup` 默认给
+  authorization/token/password/private_key 等字段加掩码，新增
+  `proclog.ApplySecretFilter` 供宿主二次 SetDefault 后重挂。
+- 历史 URL 脱敏补齐 `apikey` / `key` 查询参数。
+
 ## [v0.55.0] - 2026-11-18
 
 ### Changed（依赖全量升级）

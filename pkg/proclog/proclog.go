@@ -54,6 +54,23 @@ func Setup(level, format string) {
 	opts = append(opts, logx.WithLevel(logx.ParseLogLevelOr(level, logx.LevelInfo)))
 	// UseSlog 是 SetDefault(NewSlogLogger(...)) 的等价简写。
 	logx.UseSlog(filepath.Base(os.Args[0]), opts...)
+	ApplySecretFilter()
+}
+
+// secretLogKeys 日志里必须脱敏的字段名(凭据/密钥)。
+var secretLogKeys = []string{
+	"authorization", "token", "access_token", "refresh_token",
+	"secret", "password", "private_key", "api_key", "apikey",
+}
+
+// ApplySecretFilter 给当前默认 logx logger 加凭据字段脱敏。
+//
+// 宿主若在 Setup 之后再次 SetDefault/UseSlog(壳层 SetupLogger 会覆盖),
+// 必须再调一次本函数 —— 否则 logx v0.12.0 的脱敏修复不会被启用。
+func ApplySecretFilter() {
+	logx.SetDefault(logx.WithFilter(
+		logx.Default(), logx.FilterKey(secretLogKeys...),
+	))
 }
 
 // ExitOnFail 打日志并退出进程（启动期不可恢复错误用）。
