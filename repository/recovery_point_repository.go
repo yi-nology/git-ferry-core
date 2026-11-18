@@ -39,13 +39,6 @@ func (d *RecoveryPointRepository) GetLatest(taskKey string) (*model.RecoveryPoin
 	return &rp, nil
 }
 
-// ListAll 全部恢复点(备份覆盖情况总览)。
-func (d *RecoveryPointRepository) ListAll() ([]model.RecoveryPoint, error) {
-	var rps []model.RecoveryPoint
-	err := d.db.Order("task_key, created_at DESC").Find(&rps).Error
-	return rps, err
-}
-
 // DeleteByFileName 按文件名删除(轮转/惰性清理:文件没了,索引条目跟着走)。
 func (d *RecoveryPointRepository) DeleteByFileName(fileName string) (int64, error) {
 	res := d.db.Where("file_name = ?", fileName).Delete(&model.RecoveryPoint{})

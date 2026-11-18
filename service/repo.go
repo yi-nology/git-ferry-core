@@ -42,6 +42,11 @@ func (s *Service) DeleteRepo(ctx context.Context, key string) error {
 	return s.repos.DeleteRepo(ctx, key)
 }
 
+// DeleteRepos 批量删除仓库,返回实际删除数与被忽略的不存在 key。
+func (s *Service) DeleteRepos(ctx context.Context, keys []string) (int, []string, error) {
+	return s.repos.DeleteRepos(ctx, keys)
+}
+
 // TestConnection tests the connection to a repository.
 func (s *Service) TestConnection(ctx context.Context, repoKey string) (*model.TestConnectionResult, error) {
 	return s.repos.TestConnection(ctx, repoKey)

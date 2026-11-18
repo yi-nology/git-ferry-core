@@ -132,7 +132,7 @@ func (m *MirrorService) GetMirrorVersions(ctx context.Context, channelID uint) (
 		return nil, err
 	}
 	tagCommits := m.loadTagCommits(ctx, ch, channelID)
-	runs, err := m.runs.FindAllByChannel(channelID)
+	runs, err := m.runs.FindAllByChannelLite(channelID)
 	if err != nil {
 		return nil, err
 	}

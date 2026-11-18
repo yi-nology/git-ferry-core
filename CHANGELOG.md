@@ -2,6 +2,32 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.59.0] - 2026-11-19
+
+### Changed
+
+- **卡死恢复改批量 UPDATE**：webhook `MarkStuckProcessingFailed` 与 mirror
+  `MarkStuckFailed` 单条 UPDATE 替代「读整行（payload/Steps/Report 大字段）→
+  逐行回写」，恢复路径不再搬运大 JSON。
+- **版本矩阵瘦查询**：`FindAllByChannelLite` 只取矩阵需要的列，不加载
+  `Steps`/`Report`；长通道历史的矩阵视图内存占用显著下降。
+- **漂移检测解析复用**：`resolveDriftRepos` 一次解析源仓/目标仓与两端平台，
+  `prepareDriftRepo` / `fetchDriftBothSides` 不再各自重复查询（单任务最多
+  5 次重复 repo/platform 查询）。
+- **批量删仓**：新增 `RepoService.DeleteRepos` / `Service.DeleteRepos`——一次
+  查询 + 一次 DELETE + 每个受影响平台只刷一次计数，返回删除数与被忽略的
+  不存在 key；壳层 `BatchRepos` 改走该入口。
+
+### Removed（零引用清理；v0.x 允许）
+
+- `ForcePushApprovalRepository.Count` / `PendingExists`
+- `TemplateRepository.Count`
+- `RecoveryPointRepository.ListAll`
+- `MirrorRunRepository.FindAllByChannel` / `FindByChannelAndTargetAndTags` /
+  `FindStuckRuns`
+- `WebhookEventRepository.FindStuckProcessing`
+- `model.NormalizeAuditHashInput`
+
 ## [v0.58.0] - 2026-11-18
 
 ### Fixed

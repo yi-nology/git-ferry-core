@@ -27,13 +27,6 @@ func (d *TemplateRepository) Get(id string) (*tpl.Template, error) {
 	return d.getByID(id)
 }
 
-// Count 记录数（迁移判定用）。
-func (d *TemplateRepository) Count() (int64, error) {
-	var n int64
-	err := d.db.Model(&tpl.Template{}).Count(&n).Error
-	return n, err
-}
-
 // Save 按主键 upsert（列白名单：只覆盖业务列，不写回 id/created_at）。
 func (d *TemplateRepository) Save(t *tpl.Template) error {
 	return d.db.Clauses(clause.OnConflict{

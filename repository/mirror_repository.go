@@ -98,28 +98,31 @@ func (d *MirrorRunRepository) FindByChannel(channelID uint, page Pagination) ([]
 	return runs, total, err
 }
 
-// FindAllByChannel 不分页拉全量(版本矩阵合并用;单通道记录量可控)。
-func (d *MirrorRunRepository) FindAllByChannel(channelID uint) ([]*model.MirrorRun, error) {
+// FindAllByChannelLite 版本矩阵专用:只取构建矩阵需要的列,
+// 不加载 Steps/Report 大 JSON(长通道历史里这两列可能占绝大部分体积)。
+func (d *MirrorRunRepository) FindAllByChannelLite(channelID uint) ([]*model.MirrorRun, error) {
 	var runs []*model.MirrorRun
-	err := d.db.Where("channel_id = ?", channelID).Order("id DESC").Find(&runs).Error
+	err := d.db.Select(
+		"id, channel_id, target_id, kind, tags, status, tag_statuses, started_at, created_at",
+	).Where("channel_id = ?", channelID).Order("id DESC").Find(&runs).Error
 	return runs, err
 }
 
-// FindByChannelAndTargetAndTags 精确定位某个 tag 最近一次执行(矩阵合并)。
-// tags 是逗号分隔列表;用边界匹配替代旧的 %tag% 模糊匹配——
-// 否则 tag "v1" 会误匹配 "v10"、"revert-v1" 等不相关记录。
-func (d *MirrorRunRepository) FindByChannelAndTargetAndTags(channelID, targetID uint, tag string) ([]*model.MirrorRun, error) {
-	var runs []*model.MirrorRun
-	// 覆盖四种位置:唯一、列表首、列表尾、列表中间
-	pat := d.db.Where(
-		"channel_id = ? AND target_id = ? AND (tags = ? OR tags LIKE ? OR tags LIKE ? OR tags LIKE ?)",
-		channelID, targetID, tag, tag+",%", "%,"+tag, "%,"+tag+",%",
-	)
-	err := pat.Order("id DESC").Find(&runs).Error
-	if err != nil {
-		return nil, err
-	}
-	return runs, nil
+// MarkStuckFailed 批量把卡住的 pending/running 置为 failed。
+// 单条 UPDATE 替代逐行读取+回写(旧实现会搬运 Steps/Report 大字段)。
+func (d *MirrorRunRepository) MarkStuckFailed(olderThan time.Duration, reason string) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	now := time.Now()
+	res := d.db.Model(&model.MirrorRun{}).Where(
+		"status IN ? AND (started_at IS NULL AND created_at < ? OR started_at < ?)",
+		[]string{model.MirrorRunPending, model.MirrorRunRunning},
+		cutoff, cutoff,
+	).Updates(map[string]any{
+		"status":      model.MirrorRunFailed,
+		"error":       reason,
+		"finished_at": now,
+	})
+	return res.RowsAffected, res.Error
 }
 
 // HasRunningByChannel 是否存在进行中的执行(同通道互斥)。
@@ -133,22 +136,4 @@ func (d *MirrorRunRepository) HasRunningByChannel(channelID uint) (bool, error) 
 		return false, oekiterrors.Wrap(err, "query running mirror run failed")
 	}
 	return count > 0, nil
-}
-
-// FindStuckRuns 找出卡在进行中(pending/running)且**超过 olderThan** 的执行记录。
-//
-// 时间基准:优先 started_at(真正开跑的时刻),没有 started_at 的 pending 记录
-// 用 created_at(记录创建的时刻)—— pending 说明还没开跑,创建多久了就是卡多久。
-func (d *MirrorRunRepository) FindStuckRuns(olderThan time.Duration) ([]*model.MirrorRun, error) {
-	cutoff := time.Now().Add(-olderThan)
-	var runs []*model.MirrorRun
-	err := d.db.Where(
-		"status IN ? AND (started_at IS NULL AND created_at < ? OR started_at < ?)",
-		[]string{model.MirrorRunPending, model.MirrorRunRunning},
-		cutoff, cutoff,
-	).Find(&runs).Error
-	if err != nil {
-		return nil, oekiterrors.Wrap(err, "query stuck mirror runs failed")
-	}
-	return runs, nil
 }

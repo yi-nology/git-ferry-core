@@ -177,6 +177,48 @@ func (rs *RepoService) DeleteRepo(ctx context.Context, key string) error {
 	return nil
 }
 
+// DeleteRepos 批量删除仓库:一次查询 + 一次 DELETE + 每个受影响平台只刷一次计数。
+//
+// 逐 key 调用 DeleteRepo 会退化为 3×N 次 DB 往返(查、删、刷计数);
+// 返回实际删除数与被忽略的不存在 key(供壳层逐 key 报错)。
+func (rs *RepoService) DeleteRepos(ctx context.Context, keys []string) (deleted int, notFound []string, err error) {
+	if len(keys) == 0 {
+		return 0, nil, nil
+	}
+	repos, err := rs.repoRepository.FindByKeys(keys)
+	if err != nil {
+		return 0, nil, err
+	}
+	existing := make(map[string]struct{}, len(repos))
+	platformIDs := make(map[uint]struct{})
+	for _, r := range repos {
+		existing[r.Key] = struct{}{}
+		if r.PlatformID > 0 {
+			platformIDs[r.PlatformID] = struct{}{}
+		}
+	}
+	for _, k := range keys {
+		if _, ok := existing[k]; !ok {
+			notFound = append(notFound, k)
+		}
+	}
+	if len(existing) == 0 {
+		return 0, notFound, nil
+	}
+	n, err := rs.repoRepository.DeleteByKeys(keys)
+	if err != nil {
+		return 0, notFound, err
+	}
+	if rs.platformRepository != nil {
+		for id := range platformIDs {
+			if uerr := rs.platformRepository.UpdateRepoCount(id); uerr != nil {
+				logx.Warn("delete repos: failed to update platform repo count", "platform_id", id, "error", uerr)
+			}
+		}
+	}
+	return int(n), notFound, nil
+}
+
 // GetRepoWithProvider 一次调用完成 repo 查找 + provider 解析,
 // 消除调用方重复的 "GetRepoByKey → nil check → resolveRepoProvider" 样板。
 func (rs *RepoService) GetRepoWithProvider(repoKey string) (*model.Repo, sdkprov.Provider, error) {

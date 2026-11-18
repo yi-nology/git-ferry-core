@@ -137,6 +137,25 @@ func (d *RepoRepository) FindByCloneURL(cloneURL string) (*model.Repo, error) {
 	return d.getByCondition("clone_url = ?", cloneURL)
 }
 
+// FindByKeys 批量按 key 查仓库(批量删除用,避免逐 key 查询)。
+func (d *RepoRepository) FindByKeys(keys []string) ([]*model.Repo, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	var repos []*model.Repo
+	err := d.db.Where("`key` IN ?", keys).Find(&repos).Error
+	return repos, err
+}
+
+// DeleteByKeys 批量按 key 删除仓库(单条 DELETE)。
+func (d *RepoRepository) DeleteByKeys(keys []string) (int64, error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	res := d.db.Where("`key` IN ?", keys).Delete(&model.Repo{})
+	return res.RowsAffected, res.Error
+}
+
 // FindByPlatformID 根据平台 ID 查找仓库
 func (d *RepoRepository) FindByPlatformID(platformID uint) ([]*model.Repo, error) {
 	var repos []*model.Repo

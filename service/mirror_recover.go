@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/oekit/concurrency/loop"
-
-	"github.com/yi-nology/git-ferry-core/model"
 )
 
 // RecoverStuckMirrorRuns 回收卡在进行中(pending/running)的镜像执行记录,标成 failed。
@@ -22,21 +20,13 @@ import (
 //
 // 只回收**超过 olderThan** 的:正在跑的长任务不该被误伤。
 func (m *MirrorService) RecoverStuckMirrorRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
-	runs, err := m.runs.FindStuckRuns(olderThan)
+	n, err := m.runs.MarkStuckFailed(olderThan,
+		"执行中断(进程重启或超时),已回收,可重新触发")
 	if err != nil {
 		return 0, err
 	}
-	var n int64
-	for _, r := range runs {
-		fin := time.Now()
-		r.Status = model.MirrorRunFailed
-		r.Error = "执行中断(进程重启或超时),已回收,可重新触发"
-		r.FinishedAt = &fin
-		if err := m.runs.Update(r); err != nil {
-			return n, err
-		}
-		n++
-		logx.Warn("已回收卡住的镜像执行", "run", r.ID, "channel", r.ChannelID, "status", r.Status)
+	if n > 0 {
+		logx.Warn("已批量回收卡住的镜像执行", "count", n)
 	}
 	return n, nil
 }

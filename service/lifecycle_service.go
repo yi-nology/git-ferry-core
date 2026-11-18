@@ -207,7 +207,13 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 		//
 		// 用**专用工作目录**(不复用 executor 的 workdir):检测时的 fetch 会写
 		// git 锁,和正在跑的同步抢同一份目录会互相报错。
-		gitDir, derr := s.prepareDriftRepo(ctx, t, repo)
+		set, serr := s.resolveDriftRepos(ctx, t, repo)
+		if serr != nil {
+			item.Message = "cannot resolve drift repos: " + serr.Error()
+			rep.Items = append(rep.Items, item)
+			continue
+		}
+		gitDir, derr := s.prepareDriftRepo(ctx, t, set)
 		if derr != nil {
 			item.Message = "cannot prepare drift repo: " + derr.Error()
 			rep.Items = append(rep.Items, item)
@@ -216,7 +222,7 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 		// 带凭证取两端状态(私有仓/自签证书必须带凭证;
 		// 原来走 git ls-remote,而平台的 RunRaw 固定用空凭证 ⇒ 私有仓永远
 		// "cannot resolve refs",漂移检测形同虚设)。
-		srcRef, tgtRef, ferr := s.fetchDriftBothSides(ctx, gitDir, t, repo)
+		srcRef, tgtRef, ferr := s.fetchDriftBothSides(ctx, gitDir, t, set)
 		if ferr != nil {
 			item.Message = "cannot fetch both sides: " + ferr.Error()
 			rep.Items = append(rep.Items, item)
@@ -259,21 +265,40 @@ func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftRep
 // 为什么不用 executor 的 workdir:检测要 fetch,而 fetch 会写 git 锁 ——
 // 与正在跑的同步抢同一份目录会互相报错("cannot lock ref")。
 // 专用目录第一次克隆、之后增量 fetch。
-func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRepo *model.Repo) (string, error) {
+//
+// set 由 resolveDriftRepos 一次性解析:此前 prepare/fetch 各查一遍源仓与
+// 两端平台 ⇒ 单任务最多 5 次重复 repo/platform 查询。
+type driftRepoSet struct {
+	src, dst         *model.Repo
+	srcPlat, dstPlat *model.Platform
+}
+
+// resolveDriftRepos 一次解析漂移检测需要的源仓/目标仓与两端平台。
+func (s *Service) resolveDriftRepos(ctx context.Context, t *model.SyncTask, dst *model.Repo) (*driftRepoSet, error) {
+	src, err := s.GetRepoByKey(t.SourceRepoKey)
+	if err != nil || src == nil {
+		return nil, oekiterrors.New("源仓记录不存在")
+	}
+	set := &driftRepoSet{src: src, dst: dst}
+	if src.PlatformID > 0 {
+		if got, gerr := s.GetPlatformByID(ctx, src.PlatformID); gerr == nil {
+			set.srcPlat = got
+		}
+	}
+	if dst != nil && dst.PlatformID > 0 {
+		if got, gerr := s.GetPlatformByID(ctx, dst.PlatformID); gerr == nil {
+			set.dstPlat = got
+		}
+	}
+	return set, nil
+}
+
+func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, set *driftRepoSet) (string, error) {
 	backend := lifecycleBackend()
 	if backend == nil {
 		return "", oekiterrors.New("git backend 不可用")
 	}
-	srcRepo, err := s.GetRepoByKey(t.SourceRepoKey)
-	if err != nil || srcRepo == nil {
-		return "", oekiterrors.New("源仓记录不存在")
-	}
-	var srcPlat *model.Platform
-	if srcRepo.PlatformID > 0 {
-		if got, gerr := s.GetPlatformByID(ctx, srcRepo.PlatformID); gerr == nil {
-			srcPlat = got
-		}
-	}
+	srcRepo := set.src
 	base := s.GetConfig().Git.TempDir
 	if base == "" {
 		return "", oekiterrors.New("未配置 git.temp_dir")
@@ -296,7 +321,7 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 		cloneOpts := gitbackend.CloneOptions{
 			URL:  srcRepo.CloneURL,
 			Path: dir,
-			Auth: executor.BuildRepoAuth(srcRepo, srcPlat),
+			Auth: executor.BuildRepoAuth(srcRepo, set.srcPlat),
 		}
 		if cfg := s.GetConfig(); cfg != nil {
 			cloneOpts.Filter = cfg.Sync.PartialClone
@@ -318,7 +343,7 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 		}
 	}
 	if !hasTarget {
-		if err := backend.AddRemote(ctx, dir, executor.RemoteTarget, dstRepo.CloneURL); err != nil {
+		if err := backend.AddRemote(ctx, dir, executor.RemoteTarget, set.dst.CloneURL); err != nil {
 			return "", err
 		}
 	}
@@ -326,26 +351,12 @@ func (s *Service) prepareDriftRepo(ctx context.Context, t *model.SyncTask, dstRe
 }
 
 // fetchDriftBothSides 带凭证取**源端与目标端**的分支状态,返回两边的 SHA。
-func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.SyncTask, dstRepo *model.Repo) (string, string, error) {
+func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.SyncTask, set *driftRepoSet) (string, string, error) {
 	backend := lifecycleBackend()
 	if backend == nil {
 		return "", "", oekiterrors.New("git backend 不可用")
 	}
-	srcRepo, err := s.GetRepoByKey(t.SourceRepoKey)
-	if err != nil || srcRepo == nil {
-		return "", "", oekiterrors.New("源仓记录不存在")
-	}
-	var srcPlat, dstPlat *model.Platform
-	if srcRepo.PlatformID > 0 {
-		if got, gerr := s.GetPlatformByID(ctx, srcRepo.PlatformID); gerr == nil {
-			srcPlat = got
-		}
-	}
-	if dstRepo.PlatformID > 0 {
-		if got, gerr := s.GetPlatformByID(ctx, dstRepo.PlatformID); gerr == nil {
-			dstPlat = got
-		}
-	}
+	srcRepo, dstRepo := set.src, set.dst
 	// **glob 不能直接当 fetch 的分支参数**:"release/*" 不是合法 refspec
 	// (git: invalid refspec)⇒ fetch 报错 ⇒ 多分支任务的漂移检测**永远失败**,
 	// 而且失败被算作"未漂移"(Checked/Drifted 都不增,报告里与"已检查无漂移"无法区分)。
@@ -356,7 +367,7 @@ func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.
 		RepoPath: dir,
 		Remote:   executor.RemoteOrigin,
 		Branches: srcBranches,
-		Auth:     executor.BuildRepoAuth(srcRepo, srcPlat),
+		Auth:     executor.BuildRepoAuth(srcRepo, set.srcPlat),
 	}); ferr != nil {
 		return "", "", ferr
 	}
@@ -364,7 +375,7 @@ func (s *Service) fetchDriftBothSides(ctx context.Context, dir string, t *model.
 		RepoPath: dir,
 		Remote:   executor.RemoteTarget,
 		Branches: tgtBranches,
-		Auth:     executor.BuildRepoAuth(dstRepo, dstPlat),
+		Auth:     executor.BuildRepoAuth(dstRepo, set.dstPlat),
 	}); ferr != nil {
 		return "", "", ferr
 	}

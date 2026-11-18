@@ -29,13 +29,6 @@ func (d *ForcePushApprovalRepository) Get(id string) (*model.ForcePushApproval, 
 	return d.getByID(id)
 }
 
-// Count 记录数（迁移判定用）。
-func (d *ForcePushApprovalRepository) Count() (int64, error) {
-	var n int64
-	err := d.db.Model(&model.ForcePushApproval{}).Count(&n).Error
-	return n, err
-}
-
 func (d *ForcePushApprovalRepository) Create(a *model.ForcePushApproval) error {
 	return d.create(a)
 }
@@ -63,15 +56,6 @@ func (d *ForcePushApprovalRepository) RefreshPending(id, reason, targetRef strin
 		return false, res.Error
 	}
 	return res.RowsAffected == 1, nil
-}
-
-// PendingExists 同 task+branch 是否已有未放行记录（幂等判定）。
-func (d *ForcePushApprovalRepository) PendingExists(taskKey, branch string) (bool, error) {
-	var n int64
-	err := d.db.Model(&model.ForcePushApproval{}).
-		Where("task_key = ? AND branch = ? AND approved = ?", taskKey, branch, false).
-		Count(&n).Error
-	return n > 0, err
 }
 
 // FindPending 找同 task+branch 的未放行记录(最老的一条)。

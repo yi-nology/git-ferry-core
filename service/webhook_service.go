@@ -196,18 +196,8 @@ func (ws *WebhookService) MarkEventFailed(event *model.WebhookEvent, reason stri
 // 只回收**超过 olderThan** 的:正在处理中的事件不该被误伤
 // (一次大同步可能跑很久)。
 func (ws *WebhookService) RecoverStuckEvents(ctx context.Context, olderThan time.Duration) (int64, error) {
-	events, err := ws.eventRepository.FindStuckProcessing(ctx, olderThan)
-	if err != nil {
-		return 0, err
-	}
-	var n int64
-	for _, e := range events {
-		if err := ws.MarkEventFailed(e, "事件处理中断(进程重启或处理超时),已回收,可重试"); err != nil {
-			return n, err
-		}
-		n++
-	}
-	return n, nil
+	return ws.eventRepository.MarkStuckProcessingFailed(ctx, olderThan,
+		"事件处理中断(进程重启或处理超时),已回收,可重试")
 }
 
 // FindEventByEventID returns a webhook event by event ID (internal use).

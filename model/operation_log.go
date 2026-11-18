@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 	"time"
 )
 
@@ -46,9 +45,4 @@ func ComputeEntryHash(prev string, e *OperationLog) string {
 	})
 	h := sha256.Sum256(append([]byte(prev), payload...))
 	return hex.EncodeToString(h[:])
-}
-
-// NormalizeAuditHashInput 归一化字符串用于稳定哈希(去首尾空白)。
-func NormalizeAuditHashInput(s string) string {
-	return strings.TrimSpace(s)
 }

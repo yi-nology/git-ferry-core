@@ -87,17 +87,19 @@ func (d *WebhookEventRepository) CleanupOlderThan(ctx context.Context, olderThan
 //
 // processing 只在"正在处理"期间存在 ⇒ 进程被 SIGKILL / 崩溃 / goroutine panic
 // 时,事件会永远停在这个状态 ⇒ 既不失败也不重试 ⇒ 这次推送的提交静默丢失。
-func (d *WebhookEventRepository) FindStuckProcessing(ctx context.Context, olderThan time.Duration) ([]*model.WebhookEvent, error) {
+// MarkStuckProcessingFailed 批量把卡在 processing 的事件置为 failed。
+// 单条 UPDATE 替代逐行读取整行(payload 可能很大)+ 逐行回写。
+func (d *WebhookEventRepository) MarkStuckProcessingFailed(ctx context.Context, olderThan time.Duration, reason string) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
-	var events []*model.WebhookEvent
-	err := d.db.WithContext(ctx).
+	now := time.Now()
+	res := d.db.WithContext(ctx).Model(&model.WebhookEvent{}).
 		Where("status = ? AND created_at < ?", model.StatusProcessing, cutoff).
-		Order("id ASC").
-		Find(&events).Error
-	if err != nil {
-		return nil, err
-	}
-	return events, nil
+		Updates(map[string]any{
+			"status":        model.StatusFailed,
+			"processed_at":  now,
+			"error_message": reason,
+		})
+	return res.RowsAffected, res.Error
 }
 
 func (d *WebhookEventRepository) CountByRepoKey(repoKey string) (int64, error) {
