@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Changed（依赖全量升级）
+
+- **oekit**：core v0.15.3 → v0.17.0、pkg v0.52.0 → v0.54.0、
+  gormx v0.12.1 → v0.13.1、redisx v0.16.0 → v0.16.4、
+  logx v0.11.0 → v0.12.0、concurrency v0.36.0 → v0.39.1、
+  metrics v0.4.1 → v0.4.2、tracing v0.4.7 → v0.4.8。
+- **yi-nology**：go-git-platform v1.0.0 → v1.0.3、
+  go-gitcode v0.17.0 → v0.18.0、go-gongfeng v0.5.0 → v0.6.0。
+- 其余可升级依赖（prometheus、x/net、x/tools、modernc、mysql driver 等）
+  一并升级；全量 test + golangci-lint 绿。
+
 ## [v0.54.0] - 2026-11-18
 
 ### Fixed（并发分叉 / 锚点一致性）

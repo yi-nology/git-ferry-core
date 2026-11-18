@@ -7,20 +7,20 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
-	github.com/oekit/concurrency v0.36.0
-	github.com/oekit/core v0.15.3
-	github.com/oekit/gormx v0.12.1
-	github.com/oekit/logx v0.11.0
-	github.com/oekit/metrics v0.4.1
-	github.com/oekit/pkg v0.52.0
-	github.com/oekit/redisx v0.16.0
-	github.com/oekit/tracing v0.4.7
-	github.com/prometheus/client_golang v1.23.2
+	github.com/oekit/concurrency v0.39.1
+	github.com/oekit/core v0.17.0
+	github.com/oekit/gormx v0.13.1
+	github.com/oekit/logx v0.12.0
+	github.com/oekit/metrics v0.4.2
+	github.com/oekit/pkg v0.54.0
+	github.com/oekit/redisx v0.16.4
+	github.com/oekit/tracing v0.4.8
+	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
-	github.com/sergi/go-diff v1.4.0
+	github.com/sergi/go-diff v1.4.5
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v1.0.0
-	golang.org/x/tools v0.52.0
+	github.com/yi-nology/go-git-platform v1.0.3
+	golang.org/x/tools v0.53.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
@@ -62,7 +62,7 @@ require (
 	github.com/go-openapi/swag/stringutils v0.29.2 // indirect
 	github.com/go-openapi/swag/typeutils v0.29.2 // indirect
 	github.com/go-openapi/swag/yamlutils v0.29.2 // indirect
-	github.com/go-sql-driver/mysql v1.10.1 // indirect
+	github.com/go-sql-driver/mysql v1.10.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-github/v93 v93.0.0 // indirect
@@ -80,17 +80,18 @@ require (
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/next-bin/go-gitee v0.0.0-20260521141902-36ce436eee18 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
+	github.com/pandatix/go-abnf v0.5.5 // indirect
 	github.com/pjbgf/sha1cd v0.7.0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
-	github.com/prometheus/common v0.67.5 // indirect
-	github.com/prometheus/procfs v0.19.2 // indirect
+	github.com/prometheus/common v0.74.0 // indirect
+	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/redis/go-redis/extra/rediscmd/v9 v9.23.0 // indirect
 	github.com/redis/go-redis/extra/redisotel/v9 v9.23.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/skeema/knownhosts v1.3.3 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	github.com/yi-nology/go-gitcode v0.17.0 // indirect
-	github.com/yi-nology/go-gongfeng v0.5.0 // indirect
+	github.com/yi-nology/go-gitcode v0.18.0 // indirect
+	github.com/yi-nology/go-gongfeng v0.6.0 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	gitlab.com/gitlab-org/api/client-go/v3 v3.48.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -99,11 +100,10 @@ require (
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
-	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/mod v0.43.0 // indirect
-	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
@@ -112,8 +112,8 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.81.0 // indirect
+	modernc.org/libc v1.81.2 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.1 // indirect
+	modernc.org/memory v1.13.0 // indirect
 	modernc.org/sqlite v1.62.0 // indirect
 )
