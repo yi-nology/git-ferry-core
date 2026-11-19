@@ -67,7 +67,7 @@ func TestMirrorRunLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	runs, err := r.FindAllByChannelLite(ch.ID)
+	runs, err := r.FindRecentByChannelLite(ch.ID, 500)
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
 }

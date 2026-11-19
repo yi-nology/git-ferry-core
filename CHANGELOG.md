@@ -2,6 +2,21 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.63.0] - 2026-11-19
+
+### Changed（查询窗口与批量化）
+
+- **`RepoRepository.BatchUpdateRepoMeta` 改分块 CASE WHEN 单语句更新**：
+  此前事务内逐行 UPDATE，盘点几百个仓库会发几百条语句；现在每 100 个仓库
+  一条 UPDATE，仍走列白名单，密钥/加密列不受影响。
+- **版本矩阵执行历史加窗口上限**：`MirrorRunRepository.FindAllByChannelLite`
+  改为 `FindRecentByChannelLite(channelID, limit)`，`GetMirrorVersions` 只归并
+  最近 2000 条执行记录（矩阵只取每 tag×target 的最新状态），避免长通道历史
+  把整表读进内存；抵达窗口时打告警日志。
+- **新增跨任务最近运行查询**：`SyncRunRepository.FindRecentTerminalLite` /
+  `TaskService.ListRecentRuns` / `Service.ListRecentRuns`，一次查询取回最近一批
+  已结束 run 的轻量列，供轮询型观察器替代「逐任务查历史」的 N+1。
+
 ## [v0.62.0] - 2026-11-19
 
 ### Changed（Repository ctx 传播，第二轮：后台域）

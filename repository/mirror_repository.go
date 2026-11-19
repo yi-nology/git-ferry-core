@@ -99,13 +99,17 @@ func (d *MirrorRunRepository) FindByChannel(channelID uint, page Pagination) ([]
 	return runs, total, err
 }
 
-// FindAllByChannelLite 版本矩阵专用:只取构建矩阵需要的列,
-// 不加载 Steps/Report 大 JSON(长通道历史里这两列可能占绝大部分体积)。
-func (d *MirrorRunRepository) FindAllByChannelLite(channelID uint) ([]*model.MirrorRun, error) {
+// FindRecentByChannelLite 版本矩阵专用:只取构建矩阵需要的列,
+// 不加载 Steps/Report 大 JSON(长通道历史里这两列可能占绝大部分体积);
+// 按 id 倒序限制条数(矩阵只取每 tag×target 的最新一条,不需要全量历史)。
+func (d *MirrorRunRepository) FindRecentByChannelLite(channelID uint, limit int) ([]*model.MirrorRun, error) {
+	if limit <= 0 {
+		limit = 500
+	}
 	var runs []*model.MirrorRun
 	err := d.db.Select(
 		"id, channel_id, target_id, kind, tags, status, tag_statuses, started_at, created_at",
-	).Where("channel_id = ?", channelID).Order("id DESC").Find(&runs).Error
+	).Where("channel_id = ?", channelID).Order("id DESC").Limit(limit).Find(&runs).Error
 	return runs, err
 }
 

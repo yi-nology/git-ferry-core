@@ -262,6 +262,12 @@ func (s *Service) ListHistory(ctx context.Context, taskKey string, offset, limit
 	return s.tasks.ListHistory(ctx, taskKey, offset, limit)
 }
 
+// ListRecentRuns 最近一批已结束的 run(轻量列,跨任务)。
+// 轮询型观察器一次拿全窗口,避免逐任务查历史的 N+1。
+func (s *Service) ListRecentRuns(ctx context.Context, limit int) ([]*model.SyncRun, error) {
+	return s.tasks.ListRecentRuns(ctx, limit)
+}
+
 // GetSyncRunByID 按执行记录 ID 精确取某一条(带步骤)。
 //
 // 命名说明:不叫 GetHistoryRun —— 那个名字已经被**历史同步通道**的

@@ -246,6 +246,12 @@ func (ts *TaskService) ListHistory(ctx context.Context, taskKey string, offset, 
 	return ts.runRepository.FindByTaskKey(ctx, taskKey, page)
 }
 
+// ListRecentRuns 最近一批已结束的 run(轻量列,跨任务)。
+// 壳层 runwatch 轮询兜底用:替代「每个任务各查一次历史」的 N+1。
+func (ts *TaskService) ListRecentRuns(ctx context.Context, limit int) ([]*model.SyncRun, error) {
+	return ts.runRepository.FindRecentTerminalLite(ctx, limit)
+}
+
 // GetHistoryRun 按执行记录 ID 精确取某一条(带步骤)。
 //
 // taskKey 为空 = 不按任务限定(ID 全局唯一)。

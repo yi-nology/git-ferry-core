@@ -122,6 +122,21 @@ func (d *SyncRunRepository) FindRecentLimit(ctx context.Context, limit int) ([]*
 	return runs, err
 }
 
+// FindRecentTerminalLite 最近一批已结束(success/failed)的 run,只选通知所需的轻量列。
+// 供壳层 runwatch 轮询兜底使用:逐任务 ListHistory 是 N+1(任务数 × 每轮一次查询),
+// 这里一次查询覆盖同一时间窗口;Steps/Details/PolicySnapshot 大字段不读。
+func (d *SyncRunRepository) FindRecentTerminalLite(ctx context.Context, limit int) ([]*model.SyncRun, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 500
+	}
+	var runs []*model.SyncRun
+	err := d.db.WithContext(ctx).Select(
+		"id, task_key, trigger_source, status, start_time, end_time, error_message, error_type, duration_ms, created_at",
+	).Where("status IN ?", []string{model.StatusSuccess, model.StatusFailed}).
+		Order("id DESC").Limit(limit).Find(&runs).Error
+	return runs, err
+}
+
 // FindLatestByTaskKeys 批量取每个任务最新一条 run(只选轻量列)。
 // 仓库盘点等聚合场景用:逐任务 ListHistory(含 COUNT/Preload)是 N+1。
 func (d *SyncRunRepository) FindLatestByTaskKeys(ctx context.Context, taskKeys []string) (map[string]*model.SyncRun, error) {

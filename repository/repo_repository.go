@@ -2,12 +2,14 @@ package repository
 
 import (
 	"context"
+	"strings"
 
 	"github.com/yi-nology/go-git-platform/auth/credential"
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Pagination struct {
@@ -110,23 +112,52 @@ func (d *RepoRepository) BatchCreate(repos []*model.Repo, batchSize int) error {
 }
 
 // BatchUpdateRepoMeta 批量更新仓库元数据(路径/展示名/默认分支/clone URL)。
-// 事务内用 map Updates,避免全字段回写覆盖加密 token/secret。
+// 每个分块一条 CASE WHEN UPDATE(此前逐行 UPDATE,盘点几百个仓库会发几百条语句);
+// 仍用列白名单,避免全字段回写覆盖加密 token/secret。
 func (d *RepoRepository) BatchUpdateRepoMeta(repos []*model.Repo) error {
+	if len(repos) == 0 {
+		return nil
+	}
+	const chunkSize = 100
 	return d.db.Transaction(func(tx *gorm.DB) error {
-		for _, r := range repos {
-			if err := tx.Model(&model.Repo{}).Where("id = ?", r.ID).Updates(map[string]interface{}{
-				"clone_url":      r.CloneURL,
-				"ssh_url":        r.SSHURL,
-				"platform_owner": r.PlatformOwner,
-				"platform_repo":  r.PlatformRepo,
-				"name":           r.Name,
-				"default_branch": r.DefaultBranch,
-			}).Error; err != nil {
+		for start := 0; start < len(repos); start += chunkSize {
+			end := start + chunkSize
+			if end > len(repos) {
+				end = len(repos)
+			}
+			if err := updateRepoMetaChunk(tx, repos[start:end]); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// updateRepoMetaChunk 单条语句更新一批仓库的元数据列。
+func updateRepoMetaChunk(tx *gorm.DB, repos []*model.Repo) error {
+	ids := make([]uint, len(repos))
+	for i, r := range repos {
+		ids[i] = r.ID
+	}
+	caseExpr := func(value func(*model.Repo) any) clause.Expr {
+		var sb strings.Builder
+		sb.WriteString("CASE id")
+		vars := make([]any, 0, len(repos)*2)
+		for _, r := range repos {
+			sb.WriteString(" WHEN ? THEN ?")
+			vars = append(vars, r.ID, value(r))
+		}
+		sb.WriteString(" END")
+		return clause.Expr{SQL: sb.String(), Vars: vars}
+	}
+	return tx.Model(&model.Repo{}).Where("id IN ?", ids).Updates(map[string]any{
+		"clone_url":      caseExpr(func(r *model.Repo) any { return r.CloneURL }),
+		"ssh_url":        caseExpr(func(r *model.Repo) any { return r.SSHURL }),
+		"platform_owner": caseExpr(func(r *model.Repo) any { return r.PlatformOwner }),
+		"platform_repo":  caseExpr(func(r *model.Repo) any { return r.PlatformRepo }),
+		"name":           caseExpr(func(r *model.Repo) any { return r.Name }),
+		"default_branch": caseExpr(func(r *model.Repo) any { return r.DefaultBranch }),
+	}).Error
 }
 
 func (d *RepoRepository) Delete(key string) error {

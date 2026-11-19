@@ -206,6 +206,42 @@ func TestRepoRepo_Update(t *testing.T) {
 	assert.Equal(t, "inactive", got.Status, "expected status 'inactive'")
 }
 
+func TestRepoRepo_BatchUpdateRepoMeta(t *testing.T) {
+	_, d := setupRepoTestDB(t)
+
+	repos := []*model.Repo{
+		{Key: "repo-a", Name: "A", WebhookSecret: "secret-a"},
+		{Key: "repo-b", Name: "B", WebhookSecret: "secret-b"},
+		{Key: "repo-c", Name: "C", WebhookSecret: "secret-c"},
+	}
+	for _, r := range repos {
+		require.NoError(t, d.Create(r))
+	}
+
+	// 只改元数据六列,加密/密钥列必须原样保留。
+	repos[0].Name, repos[0].CloneURL, repos[0].DefaultBranch = "A2", "https://x/a.git", "trunk"
+	repos[1].SSHURL, repos[1].PlatformOwner = "git@x:b.git", "owner-b"
+	repos[2].PlatformRepo = "repo-c-remote"
+	require.NoError(t, d.BatchUpdateRepoMeta(repos))
+
+	want := map[string]struct{ name, clone, ssh, owner, repo, branch string }{
+		"repo-a": {"A2", "https://x/a.git", "", "", "", "trunk"},
+		"repo-b": {"B", "", "git@x:b.git", "owner-b", "", "main"},
+		"repo-c": {"C", "", "", "", "repo-c-remote", "main"},
+	}
+	for key, w := range want {
+		got, err := d.FindByKey(context.Background(), key)
+		require.NoError(t, err)
+		assert.Equal(t, w.name, got.Name, key)
+		assert.Equal(t, w.clone, got.CloneURL, key)
+		assert.Equal(t, w.ssh, got.SSHURL, key)
+		assert.Equal(t, w.owner, got.PlatformOwner, key)
+		assert.Equal(t, w.repo, got.PlatformRepo, key)
+		assert.Equal(t, w.branch, got.DefaultBranch, key)
+		assert.Equal(t, "secret-"+string(key[len(key)-1]), got.WebhookSecret, key)
+	}
+}
+
 func TestRepoRepo_Delete(t *testing.T) {
 	_, d := setupRepoTestDB(t)
 

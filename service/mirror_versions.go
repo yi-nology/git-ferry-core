@@ -13,6 +13,11 @@ import (
 	"github.com/yi-nology/git-ferry-core/model"
 )
 
+// mirrorVersionRunWindow 版本矩阵归并的执行历史窗口。
+// 矩阵只取每个 (tag,target) 的最新状态,窗口外的远古记录不参与归并;
+// 上限避免长通道历史(每次发布 × 每个目标 × 每次校验)把整表读进内存。
+const mirrorVersionRunWindow = 2000
+
 // versionCell 单 (tag,target) 的执行结果单元。
 type versionCell struct {
 	state, executedAt, commit, tree, verify string
@@ -133,9 +138,13 @@ func (m *MirrorService) GetMirrorVersions(ctx context.Context, channelID uint) (
 		return nil, err
 	}
 	tagCommits := m.loadTagCommits(ctx, ch, channelID)
-	runs, err := m.runs.FindAllByChannelLite(channelID)
+	runs, err := m.runs.FindRecentByChannelLite(channelID, mirrorVersionRunWindow)
 	if err != nil {
 		return nil, err
+	}
+	if len(runs) == mirrorVersionRunWindow {
+		logx.Warn("mirror: 版本矩阵历史已达窗口上限,更早的执行记录不参与归并",
+			"channel", channelID, "window", mirrorVersionRunWindow)
 	}
 	cells := buildVersionCells(runs)
 	versions := assembleVersionMatrix(ch.Mode, targets, tagCommits, cells)
