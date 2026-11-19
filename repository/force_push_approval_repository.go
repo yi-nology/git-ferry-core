@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -26,17 +27,17 @@ func (d *ForcePushApprovalRepository) All() ([]model.ForcePushApproval, error) {
 
 // Get 按 ID 取；不存在返回 (nil, nil)。
 func (d *ForcePushApprovalRepository) Get(id string) (*model.ForcePushApproval, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 func (d *ForcePushApprovalRepository) Create(a *model.ForcePushApproval) error {
-	return d.create(a)
+	return d.create(context.Background(), a)
 }
 
 // Update 回写审批记录(列白名单,不写回主键/审计列)。
 // 状态迁移请走 Revoke / ConsumeApproved —— 它们只写字段并带条件。
 func (d *ForcePushApprovalRepository) Update(a *model.ForcePushApproval) error {
-	return d.update(a)
+	return d.update(context.Background(), a)
 }
 
 // RefreshPending 只刷新 pending 记录的展示字段(reason/target_ref/created_at)。
@@ -97,7 +98,7 @@ func (d *ForcePushApprovalRepository) IsApproved(taskKey, branch, targetRef stri
 // 只写 revoked_at/revoked_by 两列:不整行回写,避免把并发的
 // consumed_at 覆盖回旧值(撤销与消费并发时的典型丢更新)。
 func (d *ForcePushApprovalRepository) Revoke(id string, by string, at time.Time) (found bool, err error) {
-	rows, err := d.updateFields(id, map[string]any{"revoked_at": &at, "revoked_by": by})
+	rows, err := d.updateFields(context.Background(), id, map[string]any{"revoked_at": &at, "revoked_by": by})
 	if err != nil {
 		return false, err
 	}

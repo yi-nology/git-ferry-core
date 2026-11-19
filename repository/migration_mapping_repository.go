@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
@@ -21,7 +22,7 @@ func NewMigrationMappingRepository(db *gorm.DB) *MigrationMappingRepository {
 
 // Find 按源对象身份键查映射;查无此条返回 ErrNotFound。
 func (d *MigrationMappingRepository) Find(sourcePlatform, sourceRepo, objectType, sourceNumber string) (*model.MigrationMapping, error) {
-	return d.getByCondition(
+	return d.getByCondition(context.Background(),
 		"source_platform = ? AND source_repo = ? AND object_type = ? AND source_number = ?",
 		sourcePlatform, sourceRepo, objectType, sourceNumber,
 	)

@@ -41,7 +41,7 @@ func TestSyncRunRepo_CreateAndFindByTaskKey(t *testing.T) {
 	assert.NotZero(t, run.ID, "expected run ID to be set after create")
 
 	// Find by task key
-	got, total, err := d.FindByTaskKey("test-task", DefaultPagination(0, 50))
+	got, total, err := d.FindByTaskKey(context.Background(), "test-task", DefaultPagination(0, 50))
 	require.NoError(t, err, "find by task key failed")
 
 	require.Equal(t, int64(1), total, "expected 1 run")
@@ -101,7 +101,7 @@ func TestSyncRunRepo_Update(t *testing.T) {
 	require.NoError(t, err, "update failed")
 
 	// Find by task key to verify update
-	got, total, err := d.FindByTaskKey("test-task", DefaultPagination(0, 50))
+	got, total, err := d.FindByTaskKey(context.Background(), "test-task", DefaultPagination(0, 50))
 	require.NoError(t, err, "find by task key failed")
 
 	require.Equal(t, int64(1), total, "expected 1 run")
@@ -130,7 +130,7 @@ func TestSyncRunRepo_Delete(t *testing.T) {
 	require.NoError(t, err, "delete failed")
 
 	// Find by task key should return empty
-	got, total, err := d.FindByTaskKey("test-task", DefaultPagination(0, 50))
+	got, total, err := d.FindByTaskKey(context.Background(), "test-task", DefaultPagination(0, 50))
 	require.NoError(t, err, "find by task key failed")
 
 	require.Equal(t, int64(0), total, "expected 0 runs")

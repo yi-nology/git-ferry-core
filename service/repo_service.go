@@ -35,7 +35,7 @@ func NewRepoService(repoRepository *repository.RepoRepository, platformRepositor
 // ListRepos returns a paginated list of repositories.
 func (rs *RepoService) ListRepos(ctx context.Context, offset, limit int) ([]*model.Repo, int64, error) {
 	page := repository.DefaultPagination(offset, limit)
-	return rs.repoRepository.FindAll(page)
+	return rs.repoRepository.FindAll(ctx, page)
 }
 
 // CountRepos returns the total repo count via COUNT aggregate.
@@ -46,17 +46,21 @@ func (rs *RepoService) CountRepos() (int64, error) {
 // ListReposWithFilter returns a filtered, sorted, paginated list of repositories.
 func (rs *RepoService) ListReposWithFilter(ctx context.Context, offset, limit int, filter *repository.RepoFilter) ([]*model.Repo, int64, error) {
 	page := repository.DefaultPagination(offset, limit)
-	return rs.repoRepository.ListWithFilter(page, filter)
+	return rs.repoRepository.ListWithFilter(ctx, page, filter)
 }
 
 // GetRepo returns a repository by key.
 func (rs *RepoService) GetRepo(ctx context.Context, key string) (*model.Repo, error) {
-	return rs.findRepo(key)
+	return rs.findRepoCtx(ctx, key)
 }
 
 // findRepo 查仓库并归一化查无此条。
 func (rs *RepoService) findRepo(key string) (*model.Repo, error) {
-	r, err := rs.repoRepository.FindByKey(key)
+	return rs.findRepoCtx(context.Background(), key)
+}
+
+func (rs *RepoService) findRepoCtx(ctx context.Context, key string) (*model.Repo, error) {
+	r, err := rs.repoRepository.FindByKey(ctx, key)
 	if err != nil {
 		return nil, mapNotFound(err, ErrRepoNotFound)
 	}
@@ -85,7 +89,7 @@ func (rs *RepoService) CreateRepo(ctx context.Context, req *model.CreateRepoRequ
 	}
 
 	if req.PlatformID > 0 && rs.platformRepository != nil {
-		platform, err := rs.platformRepository.FindByID(req.PlatformID)
+		platform, err := rs.platformRepository.FindByID(ctx, req.PlatformID)
 		if err == nil && platform != nil {
 			platformType = platform.Type
 		}
@@ -239,7 +243,7 @@ func (rs *RepoService) resolveRepoProvider(repo *model.Repo) (sdkprov.Provider, 
 	var platform *model.Platform
 	if repo.PlatformID > 0 && rs.platformRepository != nil {
 		var findErr error
-		platform, findErr = rs.platformRepository.FindByID(repo.PlatformID)
+		platform, findErr = rs.platformRepository.FindByID(context.Background(), repo.PlatformID)
 		if findErr != nil && !isRepositoryNotFound(findErr) {
 			return nil, oekiterrors.Wrap(findErr, fmt.Sprintf("find platform %d for repo %s", repo.PlatformID, repo.Key))
 		}

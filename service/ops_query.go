@@ -43,7 +43,7 @@ func (s *Service) OpsTrends(ctx context.Context, days int) (*OpsTrendsResult, er
 	if days <= 0 || days > 365 {
 		days = 30
 	}
-	runs, err := s.tasks.RecentRunsLimit(trendsHistoryLimit)
+	runs, err := s.tasks.RecentRunsLimit(ctx, trendsHistoryLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +230,6 @@ func (ts *TaskService) RecentRuns(offset, limit int) ([]*model.SyncRun, error) {
 
 // RecentRunsLimit 按条数取全局最近 run——内部聚合专用，不受列表分页
 // 200 条的钳制（否则趋势图只统计最新 200 条却宣称最近 2000 条）。
-func (ts *TaskService) RecentRunsLimit(limit int) ([]*model.SyncRun, error) {
-	return ts.runRepository.FindRecentLimit(limit)
+func (ts *TaskService) RecentRunsLimit(ctx context.Context, limit int) ([]*model.SyncRun, error) {
+	return ts.runRepository.FindRecentLimit(ctx, limit)
 }

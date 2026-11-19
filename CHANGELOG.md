@@ -2,6 +2,31 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.60.0] - 2026-11-19
+
+### Changed（Repository ctx 传播，第一轮）
+
+- **`repository.base` 的通用 CRUD 全部接收 `context.Context`**：
+  `create/batchCreate/getByID/getByCondition/update/updateInTx/updateFields/
+  deleteByID`；nil ctx 统一归一为 `context.Background()`。
+- **主读路径已接请求 ctx**（请求取消/超时会真正中断 DB 查询）：
+  - `SyncTaskRepository.FindByKey/FindAll/FindByKey/FindFiltered/FindAllForExport`
+  - `SyncRunRepository.FindByTaskKey/FindByTaskKeyAndRunID/FindRunSummary/
+    FindRecentLimit/FindRecentByTaskKey/FindLatestByTaskKeys/
+    FindLastBackupSuccessBatch`
+  - `RepoRepository.FindAll/FindByKey/ListWithFilter`
+  - `PlatformRepository.FindByKey/FindByID/FindAll`
+  - 对应服务：任务列表/详情/历史、仓库列表/详情、平台详情/列表、健康评分、
+    趋势聚合、策略导出。
+- **`DetectDrift` 预算耗尽快速返回**：ctx 已过期时直接返回「未检查」报告，
+  不再先查库等 deadline exceeded（repository 开始尊重 ctx 后的必要行为对齐）。
+- **破坏性变更（v0.x 允许）**：上述 repository 读方法新增首参
+  `context.Context`；外部直接调用方需同步。
+
+### Migration
+
+- 无 schema 变更。
+
 ## [v0.59.0] - 2026-11-19
 
 ### Changed

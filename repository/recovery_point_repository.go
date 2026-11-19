@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
@@ -18,7 +19,7 @@ func NewRecoveryPointRepository(db *gorm.DB) *RecoveryPointRepository {
 
 // Create 记录一次成功冷备的恢复点。
 func (d *RecoveryPointRepository) Create(rp *model.RecoveryPoint) error {
-	return d.create(rp)
+	return d.create(context.Background(), rp)
 }
 
 // ListByTask 按任务列恢复点,最新优先(可恢复性检索主入口)。

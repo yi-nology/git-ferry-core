@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -42,21 +43,21 @@ func TestSyncTaskRepo_FindFiltered(t *testing.T) {
 		Key: "t-new", Name: "new", Enabled: true, LastStatus: "", WebhookToken: "wt-new",
 	}))
 
-	list, total, err := d.FindFiltered("", model.StatusSuccess, DefaultPagination(0, 50))
+	list, total, err := d.FindFiltered(context.Background(), "", model.StatusSuccess, DefaultPagination(0, 50))
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total, "status 过滤后总数必须只算命中的那批")
 	require.Len(t, list, 1)
 	assert.Equal(t, "t-ok", list[0].Key)
 
 	// 失败态同理
-	list, total, err = d.FindFiltered("", model.StatusFailed, DefaultPagination(0, 50))
+	list, total, err = d.FindFiltered(context.Background(), "", model.StatusFailed, DefaultPagination(0, 50))
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, list, 1)
 	assert.Equal(t, "t-bad", list[0].Key)
 
 	// 空 status = 不过滤(全量)
-	_, total, err = d.FindFiltered("", "", DefaultPagination(0, 50))
+	_, total, err = d.FindFiltered(context.Background(), "", "", DefaultPagination(0, 50))
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), total, "空 status 必须返回全量")
 }
@@ -77,7 +78,7 @@ func TestSyncTaskRepo_FindFiltered_ByRepoKey(t *testing.T) {
 		SourceRepoKey: "github/x/a", TargetRepoKey: "github/y/a",
 	}))
 
-	list, total, err := d.FindFiltered("github/x/a", model.StatusSuccess, DefaultPagination(0, 50))
+	list, total, err := d.FindFiltered(context.Background(), "github/x/a", model.StatusSuccess, DefaultPagination(0, 50))
 	require.NoError(t, err)
 	require.Equal(t, int64(1), total)
 	require.Len(t, list, 1)
@@ -104,13 +105,13 @@ func TestSyncRunRepo_FindByTaskKeyAndRunID(t *testing.T) {
 	require.NoError(t, d.Create(r2))
 	require.NoError(t, d.Create(r3))
 
-	got, err := d.FindByTaskKeyAndRunID("t1", r2.ID)
+	got, err := d.FindByTaskKeyAndRunID(context.Background(), "t1", r2.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, r2.ID, got.ID)
 	assert.Equal(t, model.StatusFailed, got.Status)
 
 	// 别的任务的同号记录不能被串出来
-	_, err = d.FindByTaskKeyAndRunID("t1", r3.ID)
+	_, err = d.FindByTaskKeyAndRunID(context.Background(), "t1", r3.ID)
 	require.Error(t, err, "跨任务的记录不得被匹配")
 }

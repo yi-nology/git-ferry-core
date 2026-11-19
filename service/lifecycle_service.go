@@ -153,6 +153,13 @@ const DriftDetectBudget = 30 * time.Second
 //   - **不静默截断**:任务列表被上限截断时如实报"未检查"。
 func (s *Service) DetectDrift(ctx context.Context, taskKeys []string) (*DriftReport, error) {
 	rep := &DriftReport{Generated: time.Now().UTC(), Items: []DriftItem{}}
+	// 预算/调用方 ctx 已耗尽:直接如实返回"未检查",不要先去查库
+	// (repository 现在尊重 ctx,查询会以 deadline exceeded 失败)。
+	if ctx.Err() != nil {
+		rep.Warnings = append(rep.Warnings,
+			"漂移检测预算("+DriftDetectBudget.String()+")已用尽,剩余任务未检查")
+		return rep, nil
+	}
 
 	var tasks []*model.SyncTask
 	if len(taskKeys) > 0 {

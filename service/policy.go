@@ -11,8 +11,8 @@ import (
 
 // ExportTaskPolicies 全部任务(含禁用)的策略导出——确定性 JSON,
 // 按 key 升序,可进 git 做版本化变更(策略走 PR 审阅)。
-func (s *Service) ExportTaskPolicies(_ context.Context) (string, error) {
-	tasks, err := s.tasks.taskRepository.FindAllForExport()
+func (s *Service) ExportTaskPolicies(ctx context.Context) (string, error) {
+	tasks, err := s.tasks.taskRepository.FindAllForExport(ctx)
 	if err != nil {
 		return "", err
 	}

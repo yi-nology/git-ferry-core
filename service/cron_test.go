@@ -68,7 +68,7 @@ func TestCronTick_SeedsThenFiresOnce(t *testing.T) {
 	task := mustCreateCronTask(t, svc, "cron-seed", "* * * * *")
 
 	require.NoError(t, svc.runCronTick(context.Background()))
-	got, err := svc.tasks.taskRepository.FindByKey(task.Key)
+	got, err := svc.tasks.taskRepository.FindByKey(context.Background(), task.Key)
 	require.NoError(t, err)
 	require.NotNil(t, got.NextFireAt, "首次扫描必须播种 next_fire_at")
 	assert.True(t, got.NextFireAt.After(time.Now()), "播种的是下一次触发,不得立即执行")
@@ -124,7 +124,7 @@ func TestCron_ModificationVisibleToOtherInstance(t *testing.T) {
 	// */10 * * * * 在整十分钟点撞成同一时刻,造成测试 flaky)。
 	task := mustCreateCronTask(t, a, "cron-mod", "0 0 1 1 *")
 	require.NoError(t, a.runCronTick(context.Background()))
-	old, err := a.tasks.taskRepository.FindByKey(task.Key)
+	old, err := a.tasks.taskRepository.FindByKey(context.Background(), task.Key)
 	require.NoError(t, err)
 	require.NotNil(t, old.NextFireAt)
 
@@ -132,12 +132,12 @@ func TestCron_ModificationVisibleToOtherInstance(t *testing.T) {
 	newExpr := "0 0 1 2 *"
 	_, err = a.UpdateTask(context.Background(), &model.UpdateTaskRequest{Key: task.Key, Cron: &newExpr})
 	require.NoError(t, err)
-	mid, err := a.tasks.taskRepository.FindByKey(task.Key)
+	mid, err := a.tasks.taskRepository.FindByKey(context.Background(), task.Key)
 	require.NoError(t, err)
 	assert.Nil(t, mid.NextFireAt, "cron 变更必须清空旧排程,防旧表达式继续触发")
 
 	require.NoError(t, b.runCronTick(context.Background()))
-	got, err := b.tasks.taskRepository.FindByKey(task.Key)
+	got, err := b.tasks.taskRepository.FindByKey(context.Background(), task.Key)
 	require.NoError(t, err)
 	require.NotNil(t, got.NextFireAt)
 	assert.NotEqual(t, *old.NextFireAt, *got.NextFireAt, "B 必须按新表达式重新播种")
@@ -175,7 +175,7 @@ func TestStartCronJobs_SharedScheduler(t *testing.T) {
 
 	require.NoError(t, svc.startCronJobs())
 	require.NoError(t, svc.startCronJobs(), "重复 Start 必须幂等")
-	got, err := svc.tasks.taskRepository.FindByKey("cron-start")
+	got, err := svc.tasks.taskRepository.FindByKey(context.Background(), "cron-start")
 	require.NoError(t, err)
 	assert.NotNil(t, got.NextFireAt)
 	svc.stopCronJobs()

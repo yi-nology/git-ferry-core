@@ -31,7 +31,7 @@ func (d *ReconcileRepository) Upsert(r *model.ReconcileRecord) error {
 
 // Get 查某任务最新对账结果(查无此条返回 ErrNotFound)。
 func (d *ReconcileRepository) Get(taskKey string) (*model.ReconcileRecord, error) {
-	return d.getByID(taskKey)
+	return d.getByID(context.Background(), taskKey)
 }
 
 // ListDrift 漂移/分支缺失记录(漂移告警/看板用)。

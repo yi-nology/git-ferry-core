@@ -17,7 +17,7 @@ func NewWebhookEventRepository(db *gorm.DB) *WebhookEventRepository {
 }
 
 func (d *WebhookEventRepository) FindByEventID(eventID string) (*model.WebhookEvent, error) {
-	return d.getByCondition("event_id = ?", eventID)
+	return d.getByCondition(context.Background(), "event_id = ?", eventID)
 }
 
 func (d *WebhookEventRepository) FindByRepoKey(repoKey string, page Pagination) ([]*model.WebhookEvent, int64, error) {
@@ -29,13 +29,13 @@ func (d *WebhookEventRepository) FindByRepoKey(repoKey string, page Pagination) 
 }
 
 func (d *WebhookEventRepository) Create(event *model.WebhookEvent) error {
-	return d.create(event)
+	return d.create(context.Background(), event)
 }
 
 // Update 回写事件(列白名单;高频状态路径请走 UpdateStatus* —— 它们只写
 // 状态列,避免 payload 大字段整行回写)。
 func (d *WebhookEventRepository) Update(event *model.WebhookEvent) error {
-	return d.update(event)
+	return d.update(context.Background(), event)
 }
 
 // UpdateStatus 仅更新 status 和 processed_at 字段,避免全字段回写(payload 可能很大)。
@@ -51,7 +51,7 @@ func (d *WebhookEventRepository) UpdateStatusAndError(id uint, status string, pr
 }
 
 func (d *WebhookEventRepository) FindByID(id uint) (*model.WebhookEvent, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 func (d *WebhookEventRepository) FindRecent(repoKey string, page Pagination) ([]*model.WebhookEvent, error) {

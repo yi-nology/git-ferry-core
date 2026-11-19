@@ -29,7 +29,7 @@ func NewOperationLogRepository(db *gorm.DB) *OperationLogRepository {
 
 // Create 写入一条审计日志。
 func (d *OperationLogRepository) Create(log *model.OperationLog) error {
-	return d.create(log)
+	return d.create(context.Background(), log)
 }
 
 // CreateChained 事务内续接哈希链并写入。

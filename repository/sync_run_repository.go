@@ -28,9 +28,9 @@ func (d *SyncRunRepository) DB() *gorm.DB {
 // (`WHERE run_id IN (...)`),不是逐行查 ⇒ 本来就不存在 N+1。
 // 不加载的代价大得多:健康评分要的「步骤级失败」信号恒为 0(结构性失效),
 // 运维/AI 都看不到失败发生在哪一步。
-func (d *SyncRunRepository) FindByTaskKey(taskKey string, page Pagination) ([]*model.SyncRun, int64, error) {
+func (d *SyncRunRepository) FindByTaskKey(ctx context.Context, taskKey string, page Pagination) ([]*model.SyncRun, int64, error) {
 	var runs []*model.SyncRun
-	query := d.db.Preload("Steps").Where("task_key = ?", taskKey)
+	query := d.db.WithContext(ctx).Preload("Steps").Where("task_key = ?", taskKey)
 	total, err := Paginate(query, page, &runs)
 	return runs, total, err
 }
@@ -40,9 +40,9 @@ func (d *SyncRunRepository) FindByTaskKey(taskKey string, page Pagination) ([]*m
 // 之前 CLI 的 `history +detail --run-id` 只能靠"翻页找到那条"——
 // 服务端没有按 run_id 过滤的能力 ⇒ 翻不到就静默返回空列表,
 // 用户以为"这条记录不存在"。
-func (d *SyncRunRepository) FindByTaskKeyAndRunID(taskKey string, runID uint) (*model.SyncRun, error) {
+func (d *SyncRunRepository) FindByTaskKeyAndRunID(ctx context.Context, taskKey string, runID uint) (*model.SyncRun, error) {
 	var run model.SyncRun
-	q := d.db.Preload("Steps").Where("id = ?", runID)
+	q := d.db.WithContext(ctx).Preload("Steps").Where("id = ?", runID)
 	// taskKey 为空 = 不按任务限定(按 ID 全局查唯一一条)。
 	if taskKey != "" {
 		q = q.Where("task_key = ?", taskKey)
@@ -87,12 +87,12 @@ func (d *SyncRunRepository) FindByIDWithSteps(id uint) (*model.SyncRun, error) {
 }
 
 func (d *SyncRunRepository) Create(run *model.SyncRun) error {
-	return d.create(run)
+	return d.create(context.Background(), run)
 }
 
 // Update 回写执行记录(列白名单,不写回主键/审计列;不触发 upsert)。
 func (d *SyncRunRepository) Update(run *model.SyncRun) error {
-	return d.update(run)
+	return d.update(context.Background(), run)
 }
 
 // UpdateInTx 在调用方事务内回写执行记录(列白名单)。
@@ -102,7 +102,7 @@ func (d *SyncRunRepository) UpdateInTx(tx *gorm.DB, run *model.SyncRun) error {
 }
 
 func (d *SyncRunRepository) Delete(id uint) error {
-	return d.deleteByID(id)
+	return d.deleteByID(context.Background(), id)
 }
 
 func (d *SyncRunRepository) FindRecent(page Pagination) ([]*model.SyncRun, error) {
@@ -113,18 +113,18 @@ func (d *SyncRunRepository) FindRecent(page Pagination) ([]*model.SyncRun, error
 
 // FindRecentLimit 直接按条数取最近 run(不受列表分页 200 上限约束)。
 // 供趋势/健康聚合等内部只读路径使用;上限仍收敛,防误传超大值。
-func (d *SyncRunRepository) FindRecentLimit(limit int) ([]*model.SyncRun, error) {
+func (d *SyncRunRepository) FindRecentLimit(ctx context.Context, limit int) ([]*model.SyncRun, error) {
 	if limit <= 0 || limit > 10000 {
 		limit = 2000
 	}
 	var runs []*model.SyncRun
-	err := d.db.Order("id DESC").Limit(limit).Find(&runs).Error
+	err := d.db.WithContext(ctx).Order("id DESC").Limit(limit).Find(&runs).Error
 	return runs, err
 }
 
 // FindLatestByTaskKeys 批量取每个任务最新一条 run(只选轻量列)。
 // 仓库盘点等聚合场景用:逐任务 ListHistory(含 COUNT/Preload)是 N+1。
-func (d *SyncRunRepository) FindLatestByTaskKeys(taskKeys []string) (map[string]*model.SyncRun, error) {
+func (d *SyncRunRepository) FindLatestByTaskKeys(ctx context.Context, taskKeys []string) (map[string]*model.SyncRun, error) {
 	out := make(map[string]*model.SyncRun, len(taskKeys))
 	if len(taskKeys) == 0 {
 		return out, nil
@@ -133,7 +133,7 @@ func (d *SyncRunRepository) FindLatestByTaskKeys(taskKeys []string) (map[string]
 		TaskKey string
 		MaxID   uint
 	}
-	if err := d.db.Model(&model.SyncRun{}).
+	if err := d.db.WithContext(ctx).Model(&model.SyncRun{}).
 		Select("task_key, MAX(id) AS max_id").
 		Where("task_key IN ?", taskKeys).
 		Group("task_key").Scan(&latest).Error; err != nil {
@@ -147,7 +147,7 @@ func (d *SyncRunRepository) FindLatestByTaskKeys(taskKeys []string) (map[string]
 		ids = append(ids, l.MaxID)
 	}
 	var runs []*model.SyncRun
-	if err := d.db.Select("id, task_key, status, end_time").Where("id IN ?", ids).Find(&runs).Error; err != nil {
+	if err := d.db.WithContext(ctx).Select("id, task_key, status, end_time").Where("id IN ?", ids).Find(&runs).Error; err != nil {
 		return nil, err
 	}
 	for _, r := range runs {
@@ -159,9 +159,9 @@ func (d *SyncRunRepository) FindLatestByTaskKeys(taskKeys []string) (map[string]
 // FindRunSummary 按 run_id 取轻量摘要(不预加载 Steps)。
 // outbox 重投只需要状态/错误/触发/耗时,原实现 Preload Steps 让每条
 // 事件多一次查询并搬来无人使用的步骤明细。
-func (d *SyncRunRepository) FindRunSummary(taskKey string, runID uint) (*model.SyncRun, error) {
+func (d *SyncRunRepository) FindRunSummary(ctx context.Context, taskKey string, runID uint) (*model.SyncRun, error) {
 	var run model.SyncRun
-	q := d.db.Select(
+	q := d.db.WithContext(ctx).Select(
 		"id, task_key, trigger_source, status, error_message, error_type, "+
 			"retry_total, backup_status, start_time, end_time, duration_ms",
 	).Where("id = ?", runID)
@@ -180,19 +180,19 @@ func (d *SyncRunRepository) FindRunSummary(taskKey string, runID uint) (*model.S
 // FindRecentByTaskKey 取某任务最近 N 条 run,**不预加载 Steps**。
 // 健康评分需要批量拉全部任务的历史,再统一按 run_id 批量取步骤;
 // 逐任务 Preload 会多出 N 条查询。
-func (d *SyncRunRepository) FindRecentByTaskKey(taskKey string, limit int) ([]*model.SyncRun, error) {
+func (d *SyncRunRepository) FindRecentByTaskKey(ctx context.Context, taskKey string, limit int) ([]*model.SyncRun, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 	var runs []*model.SyncRun
-	err := d.db.Where("task_key = ?", taskKey).Order("id DESC").Limit(limit).Find(&runs).Error
+	err := d.db.WithContext(ctx).Where("task_key = ?", taskKey).Order("id DESC").Limit(limit).Find(&runs).Error
 	return runs, err
 }
 
 // FindLastBackupSuccessBatch 批量取每个任务最近一次备份成功的 run。
 // 两条查询(分组取 MAX(id) + 按 id 取行)替代逐任务查询;
 // 返回 map[task_key]*SyncRun,无成功备份的任务不在 map 中。
-func (d *SyncRunRepository) FindLastBackupSuccessBatch(taskKeys []string) (map[string]*model.SyncRun, error) {
+func (d *SyncRunRepository) FindLastBackupSuccessBatch(ctx context.Context, taskKeys []string) (map[string]*model.SyncRun, error) {
 	out := make(map[string]*model.SyncRun, len(taskKeys))
 	if len(taskKeys) == 0 {
 		return out, nil
@@ -201,7 +201,7 @@ func (d *SyncRunRepository) FindLastBackupSuccessBatch(taskKeys []string) (map[s
 		TaskKey string
 		MaxID   uint
 	}
-	if err := d.db.Model(&model.SyncRun{}).
+	if err := d.db.WithContext(ctx).Model(&model.SyncRun{}).
 		Select("task_key, MAX(id) AS max_id").
 		Where("task_key IN ? AND backup_status = ?", taskKeys, model.BackupStatusSuccess).
 		Group("task_key").Scan(&latest).Error; err != nil {
@@ -215,7 +215,7 @@ func (d *SyncRunRepository) FindLastBackupSuccessBatch(taskKeys []string) (map[s
 		ids = append(ids, l.MaxID)
 	}
 	var runs []*model.SyncRun
-	if err := d.db.Where("id IN ?", ids).Find(&runs).Error; err != nil {
+	if err := d.db.WithContext(ctx).Where("id IN ?", ids).Find(&runs).Error; err != nil {
 		return nil, err
 	}
 	for _, r := range runs {

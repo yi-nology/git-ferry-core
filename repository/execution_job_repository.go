@@ -140,7 +140,7 @@ func (d *ExecutionJobRepository) ListPendingIDs(limit int) ([]uint, error) {
 
 // FindByID 查单条。
 func (d *ExecutionJobRepository) FindByID(id uint) (*model.ExecutionJob, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 // Claim 条件认领:仅当仍是 pending 才翻为 claimed(原子,多实例单胜者)。

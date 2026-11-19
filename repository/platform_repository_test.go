@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -47,7 +48,7 @@ func TestPlatformRepo_CreateAndFindByKey(t *testing.T) {
 	assert.NotZero(t, platform.ID, "expected platform ID to be set after create")
 
 	// Find by key
-	got, err := d.FindByKey("github")
+	got, err := d.FindByKey(context.Background(), "github")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "github", got.Key, "expected key 'github'")
@@ -72,7 +73,7 @@ func TestPlatformRepo_FindByID(t *testing.T) {
 	require.NoError(t, err, "create failed")
 
 	// Find by ID
-	got, err := d.FindByID(platform.ID)
+	got, err := d.FindByID(context.Background(), platform.ID)
 	require.NoError(t, err, "find by ID failed")
 
 	assert.Equal(t, "gitlab", got.Key, "expected key 'gitlab'")
@@ -95,7 +96,7 @@ func TestPlatformRepo_FindAll(t *testing.T) {
 	}
 
 	// Find all
-	got, err := d.FindAll()
+	got, err := d.FindAll(context.Background())
 	require.NoError(t, err, "find all failed")
 
 	require.Len(t, got, 3, "expected 3 platforms")
@@ -124,7 +125,7 @@ func TestPlatformRepo_Update(t *testing.T) {
 	require.NoError(t, err, "update failed")
 
 	// Get the updated platform
-	got, err := d.FindByKey("github")
+	got, err := d.FindByKey(context.Background(), "github")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "GitHub Enterprise", got.Name, "expected name 'GitHub Enterprise'")
@@ -150,7 +151,7 @@ func TestPlatformRepo_Delete(t *testing.T) {
 	require.NoError(t, err, "delete failed")
 
 	// Try to get the deleted platform - should return (nil, nil)
-	p, err := d.FindByKey("github")
+	p, err := d.FindByKey(context.Background(), "github")
 	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, p, "expected nil platform for deleted key")
 }
@@ -159,7 +160,7 @@ func TestPlatformRepo_FindByKey_NotFound(t *testing.T) {
 	_, d := setupPlatformTestDB(t)
 
 	// Try to get a non-existent platform - should return (nil, nil)
-	p, err := d.FindByKey("nonexistent")
+	p, err := d.FindByKey(context.Background(), "nonexistent")
 	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, p, "expected nil platform for non-existent key")
 }
@@ -168,7 +169,7 @@ func TestPlatformRepo_FindByID_NotFound(t *testing.T) {
 	_, d := setupPlatformTestDB(t)
 
 	// Try to get a non-existent platform - should return (nil, nil)
-	p, err := d.FindByID(999)
+	p, err := d.FindByID(context.Background(), 999)
 	require.ErrorIs(t, err, ErrNotFound)
 	assert.Nil(t, p, "expected nil platform for non-existent ID")
 }
@@ -204,13 +205,13 @@ func TestPlatformRepo_SetDefault(t *testing.T) {
 	require.NoError(t, err, "set default failed")
 
 	// Verify platform2 is now default
-	got2, err := d.FindByKey("gitlab")
+	got2, err := d.FindByKey(context.Background(), "gitlab")
 	require.NoError(t, err, "find by key failed")
 
 	assert.True(t, got2.IsDefault, "expected platform2 to be default")
 
 	// Verify platform1 is no longer default
-	got1, err := d.FindByKey("github")
+	got1, err := d.FindByKey(context.Background(), "github")
 	require.NoError(t, err, "find by key failed")
 
 	assert.False(t, got1.IsDefault, "expected platform1 to not be default")
@@ -235,7 +236,7 @@ func TestPlatformRepo_UpdateStatus(t *testing.T) {
 	require.NoError(t, err, "update status failed")
 
 	// Verify the status was updated
-	got, err := d.FindByKey("github")
+	got, err := d.FindByKey(context.Background(), "github")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "inactive", got.Status, "expected status 'inactive'")
@@ -310,7 +311,7 @@ func TestPlatformRepo_UpdateFields(t *testing.T) {
 	require.NoError(t, err, "update fields failed")
 
 	// Verify the fields were updated
-	got, err := d.FindByKey("github")
+	got, err := d.FindByKey(context.Background(), "github")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "GitHub Enterprise", got.Name, "expected name 'GitHub Enterprise'")
@@ -352,7 +353,7 @@ func TestPlatformRepo_UpdateRepoCount(t *testing.T) {
 	require.NoError(t, err, "update repo count failed")
 
 	// Verify the repo count was updated
-	got, err := d.FindByKey("github")
+	got, err := d.FindByKey(context.Background(), "github")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, 3, got.RepoCount, "expected repo count 3")

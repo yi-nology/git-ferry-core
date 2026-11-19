@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"gorm.io/gorm"
@@ -18,12 +20,12 @@ func NewHistoryChannelRepository(db *gorm.DB) *HistoryChannelRepository {
 
 // Create 新建通道。
 func (d *HistoryChannelRepository) Create(ch *model.HistoryChannel) error {
-	return d.create(ch)
+	return d.create(context.Background(), ch)
 }
 
 // Update 更新通道(列白名单,不写回主键/审计列)。
 func (d *HistoryChannelRepository) Update(ch *model.HistoryChannel) error {
-	return d.update(ch)
+	return d.update(context.Background(), ch)
 }
 
 // UpdateLastEntryHash 更新链尾锚点(只动这一列,不动整行)。
@@ -51,17 +53,17 @@ func (d *HistoryChannelRepository) FindAll(page Pagination) ([]*model.HistoryCha
 
 // FindByID 按 ID 取通道。
 func (d *HistoryChannelRepository) FindByID(id uint) (*model.HistoryChannel, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 // Delete 软删通道。
 func (d *HistoryChannelRepository) Delete(id uint) error {
-	return d.deleteByID(id)
+	return d.deleteByID(context.Background(), id)
 }
 
 // FindByName 按名称取通道(名称唯一)。
 func (d *HistoryChannelRepository) FindByName(name string) (*model.HistoryChannel, error) {
-	return d.getByCondition("name = ?", name)
+	return d.getByCondition(context.Background(), "name = ?", name)
 }
 
 // HistoryTargetRepository 历史同步通道的推送目标。
@@ -76,22 +78,22 @@ func NewHistoryTargetRepository(db *gorm.DB) *HistoryTargetRepository {
 
 // Create 新建目标。
 func (d *HistoryTargetRepository) Create(t *model.HistoryTarget) error {
-	return d.create(t)
+	return d.create(context.Background(), t)
 }
 
 // Update 更新目标(列白名单,不写回主键/审计列)。
 func (d *HistoryTargetRepository) Update(t *model.HistoryTarget) error {
-	return d.update(t)
+	return d.update(context.Background(), t)
 }
 
 // Delete 删除目标。
 func (d *HistoryTargetRepository) Delete(id uint) error {
-	return d.deleteByID(id)
+	return d.deleteByID(context.Background(), id)
 }
 
 // FindByID 按 ID 取目标。
 func (d *HistoryTargetRepository) FindByID(id uint) (*model.HistoryTarget, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 // FindByChannel 列出通道的目标(按 ID 升序 = 推送优先级)。
@@ -134,17 +136,17 @@ func NewHistoryRunRepository(db *gorm.DB) *HistoryRunRepository {
 
 // Create 新建执行记录。
 func (d *HistoryRunRepository) Create(run *model.HistoryRun) error {
-	return d.create(run)
+	return d.create(context.Background(), run)
 }
 
 // Update 更新执行记录(列白名单,不写回主键/审计列)。
 func (d *HistoryRunRepository) Update(run *model.HistoryRun) error {
-	return d.update(run)
+	return d.update(context.Background(), run)
 }
 
 // UpdateInTx 同 Update,但在调用方事务内执行。
 func (d *HistoryRunRepository) UpdateInTx(tx *gorm.DB, run *model.HistoryRun) error {
-	return d.updateInTx(tx, run)
+	return d.updateInTx(context.Background(), tx, run)
 }
 
 // DB 暴露底层句柄,供跨 Repo 事务使用。
@@ -187,7 +189,7 @@ func (d *HistoryRunRepository) Delete(id uint) error {
 
 // FindByID 按 ID 取执行记录。
 func (d *HistoryRunRepository) FindByID(id uint) (*model.HistoryRun, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 // FindByChannel 分页列出通道的执行记录(新→旧)。
@@ -261,12 +263,12 @@ func (d *HistoryOverrideRepository) Upsert(o *model.HistoryOverride) error {
 	if err == nil {
 		o.ID = existing.ID
 		o.CreatedAt = existing.CreatedAt
-		return d.update(o)
+		return d.update(context.Background(), o)
 	}
 	if !oekiterrors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	return d.create(o)
+	return d.create(context.Background(), o)
 }
 
 // FindByChannel 列出通道的全部裁决。
@@ -281,5 +283,5 @@ func (d *HistoryOverrideRepository) FindByChannel(channelID uint) ([]*model.Hist
 // FindByPath 取通道对某路径的裁决。
 // Delete 删除裁决。
 func (d *HistoryOverrideRepository) Delete(id uint) error {
-	return d.deleteByID(id)
+	return d.deleteByID(context.Background(), id)
 }

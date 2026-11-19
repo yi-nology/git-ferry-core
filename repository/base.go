@@ -76,40 +76,48 @@ func writableColumns[T any](db *gorm.DB, exclude ...string) []string {
 // errors.Is(err, repository.ErrNotFound) 判断(不再有 (nil, nil) 双形态)。
 var ErrNotFound = crud.ErrNotFound
 
-func (b *base[T, ID]) create(e *T) error {
-	return b.g.Create(context.Background(), e)
+func normalizeCtx(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
-func (b *base[T, ID]) batchCreate(entities []*T, batchSize int) error {
-	return b.g.BatchCreate(context.Background(), entities, batchSize)
+func (b *base[T, ID]) create(ctx context.Context, e *T) error {
+	return b.g.Create(normalizeCtx(ctx), e)
 }
 
-func (b *base[T, ID]) getByID(id ID) (*T, error) {
-	return b.g.GetByID(context.Background(), id)
+func (b *base[T, ID]) batchCreate(ctx context.Context, entities []*T, batchSize int) error {
+	return b.g.BatchCreate(normalizeCtx(ctx), entities, batchSize)
 }
 
-func (b *base[T, ID]) getByCondition(query any, args ...any) (*T, error) {
-	return b.g.GetByCondition(context.Background(), query, args...)
+func (b *base[T, ID]) getByID(ctx context.Context, id ID) (*T, error) {
+	return b.g.GetByID(normalizeCtx(ctx), id)
 }
 
-func (b *base[T, ID]) update(e *T) error {
-	_, err := b.g.Update(context.Background(), e, crud.UpdateOption{Columns: b.updateCols})
+func (b *base[T, ID]) getByCondition(ctx context.Context, query any, args ...any) (*T, error) {
+	return b.g.GetByCondition(normalizeCtx(ctx), query, args...)
+}
+
+func (b *base[T, ID]) update(ctx context.Context, e *T) error {
+	_, err := b.g.Update(normalizeCtx(ctx), e, crud.UpdateOption{Columns: b.updateCols})
 	return err
 }
 
 // updateInTx 同 update,但在调用方事务内执行(同一列白名单口径)。
-func (b *base[T, ID]) updateInTx(tx *gorm.DB, e *T) error {
-	_, err := gormrepo.NewGormRepository[T, ID](tx).
-		Update(context.Background(), e, crud.UpdateOption{Columns: b.updateCols})
+func (b *base[T, ID]) updateInTx(ctx context.Context, tx *gorm.DB, e *T) error {
+	ctx = normalizeCtx(ctx)
+	_, err := gormrepo.NewGormRepository[T, ID](tx.WithContext(ctx)).
+		Update(ctx, e, crud.UpdateOption{Columns: b.updateCols})
 	return err
 }
 
 // updateFields 按字段更新(天然列白名单),返回受影响行数。
-func (b *base[T, ID]) updateFields(id ID, fields map[string]any) (int64, error) {
-	return b.g.UpdateFields(context.Background(), id, fields)
+func (b *base[T, ID]) updateFields(ctx context.Context, id ID, fields map[string]any) (int64, error) {
+	return b.g.UpdateFields(normalizeCtx(ctx), id, fields)
 }
 
-func (b *base[T, ID]) deleteByID(id ID) error {
-	_, err := b.g.Delete(context.Background(), id)
+func (b *base[T, ID]) deleteByID(ctx context.Context, id ID) error {
+	_, err := b.g.Delete(normalizeCtx(ctx), id)
 	return err
 }

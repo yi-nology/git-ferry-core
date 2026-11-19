@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+
 	"github.com/yi-nology/go-git-platform/auth/credential"
 
 	oekiterrors "github.com/oekit/pkg/errors"
@@ -48,14 +50,14 @@ func NewRepoRepository(db *gorm.DB) (*RepoRepository, error) {
 	return &RepoRepository{base: newBase[model.Repo, uint](db), cm: cm}, nil
 }
 
-func (d *RepoRepository) FindAll(page Pagination) ([]*model.Repo, int64, error) {
+func (d *RepoRepository) FindAll(ctx context.Context, page Pagination) ([]*model.Repo, int64, error) {
 	var repos []*model.Repo
-	total, err := Paginate(d.db, page, &repos)
+	total, err := Paginate(d.db.WithContext(ctx), page, &repos)
 	return repos, total, err
 }
 
-func (d *RepoRepository) FindByKey(key string) (*model.Repo, error) {
-	repo, err := d.getByCondition("`key` = ?", key)
+func (d *RepoRepository) FindByKey(ctx context.Context, key string) (*model.Repo, error) {
+	repo, err := d.getByCondition(ctx, "`key` = ?", key)
 	if err != nil || repo == nil {
 		return repo, err
 	}
@@ -76,7 +78,7 @@ func (d *RepoRepository) Create(repo *model.Repo) error {
 		}
 		repo.WebhookSecret = encrypted
 	}
-	return d.create(repo)
+	return d.create(context.Background(), repo)
 }
 
 func (d *RepoRepository) Update(repo *model.Repo) error {
@@ -87,7 +89,7 @@ func (d *RepoRepository) Update(repo *model.Repo) error {
 		}
 		repo.WebhookSecret = encrypted
 	}
-	return d.update(repo)
+	return d.update(context.Background(), repo)
 }
 
 // BatchCreate 批量创建仓库(用于同步场景,逐条加密后批量插入)。
@@ -104,7 +106,7 @@ func (d *RepoRepository) BatchCreate(repos []*model.Repo, batchSize int) error {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
-	return d.batchCreate(repos, batchSize)
+	return d.batchCreate(context.Background(), repos, batchSize)
 }
 
 // BatchUpdateRepoMeta 批量更新仓库元数据(路径/展示名/默认分支/clone URL)。
@@ -134,7 +136,7 @@ func (d *RepoRepository) Delete(key string) error {
 // FindByCloneURL 按 clone URL 精确查仓库(批量镜像幂等用)。
 // 查无此条返回 ErrNotFound。
 func (d *RepoRepository) FindByCloneURL(cloneURL string) (*model.Repo, error) {
-	return d.getByCondition("clone_url = ?", cloneURL)
+	return d.getByCondition(context.Background(), "clone_url = ?", cloneURL)
 }
 
 // FindByKeys 批量按 key 查仓库(批量删除用,避免逐 key 查询)。
@@ -196,11 +198,11 @@ func isAllowedRepoSort(col string) bool {
 }
 
 // ListWithFilter returns a filtered, sorted, paginated list of repos and the total count.
-func (d *RepoRepository) ListWithFilter(page Pagination, filter *RepoFilter) ([]*model.Repo, int64, error) {
+func (d *RepoRepository) ListWithFilter(ctx context.Context, page Pagination, filter *RepoFilter) ([]*model.Repo, int64, error) {
 	var repos []*model.Repo
 	var total int64
 
-	query := d.db.Model(&model.Repo{})
+	query := d.db.WithContext(ctx).Model(&model.Repo{})
 
 	// Apply search filter (LIKE on name or clone_url)
 	if filter.Search != "" {

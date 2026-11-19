@@ -191,7 +191,7 @@ func (s *Service) RepoInventory(ctx context.Context) (*InventoryResult, error) {
 		}
 	}
 	// 一次取全部任务的最新 run,替代逐任务 ListHistory(COUNT+SELECT+Preload)。
-	latestRuns, err := s.tasks.runRepository.FindLatestByTaskKeys(taskKeys)
+	latestRuns, err := s.tasks.runRepository.FindLatestByTaskKeys(ctx, taskKeys)
 	if err != nil {
 		return nil, err
 	}

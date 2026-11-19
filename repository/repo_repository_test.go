@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -146,7 +147,7 @@ func TestRepoRepo_CreateAndFindByKey(t *testing.T) {
 	assert.NotZero(t, repo.ID, "expected repo ID to be set after create")
 
 	// Find by key
-	got, err := d.FindByKey("test-repo")
+	got, err := d.FindByKey(context.Background(), "test-repo")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "test-repo", got.Key, "expected key 'test-repo'")
@@ -171,7 +172,7 @@ func TestRepoRepo_FindAll(t *testing.T) {
 	}
 
 	// Find all
-	got, total, err := d.FindAll(DefaultPagination(0, 50))
+	got, total, err := d.FindAll(context.Background(), DefaultPagination(0, 50))
 	require.NoError(t, err, "find all failed")
 
 	require.Equal(t, int64(3), total, "expected 3 repos")
@@ -198,7 +199,7 @@ func TestRepoRepo_Update(t *testing.T) {
 	require.NoError(t, err, "update failed")
 
 	// Get the updated repo
-	got, err := d.FindByKey("test-repo")
+	got, err := d.FindByKey(context.Background(), "test-repo")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "Updated Repo", got.Name, "expected name 'Updated Repo'")
@@ -222,7 +223,7 @@ func TestRepoRepo_Delete(t *testing.T) {
 	require.NoError(t, err, "delete failed")
 
 	// Try to get the deleted repo
-	got, err := d.FindByKey("test-repo")
+	got, err := d.FindByKey(context.Background(), "test-repo")
 	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting deleted repo")
@@ -232,7 +233,7 @@ func TestRepoRepo_FindByKey_NotFound(t *testing.T) {
 	_, d := setupRepoTestDB(t)
 
 	// Try to get a non-existent repo
-	got, err := d.FindByKey("nonexistent")
+	got, err := d.FindByKey(context.Background(), "nonexistent")
 	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent repo")
@@ -335,7 +336,7 @@ func TestRepoRepo_ListWithFilter(t *testing.T) {
 		Platform: "github",
 	}
 
-	got, total, err := d.ListWithFilter(DefaultPagination(0, 50), filter)
+	got, total, err := d.ListWithFilter(context.Background(), DefaultPagination(0, 50), filter)
 	require.NoError(t, err, "list with filter failed")
 
 	require.Equal(t, int64(2), total, "expected 2 repos")
@@ -362,7 +363,7 @@ func TestRepoRepo_ListWithFilter_Status(t *testing.T) {
 		Status: "active",
 	}
 
-	got, total, err := d.ListWithFilter(DefaultPagination(0, 50), filter)
+	got, total, err := d.ListWithFilter(context.Background(), DefaultPagination(0, 50), filter)
 	require.NoError(t, err, "list with filter failed")
 
 	require.Equal(t, int64(2), total, "expected 2 repos")

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	oekiterrors "github.com/oekit/pkg/errors"
@@ -22,11 +23,11 @@ func NewMirrorChannelRepository(db *gorm.DB) *MirrorChannelRepository {
 }
 
 func (d *MirrorChannelRepository) Create(ch *model.MirrorChannel) error {
-	return d.create(ch)
+	return d.create(context.Background(), ch)
 }
 
 func (d *MirrorChannelRepository) Update(ch *model.MirrorChannel) error {
-	return d.update(ch)
+	return d.update(context.Background(), ch)
 }
 
 func (d *MirrorChannelRepository) FindAll(page Pagination) ([]*model.MirrorChannel, int64, error) {
@@ -36,7 +37,7 @@ func (d *MirrorChannelRepository) FindAll(page Pagination) ([]*model.MirrorChann
 }
 
 func (d *MirrorChannelRepository) FindByID(id uint) (*model.MirrorChannel, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 // Delete 软删通道及其目标。
@@ -50,19 +51,19 @@ func (d *MirrorChannelRepository) Delete(id uint) error {
 }
 
 func (d *MirrorChannelRepository) CreateTarget(t *model.MirrorTarget) error {
-	return d.targets.create(t)
+	return d.targets.create(context.Background(), t)
 }
 
 func (d *MirrorChannelRepository) UpdateTarget(t *model.MirrorTarget) error {
-	return d.targets.update(t)
+	return d.targets.update(context.Background(), t)
 }
 
 func (d *MirrorChannelRepository) DeleteTarget(id uint) error {
-	return d.targets.deleteByID(id)
+	return d.targets.deleteByID(context.Background(), id)
 }
 
 func (d *MirrorChannelRepository) FindTargetByID(id uint) (*model.MirrorTarget, error) {
-	return d.targets.getByID(id)
+	return d.targets.getByID(context.Background(), id)
 }
 
 func (d *MirrorChannelRepository) FindTargets(channelID uint) ([]*model.MirrorTarget, error) {
@@ -81,15 +82,15 @@ func NewMirrorRunRepository(db *gorm.DB) *MirrorRunRepository {
 }
 
 func (d *MirrorRunRepository) Create(run *model.MirrorRun) error {
-	return d.create(run)
+	return d.create(context.Background(), run)
 }
 
 func (d *MirrorRunRepository) Update(run *model.MirrorRun) error {
-	return d.update(run)
+	return d.update(context.Background(), run)
 }
 
 func (d *MirrorRunRepository) FindByID(id uint) (*model.MirrorRun, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 func (d *MirrorRunRepository) FindByChannel(channelID uint, page Pagination) ([]*model.MirrorRun, int64, error) {

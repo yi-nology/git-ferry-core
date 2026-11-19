@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"time"
 
 	"github.com/yi-nology/git-ferry-core/model"
@@ -17,15 +18,15 @@ func NewSyncTaskRepository(db *gorm.DB) *SyncTaskRepository {
 	}
 }
 
-func (d *SyncTaskRepository) FindByRepoKey(repoKey string, page Pagination) ([]*model.SyncTask, int64, error) {
+func (d *SyncTaskRepository) FindByRepoKey(ctx context.Context, repoKey string, page Pagination) ([]*model.SyncTask, int64, error) {
 	var tasks []*model.SyncTask
-	query := d.db.Where("source_repo_key = ? OR target_repo_key = ?", repoKey, repoKey)
+	query := d.db.WithContext(ctx).Where("source_repo_key = ? OR target_repo_key = ?", repoKey, repoKey)
 	total, err := Paginate(query, page, &tasks)
 	return tasks, total, err
 }
 
-func (d *SyncTaskRepository) FindByKey(key string) (*model.SyncTask, error) {
-	return d.getByCondition("`key` = ?", key)
+func (d *SyncTaskRepository) FindByKey(ctx context.Context, key string) (*model.SyncTask, error) {
+	return d.getByCondition(ctx, "`key` = ?", key)
 }
 
 func (d *SyncTaskRepository) FindAllEnabled() ([]*model.SyncTask, error) {
@@ -71,7 +72,7 @@ func (d *SyncTaskRepository) ResetNextFire(key string) error {
 }
 
 func (d *SyncTaskRepository) Create(task *model.SyncTask) error {
-	return d.create(task)
+	return d.create(context.Background(), task)
 }
 
 // Update 更新任务配置(列白名单,且排除 next_fire_at)。
@@ -80,7 +81,7 @@ func (d *SyncTaskRepository) Create(task *model.SyncTask) error {
 // 更新推进;若这里整行写回,一个普通的改名请求会把执行开始时读到的旧
 // next_fire_at 写回,导致同一到点周期重复触发(或把已推进的排程倒退)。
 func (d *SyncTaskRepository) Update(task *model.SyncTask) error {
-	return d.update(task)
+	return d.update(context.Background(), task)
 }
 
 // UpdateLastRun 只更新"最近一次执行"这两个字段。
@@ -105,15 +106,15 @@ func (d *SyncTaskRepository) Delete(key string) error {
 // FindByRoute 按「源仓+源分支+目标仓+目标分支」查任务(批量镜像幂等用)。
 // 查无此条返回 ErrNotFound。
 func (d *SyncTaskRepository) FindByRoute(sourceRepoKey, sourceBranch, targetRepoKey, targetBranch string) (*model.SyncTask, error) {
-	return d.getByCondition(
+	return d.getByCondition(context.Background(),
 		"source_repo_key = ? AND source_branch = ? AND target_repo_key = ? AND target_branch = ?",
 		sourceRepoKey, sourceBranch, targetRepoKey, targetBranch,
 	)
 }
 
-func (d *SyncTaskRepository) FindAll(page Pagination) ([]*model.SyncTask, int64, error) {
+func (d *SyncTaskRepository) FindAll(ctx context.Context, page Pagination) ([]*model.SyncTask, int64, error) {
 	var tasks []*model.SyncTask
-	total, err := Paginate(d.db, page, &tasks)
+	total, err := Paginate(d.db.WithContext(ctx), page, &tasks)
 	return tasks, total, err
 }
 
@@ -121,9 +122,9 @@ func (d *SyncTaskRepository) FindAll(page Pagination) ([]*model.SyncTask, int64,
 //
 // 策略导出必须是完整集合:走列表分页会被 MaxPageSize(200)钳住,
 // 导出成功却静默少任务,回放到另一环境后缺失任务永远建不起来。
-func (d *SyncTaskRepository) FindAllForExport() ([]*model.SyncTask, error) {
+func (d *SyncTaskRepository) FindAllForExport(ctx context.Context) ([]*model.SyncTask, error) {
 	var tasks []*model.SyncTask
-	err := d.db.Order("`key` ASC").Find(&tasks).Error
+	err := d.db.WithContext(ctx).Order("`key` ASC").Find(&tasks).Error
 	return tasks, err
 }
 
@@ -132,9 +133,9 @@ func (d *SyncTaskRepository) FindAllForExport() ([]*model.SyncTask, error) {
 // status 匹配的是 `last_status`(最近一次执行的状态),不是"是否启用"。
 // 之前 CLI 的 --status 传过来但服务端没有这个能力 ⇒ 静默返回全量,
 // 用户以为筛过了。
-func (d *SyncTaskRepository) FindFiltered(repoKey, status string, page Pagination) ([]*model.SyncTask, int64, error) {
+func (d *SyncTaskRepository) FindFiltered(ctx context.Context, repoKey, status string, page Pagination) ([]*model.SyncTask, int64, error) {
 	var tasks []*model.SyncTask
-	query := d.db.Model(&model.SyncTask{})
+	query := d.db.WithContext(ctx).Model(&model.SyncTask{})
 	if repoKey != "" {
 		query = query.Where("source_repo_key = ? OR target_repo_key = ?", repoKey, repoKey)
 	}

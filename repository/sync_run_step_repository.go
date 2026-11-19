@@ -17,12 +17,12 @@ func NewSyncRunStepRepository(db *gorm.DB) *SyncRunStepRepository {
 }
 
 func (d *SyncRunStepRepository) Create(step *model.SyncRunStep) error {
-	return d.create(step)
+	return d.create(context.Background(), step)
 }
 
 // Update 回写步骤状态(列白名单,不写回主键/审计列)。
 func (d *SyncRunStepRepository) Update(step *model.SyncRunStep) error {
-	return d.update(step)
+	return d.update(context.Background(), step)
 }
 
 func (d *SyncRunStepRepository) FindByRunID(runID uint) ([]*model.SyncRunStep, error) {

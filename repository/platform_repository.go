@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+
 	"github.com/yi-nology/go-git-platform/auth/credential"
 
 	oekiterrors "github.com/oekit/pkg/errors"
@@ -76,12 +78,12 @@ func (d *PlatformRepository) Create(platform *model.Platform) error {
 	if err := d.encrypt(platform); err != nil {
 		return err
 	}
-	return d.create(platform)
+	return d.create(context.Background(), platform)
 }
 
 // FindByKey 根据 Key 查找平台(not found 返回 nil,nil,与 RepoRepository 行为一致)。
-func (d *PlatformRepository) FindByKey(key string) (*model.Platform, error) {
-	platform, err := d.getByCondition("key = ?", key)
+func (d *PlatformRepository) FindByKey(ctx context.Context, key string) (*model.Platform, error) {
+	platform, err := d.getByCondition(ctx, "key = ?", key)
 	if err != nil || platform == nil {
 		return platform, err
 	}
@@ -90,8 +92,8 @@ func (d *PlatformRepository) FindByKey(key string) (*model.Platform, error) {
 }
 
 // FindByID 根据 ID 查找平台(not found 返回 nil,nil,与 RepoRepository 行为一致)。
-func (d *PlatformRepository) FindByID(id uint) (*model.Platform, error) {
-	platform, err := d.getByID(id)
+func (d *PlatformRepository) FindByID(ctx context.Context, id uint) (*model.Platform, error) {
+	platform, err := d.getByID(ctx, id)
 	if err != nil || platform == nil {
 		return platform, err
 	}
@@ -100,9 +102,9 @@ func (d *PlatformRepository) FindByID(id uint) (*model.Platform, error) {
 }
 
 // FindAll 查找所有平台
-func (d *PlatformRepository) FindAll() ([]*model.Platform, error) {
+func (d *PlatformRepository) FindAll(ctx context.Context) ([]*model.Platform, error) {
 	var platforms []*model.Platform
-	err := d.db.Order("is_default DESC, name ASC").Find(&platforms).Error
+	err := d.db.WithContext(ctx).Order("is_default DESC, name ASC").Find(&platforms).Error
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +128,7 @@ func (d *PlatformRepository) Update(platform *model.Platform) error {
 	if err := d.encrypt(platform); err != nil {
 		return err
 	}
-	return d.update(platform)
+	return d.update(context.Background(), platform)
 }
 
 // UpdateFields 更新平台指定字段

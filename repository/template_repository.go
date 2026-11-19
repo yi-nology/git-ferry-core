@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+
 	"github.com/yi-nology/git-ferry-core/tpl"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -24,7 +26,7 @@ func (d *TemplateRepository) All() ([]tpl.Template, error) {
 
 // Get 按 ID 取；不存在返回 (nil, nil)。
 func (d *TemplateRepository) Get(id string) (*tpl.Template, error) {
-	return d.getByID(id)
+	return d.getByID(context.Background(), id)
 }
 
 // Save 按主键 upsert（列白名单：只覆盖业务列，不写回 id/created_at）。

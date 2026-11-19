@@ -28,7 +28,7 @@ func (d *WebhookRuleRepository) FindByID(id uint) (*model.WebhookRule, error) {
 }
 
 func (d *WebhookRuleRepository) Create(rule *model.WebhookRule) error {
-	return d.create(rule)
+	return d.create(context.Background(), rule)
 }
 
 // Update 事务内替换任务关联，并按业务列白名单回写规则本身。

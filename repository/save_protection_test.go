@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestRepoUpdate_PreservesCreatedAt(t *testing.T) {
 	db, d := setupSaveProtectionDB(t)
 
 	require.NoError(t, d.Create(&model.Repo{Key: "k1", Name: "n"}))
-	loaded, err := d.FindByKey("k1")
+	loaded, err := d.FindByKey(context.Background(), "k1")
 	require.NoError(t, err)
 	require.NotNil(t, loaded)
 	origCreated := loaded.CreatedAt

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestSyncRunRepo_FindByTaskKey_LoadsSteps(t *testing.T) {
 		RunID: run.ID, StepName: "push", Status: "failed", ErrorMsg: "boom",
 	}))
 
-	runs, _, err := d.FindByTaskKey("task-steps", DefaultPagination(0, 10))
+	runs, _, err := d.FindByTaskKey(context.Background(), "task-steps", DefaultPagination(0, 10))
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
 	assert.Len(t, runs[0].Steps, 2, "列表查询必须带出步骤明细(否则失败步骤数恒为 0)")

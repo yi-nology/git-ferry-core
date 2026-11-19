@@ -124,7 +124,7 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	for i := range tasks {
 		taskKeys[i] = tasks[i].Key
 	}
-	backups, err := s.tasks.runRepository.FindLastBackupSuccessBatch(taskKeys)
+	backups, err := s.tasks.runRepository.FindLastBackupSuccessBatch(ctx, taskKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func computeHealthScores(ctx context.Context, s *Service, limit int, driftByTask
 	// 原实现每任务一次 ListHistory(含 Preload)⇒ 最多 200×3 条查询;
 	// 现在 200 条 run 查询(并行) + 1 条步骤查询。
 	histSlots := syncx.FanInLimitCtx(ctx, len(tasks), 8, func(ctx context.Context, i int) (taskHealthInput, error) {
-		runs, err := s.tasks.runRepository.FindRecentByTaskKey(tasks[i].Key, healthHistoryLimit)
+		runs, err := s.tasks.runRepository.FindRecentByTaskKey(ctx, tasks[i].Key, healthHistoryLimit)
 		if err != nil {
 			return taskHealthInput{}, err
 		}

@@ -57,9 +57,9 @@ func NewTaskService(taskRepository *repository.SyncTaskRepository, runRepository
 func (ts *TaskService) ListTasks(ctx context.Context, repoKey string, offset, limit int) ([]*model.SyncTask, int64, error) {
 	page := repository.DefaultPagination(offset, limit)
 	if repoKey != "" {
-		return ts.taskRepository.FindByRepoKey(repoKey, page)
+		return ts.taskRepository.FindByRepoKey(ctx, repoKey, page)
 	}
-	return ts.taskRepository.FindAll(page)
+	return ts.taskRepository.FindAll(ctx, page)
 }
 
 // ListTasksFiltered 按仓库与最近一次执行状态过滤任务。
@@ -70,7 +70,7 @@ func (ts *TaskService) ListTasksFiltered(ctx context.Context, repoKey, status st
 		return ts.ListTasks(ctx, repoKey, offset, limit)
 	}
 	page := repository.DefaultPagination(offset, limit)
-	return ts.taskRepository.FindFiltered(repoKey, status, page)
+	return ts.taskRepository.FindFiltered(ctx, repoKey, status, page)
 }
 
 // CountTasksByStatus returns task counts grouped by last_status (key "total" = overall).
@@ -80,12 +80,12 @@ func (ts *TaskService) CountTasksByStatus() (map[string]int64, error) {
 
 // GetTask returns a sync task by key.
 func (ts *TaskService) GetTask(ctx context.Context, key string) (*model.SyncTask, error) {
-	return ts.findTask(key)
+	return ts.findTask(ctx, key)
 }
 
 // findTask 查任务并归一化查无此条。
-func (ts *TaskService) findTask(key string) (*model.SyncTask, error) {
-	t, err := ts.taskRepository.FindByKey(key)
+func (ts *TaskService) findTask(ctx context.Context, key string) (*model.SyncTask, error) {
+	t, err := ts.taskRepository.FindByKey(ctx, key)
 	if err != nil {
 		return nil, mapNotFound(err, ErrTaskNotFound)
 	}
@@ -139,7 +139,7 @@ func (ts *TaskService) CreateTask(ctx context.Context, req *model.CreateTaskRequ
 
 // UpdateTask updates an existing sync task.
 func (ts *TaskService) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) (*model.SyncTask, error) {
-	task, err := ts.findTask(req.Key)
+	task, err := ts.findTask(ctx, req.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -215,11 +215,11 @@ func (ts *TaskService) DeleteTask(ctx context.Context, key string) error {
 
 // PreviewSync previews a sync operation.
 func (ts *TaskService) PreviewSync(ctx context.Context, req *model.PreviewSyncRequest) (*model.PreviewSyncResult, error) {
-	sourceRepo, err := ts.repoRepository.FindByKey(req.SourceRepoKey)
+	sourceRepo, err := ts.repoRepository.FindByKey(ctx, req.SourceRepoKey)
 	if err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	}
-	targetRepo, err := ts.repoRepository.FindByKey(req.TargetRepoKey)
+	targetRepo, err := ts.repoRepository.FindByKey(ctx, req.TargetRepoKey)
 	if err != nil && !isRepositoryNotFound(err) {
 		return nil, err
 	}
@@ -243,7 +243,7 @@ func (ts *TaskService) PreviewSync(ctx context.Context, req *model.PreviewSyncRe
 // ListHistory returns a paginated list of sync run history.
 func (ts *TaskService) ListHistory(ctx context.Context, taskKey string, offset, limit int) ([]*model.SyncRun, int64, error) {
 	page := repository.DefaultPagination(offset, limit)
-	return ts.runRepository.FindByTaskKey(taskKey, page)
+	return ts.runRepository.FindByTaskKey(ctx, taskKey, page)
 }
 
 // GetHistoryRun 按执行记录 ID 精确取某一条(带步骤)。
@@ -253,7 +253,7 @@ func (ts *TaskService) ListHistory(ctx context.Context, taskKey string, offset, 
 // 之前只有 ListHistory(按任务翻页)⇒ CLI 的 `history +detail --run-id`
 // 只能"翻页找那条",找不到就静默返回空列表。
 func (ts *TaskService) GetHistoryRun(ctx context.Context, taskKey string, runID uint) (*model.SyncRun, error) {
-	return ts.runRepository.FindByTaskKeyAndRunID(taskKey, runID)
+	return ts.runRepository.FindByTaskKeyAndRunID(ctx, taskKey, runID)
 }
 
 // DeleteHistory deletes a sync run by ID.
@@ -268,7 +268,7 @@ func (ts *TaskService) FindAllEnabledTasks() ([]*model.SyncTask, error) {
 
 // FindTaskByKey returns a sync task by key (internal use).
 func (ts *TaskService) FindTaskByKey(key string) (*model.SyncTask, error) {
-	return ts.findTask(key)
+	return ts.findTask(context.Background(), key)
 }
 
 // CleanupOldRuns removes sync runs older than the specified duration.

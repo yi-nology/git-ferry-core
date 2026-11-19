@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func TestSyncTaskRepo_CreateAndFindByKey(t *testing.T) {
 	assert.NotZero(t, task.ID, "expected task ID to be set after create")
 
 	// Find by key
-	got, err := d.FindByKey("test-task")
+	got, err := d.FindByKey(context.Background(), "test-task")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "test-task", got.Key, "expected key 'test-task'")
@@ -74,7 +75,7 @@ func TestSyncTaskRepo_FindAll(t *testing.T) {
 	}
 
 	// Find all
-	got, total, err := d.FindAll(DefaultPagination(0, 50))
+	got, total, err := d.FindAll(context.Background(), DefaultPagination(0, 50))
 	require.NoError(t, err, "find all failed")
 
 	require.Equal(t, int64(3), total, "expected 3 tasks")
@@ -103,7 +104,7 @@ func TestSyncTaskRepo_Update(t *testing.T) {
 	require.NoError(t, err, "update failed")
 
 	// Get the updated task
-	got, err := d.FindByKey("test-task")
+	got, err := d.FindByKey(context.Background(), "test-task")
 	require.NoError(t, err, "find by key failed")
 
 	assert.Equal(t, "Updated Task", got.Name, "expected name 'Updated Task'")
@@ -128,7 +129,7 @@ func TestSyncTaskRepo_Delete(t *testing.T) {
 	require.NoError(t, err, "delete failed")
 
 	// Try to get the deleted task - should return nil (soft delete)
-	got, err := d.FindByKey("test-task")
+	got, err := d.FindByKey(context.Background(), "test-task")
 	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting deleted task")
@@ -139,7 +140,7 @@ func TestSyncTaskRepo_FindByKey_NotFound(t *testing.T) {
 	d := NewSyncTaskRepository(db)
 
 	// Try to get a non-existent task
-	got, err := d.FindByKey("nonexistent")
+	got, err := d.FindByKey(context.Background(), "nonexistent")
 	require.ErrorIs(t, err, ErrNotFound)
 
 	assert.Nil(t, got, "expected nil when getting non-existent task")
@@ -226,7 +227,7 @@ func TestSyncTaskRepo_FindByRepoKey(t *testing.T) {
 	}
 
 	// Find by repo key
-	got, total, err := d.FindByRepoKey("repo1", DefaultPagination(0, 50))
+	got, total, err := d.FindByRepoKey(context.Background(), "repo1", DefaultPagination(0, 50))
 	require.NoError(t, err, "find by repo key failed")
 
 	require.Equal(t, int64(2), total, "expected 2 tasks")
@@ -280,7 +281,7 @@ func TestSyncTaskDAO_UpdateDoesNotClobberNextFireAt(t *testing.T) {
 	require.NoError(t, d.Create(&model.SyncTask{
 		Key: "cron-race", Name: "old", Enabled: true, Cron: "* * * * *", NextFireAt: &t1,
 	}))
-	stale, err := d.FindByKey("cron-race")
+	stale, err := d.FindByKey(context.Background(), "cron-race")
 	require.NoError(t, err)
 
 	// 调度器在这一刻抢占了一次,把 next_fire_at 推进到 t2。
@@ -292,7 +293,7 @@ func TestSyncTaskDAO_UpdateDoesNotClobberNextFireAt(t *testing.T) {
 	stale.Name = "new"
 	require.NoError(t, d.Update(stale))
 
-	after, err := d.FindByKey("cron-race")
+	after, err := d.FindByKey(context.Background(), "cron-race")
 	require.NoError(t, err)
 	assert.Equal(t, "new", after.Name)
 	require.NotNil(t, after.NextFireAt)
