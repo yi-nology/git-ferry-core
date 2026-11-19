@@ -191,9 +191,17 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 		execCtx, cancelExec := context.WithCancel(s.bgCtx)
 		defer cancelExec()
 		stopRenew := make(chan struct{})
-		go s.renewLeaseLoop(job.ID, job.LeaseVersion, stopRenew, cancelExec)
+		renewDone := make(chan struct{})
+		async.GoSafe(func() {
+			defer close(renewDone)
+			s.renewLeaseLoop(job.ID, job.LeaseVersion, stopRenew, cancelExec)
+		})
 		run, execErr := s.executor.Execute(execCtx, task, job.Trigger, job.WebhookEventID)
 		close(stopRenew)
+		// **等续租协程真正退出再收尾**:否则 Complete 把状态改成 succeeded 后,
+		// 正在进行的那次 RenewLease 会因 status/lease 条件不满足返回 ErrLeaseLost,
+		// 误报「续租发现已失锁」并取消一个已经完成的执行。
+		<-renewDone
 
 		s.finishRun(job.TaskKey, job.Trigger, run, execErr, release)
 		var runID uint

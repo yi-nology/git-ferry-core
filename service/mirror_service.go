@@ -185,8 +185,11 @@ func (m *MirrorService) lockChannel(ctx context.Context, chID uint) (release fun
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			releaseLocal()
+			// **先放远端锁、再放本地 gate**:反过来会留下「本地已可进、
+			// 远端锁还在本实例手里」的窗口,新请求抢到本地 gate 后 TryLock
+			// 失败,被误报成「另一实例正在执行」。
 			releaseRemote()
+			releaseLocal()
 		})
 	}, nil
 }

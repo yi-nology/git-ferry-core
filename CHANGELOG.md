@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.61.0] - 2026-11-19
+
+### Fixed
+
+- **任务结束后续租不再误报失锁**：`executeJob` 关闭续租信号后等待
+  `renewLeaseLoop` 真正退出，再 `finishRun/Complete`。否则 Complete 把状态
+  改成 succeeded 后，正在进行的 `RenewLease` 会因条件不满足返回
+  `ErrLeaseLost`，误报「续租发现已失锁」并取消一个已完成的执行。
+- **非 durable_queue 模式的延迟重试不再有丢失窗口**：`retryDispatchOnce`
+  在非队列模式改为独立 goroutine 内**同步执行** `RunTaskWithTrigger`，
+  执行结束/确认受理后才关闭排程；此前 `RunTaskAsync` 返回即 `MarkDispatched`，
+  进程在 goroutine 创建 run 前崩溃会让排程已关闭、重试永久丢失。预检失败
+  （任务不存在/禁用/忙）仍按原语义取消或退避；真正执行失败视为重试已发生，
+  交给 runwatch 按 run 链继续。
+- **镜像通道锁释放顺序**：先释放远端锁、再释放本地 gate，消除「本地已可进、
+  远端锁仍在本实例手里」导致新请求被误报「另一实例正在执行」的窗口。
+
 ## [v0.60.0] - 2026-11-19
 
 ### Changed（Repository ctx 传播，第一轮）

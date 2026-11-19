@@ -5,6 +5,7 @@ import (
 	"github.com/oekit/logx"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
@@ -74,6 +75,48 @@ func (s *Service) scheduleDeferredRetry(run *model.SyncRun, d Decision) error {
 	return nil
 }
 
+// dispatchRetrySynchronously 非队列模式:同步执行一次重跑,结束后关闭排程。
+//
+// 预检失败(任务不存在/禁用/忙)按原语义取消或退避;真正的执行失败说明
+// 重试已发生(run 已落库),关闭排程,后续预算由 runwatch 按 run 链继续。
+func (s *Service) dispatchRetrySynchronously(sch model.RetrySchedule) {
+	ctx := s.bgCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := s.RunTaskWithTrigger(ctx, sch.TaskKey, model.TriggerAutoRetry, nil)
+	switch {
+	case err == nil:
+		s.markRetryScheduleDispatched(sch)
+	case oekiterrors.Is(err, ErrTaskNotFound), oekiterrors.Is(err, ErrTaskDisabled):
+		if cerr := s.retrySchedules.Cancel(sch.ID, err); cerr != nil &&
+			!oekiterrors.Is(cerr, repository.ErrScheduleLost) {
+			logx.Error("auto retry: cancel schedule failed", "schedule_id", sch.ID, "error", cerr)
+		}
+	case oekiterrors.Is(err, ErrTaskRunning), oekiterrors.Is(err, ErrTooManyConcurrent):
+		if rerr := s.retrySchedules.Reschedule(sch.ID, time.Now().Add(retryDispatchBackoff), err); rerr != nil &&
+			!oekiterrors.Is(rerr, repository.ErrScheduleLost) {
+			logx.Error("auto retry: reschedule failed", "schedule_id", sch.ID, "error", rerr)
+		}
+	default:
+		// 执行已发生(run 已落库)但结果失败:排程使命完成,交给 runwatch 链。
+		s.markRetryScheduleDispatched(sch)
+	}
+}
+
+func (s *Service) markRetryScheduleDispatched(sch model.RetrySchedule) {
+	if merr := s.retrySchedules.MarkDispatched(sch.ID); merr != nil {
+		if oekiterrors.Is(merr, repository.ErrScheduleLost) {
+			logx.Debug("auto retry: schedule already closed by another actor", "schedule_id", sch.ID)
+			return
+		}
+		logx.Error("auto retry: mark schedule dispatched failed", "schedule_id", sch.ID, "error", merr)
+		return
+	}
+	logx.Info("auto retry: deferred retry dispatched",
+		"task", sch.TaskKey, "run_id", sch.RunID, "attempt", sch.Attempt)
+}
+
 // retryDispatchLoop 周期派发到点排程(启动即扫一轮,重启后延迟重试不丢)。
 func (s *Service) retryDispatchLoop() {
 	loop.Run(s.bgCtx, loop.Config{
@@ -97,6 +140,15 @@ func (s *Service) retryDispatchOnce() {
 	}
 	for i := range due {
 		sch := due[i]
+		// **非队列模式不能"先标 dispatched 再异步跑"**:
+		// RunTaskAsync 返回不代表 run 已落库,进程在 goroutine 创建 run 前崩溃
+		// 会让排程已关闭、重试永久丢失。这里改为同步执行(独立 goroutine,
+		// 不阻塞派发器),执行完/确认已受理后才关闭排程;租约窗口内不会重复认领。
+		if !s.durableQueueOn() {
+			schCopy := sch
+			async.GoSafe(func() { s.dispatchRetrySynchronously(schCopy) })
+			continue
+		}
 		err := s.RunTaskAsync(sch.TaskKey, model.TriggerAutoRetry, nil)
 		switch {
 		case err == nil:
