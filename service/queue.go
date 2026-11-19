@@ -3,9 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/oekit/logx"
 	"os"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
@@ -69,7 +70,7 @@ func (s *Service) enqueueTaskRun(taskKey, trigger string, webhookEventID *uint) 
 		// 否则多实例下去重语义 silently 退化成双执行。
 		return oekiterrors.New("durable queue enabled but execution job Repository not wired")
 	}
-	enqueued, err := s.jobs.Enqueue(taskKey, trigger, webhookEventID)
+	enqueued, err := s.jobs.Enqueue(s.bgCtx, taskKey, trigger, webhookEventID)
 	if err != nil {
 		return err
 	}
@@ -111,16 +112,16 @@ func (s *Service) dispatchOnce() {
 		return
 	}
 	// 队列深度观测:每轮派发前刷新一次(查询失败不影响派发)。
-	if n, cerr := s.jobs.CountPending(); cerr == nil {
+	if n, cerr := s.jobs.CountPending(s.bgCtx); cerr == nil {
 		executionQueuePending.Set(float64(n))
 	}
-	ids, err := s.jobs.ListPendingIDs(jobClaimBatch)
+	ids, err := s.jobs.ListPendingIDs(s.bgCtx, jobClaimBatch)
 	if err != nil {
 		logx.Error("job: 查询待执行作业失败", "error", err)
 		return
 	}
 	for _, id := range ids {
-		claimed, err := s.jobs.Claim(id, s.instanceID, jobLeaseTTL)
+		claimed, err := s.jobs.Claim(s.bgCtx, id, s.instanceID, jobLeaseTTL)
 		if err != nil {
 			logx.Error("job: 认领失败", "id", id, "error", err)
 			continue
@@ -128,7 +129,7 @@ func (s *Service) dispatchOnce() {
 		if !claimed {
 			continue // 被其它实例抢先,正常竞争
 		}
-		job, err := s.jobs.FindByID(id)
+		job, err := s.jobs.FindByID(s.bgCtx, id)
 		if err != nil {
 			logx.Error("job: 认领后读取失败", "id", id, "error", err)
 			continue
@@ -152,7 +153,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 			// 执行权被占(本实例或跨实例有执行在跑)——良性繁忙:退避重排,
 			// 作业放回 pending 且 attempt 不增(毒丸预算只留给崩溃接管)。
 			logx.Warn("job: 执行权被占,退避重排(不占接管预算)", "id", job.ID, "task", job.TaskKey, "error", err)
-			if rerr := s.jobs.Reschedule(job.ID, s.instanceID, job.LeaseVersion, jobBusyBackoff); rerr != nil {
+			if rerr := s.jobs.Reschedule(s.bgCtx, job.ID, s.instanceID, job.LeaseVersion, jobBusyBackoff); rerr != nil {
 				if oekiterrors.Is(rerr, repository.ErrLeaseLost) {
 					logx.Warn("job: 退避重排时已失锁(作业已被其它实例接管),本实例停手", "id", job.ID)
 					return
@@ -208,7 +209,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 		if run != nil {
 			runID = run.ID
 		}
-		if cerr := s.jobs.Complete(job.ID, s.instanceID, job.LeaseVersion, runID, execErr); cerr != nil {
+		if cerr := s.jobs.Complete(s.bgCtx, job.ID, s.instanceID, job.LeaseVersion, runID, execErr); cerr != nil {
 			if oekiterrors.Is(cerr, repository.ErrLeaseLost) {
 				logx.Error("job: 完成落库时已失锁(执行结果未入终态,作业已被其它实例接管重试)", "id", job.ID)
 				return
@@ -223,7 +224,7 @@ func (s *Service) executeJob(job model.ExecutionJob) {
 func (s *Service) failJobAndRelease(job model.ExecutionJob, release func(), cause error) {
 	release()
 	logx.Warn("job: 执行前失败,作业判失败", "id", job.ID, "task", job.TaskKey, "error", cause)
-	if cerr := s.jobs.Complete(job.ID, s.instanceID, job.LeaseVersion, 0, cause); cerr != nil {
+	if cerr := s.jobs.Complete(s.bgCtx, job.ID, s.instanceID, job.LeaseVersion, 0, cause); cerr != nil {
 		if oekiterrors.Is(cerr, repository.ErrLeaseLost) {
 			logx.Warn("job: 失败落库时已失锁(作业已被其它实例接管重试)", "id", job.ID)
 			return
@@ -254,7 +255,7 @@ func (s *Service) renewLeaseLoop(id uint, leaseVersion int64, stop <-chan struct
 
 // renewLeaseTick 续租一次:返回是否继续续租循环(false = 已失锁,该停手)。
 func (s *Service) renewLeaseTick(id uint, leaseVersion int64, onLost func()) bool {
-	err := s.jobs.RenewLease(id, s.instanceID, leaseVersion, jobLeaseTTL)
+	err := s.jobs.RenewLease(s.bgCtx, id, s.instanceID, leaseVersion, jobLeaseTTL)
 	switch {
 	case err == nil:
 		return true
@@ -289,7 +290,7 @@ func (s *Service) reapExpiredJobs() {
 	if s.jobs == nil {
 		return
 	}
-	requeued, poisoned, err := s.jobs.RequeueExpired(time.Now())
+	requeued, poisoned, err := s.jobs.RequeueExpired(s.bgCtx, time.Now())
 	if err != nil {
 		logx.Error("job: 接管过期作业失败", "error", err)
 		return

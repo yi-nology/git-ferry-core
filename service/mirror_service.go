@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/oekit/logx"
-	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oekit/logx"
+	"github.com/yi-nology/git-ferry-core/pkg/strutil"
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/syncx"

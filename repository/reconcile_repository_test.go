@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -35,15 +36,15 @@ func mkRec(task, status string, ahead int) *model.ReconcileRecord {
 func TestReconcileDAO_UpsertKeepsLatest(t *testing.T) {
 	d := setupReconcileTestDB(t)
 
-	require.NoError(t, d.Upsert(mkRec("t1", model.ReconcileDrift, 3)))
-	require.NoError(t, d.Upsert(mkRec("t1", model.ReconcileInSync, 0)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("t1", model.ReconcileDrift, 3)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("t1", model.ReconcileInSync, 0)))
 
-	got, err := d.Get("t1")
+	got, err := d.Get(context.Background(), "t1")
 	require.NoError(t, err)
 	assert.Equal(t, model.ReconcileInSync, got.Status, "upsert 必须覆盖最新结果")
 	assert.Zero(t, got.SourceAhead)
 
-	n, err := d.ListAll()
+	n, err := d.ListAll(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, n, 1, "每任务只留一条")
 }
@@ -52,13 +53,13 @@ func TestReconcileDAO_UpsertKeepsLatest(t *testing.T) {
 // unknown/unsupported 走 ListUnknown,不污染 drift 率(#44)。
 func TestReconcileDAO_ListDrift(t *testing.T) {
 	d := setupReconcileTestDB(t)
-	require.NoError(t, d.Upsert(mkRec("ok", model.ReconcileInSync, 0)))
-	require.NoError(t, d.Upsert(mkRec("bad", model.ReconcileDrift, 2)))
-	require.NoError(t, d.Upsert(mkRec("gone", model.ReconcileTargetMissing, 0)))
-	require.NoError(t, d.Upsert(mkRec("auth", model.ReconcileUnknown, 0)))
-	require.NoError(t, d.Upsert(mkRec("nocmp", model.ReconcileUnsupported, 0)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("ok", model.ReconcileInSync, 0)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("bad", model.ReconcileDrift, 2)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("gone", model.ReconcileTargetMissing, 0)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("auth", model.ReconcileUnknown, 0)))
+	require.NoError(t, d.Upsert(context.Background(), mkRec("nocmp", model.ReconcileUnsupported, 0)))
 
-	drift, err := d.ListDrift()
+	drift, err := d.ListDrift(context.Background())
 	require.NoError(t, err)
 	require.Len(t, drift, 2)
 	keys := map[string]bool{}
@@ -69,7 +70,7 @@ func TestReconcileDAO_ListDrift(t *testing.T) {
 	assert.False(t, keys["ok"], "in_sync 不得出现在告警面")
 	assert.False(t, keys["auth"] || keys["nocmp"], "unknown/unsupported 不得计入漂移面")
 
-	unknown, err := d.ListUnknown()
+	unknown, err := d.ListUnknown(context.Background())
 	require.NoError(t, err)
 	require.Len(t, unknown, 2)
 	uk := map[string]bool{}

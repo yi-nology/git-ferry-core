@@ -4,8 +4,9 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
-	"github.com/oekit/logx"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
@@ -122,7 +123,7 @@ func (s *Service) cleanupAuxTables(ctx context.Context, maxAge time.Duration) {
 	if s.retrySchedules != nil {
 		var total int64
 		for ctx.Err() == nil {
-			n, err := s.retrySchedules.CleanupTerminal(cutoff)
+			n, err := s.retrySchedules.CleanupTerminal(ctx, cutoff)
 			if err != nil {
 				logx.Error("清理过期重试排程失败", "error", err)
 				break

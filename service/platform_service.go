@@ -3,9 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/oekit/logx"
 	"net/url"
 	"strings"
+
+	"github.com/oekit/logx"
 
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"

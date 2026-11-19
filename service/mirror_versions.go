@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/oekit/logx"
 	"sort"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/mirror"

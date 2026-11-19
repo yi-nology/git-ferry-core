@@ -55,8 +55,8 @@ func isMySQLDialect(db *gorm.DB) bool {
 //  3. 活动槽被占 ⇒ 合并(返回 enqueued=false),代次已递增,作业收尾 CAS
 //     据此补跑 —— 执行中连发 N 次 webhook 最终全部被承接,最后一次触发
 //     对应的提交一定被执行。
-func (d *ExecutionJobRepository) Enqueue(taskKey, trigger string, webhookEventID *uint) (enqueued bool, err error) {
-	err = d.db.Transaction(func(tx *gorm.DB) error {
+func (d *ExecutionJobRepository) Enqueue(ctx context.Context, taskKey, trigger string, webhookEventID *uint) (enqueued bool, err error) {
+	err = d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// (1) 同事务代次递增(upsert;首次受理 desired=1)。
 		st := model.ExecutionTaskState{TaskKey: taskKey, DesiredGeneration: 1}
 		if err := tx.Clauses(clause.OnConflict{
@@ -129,9 +129,9 @@ func (d *ExecutionJobRepository) Enqueue(taskKey, trigger string, webhookEventID
 // pending 态的 lease_until 是退避重排的 not-before 标记(见 Reschedule):
 // 未到点的作业混在队首会让派发器每轮空试 Claim,后面的可认领作业被
 // 队头阻塞。这里直接按时间过滤,队列语义与 Claim 的条件保持一致。
-func (d *ExecutionJobRepository) ListPendingIDs(limit int) ([]uint, error) {
+func (d *ExecutionJobRepository) ListPendingIDs(ctx context.Context, limit int) ([]uint, error) {
 	var ids []uint
-	err := d.db.Model(&model.ExecutionJob{}).
+	err := d.db.WithContext(ctx).Model(&model.ExecutionJob{}).
 		Where("status = ? AND (lease_until IS NULL OR lease_until <= ?)",
 			model.JobStatusPending, time.Now()).
 		Order("id").Limit(limit).Pluck("id", &ids).Error
@@ -139,8 +139,8 @@ func (d *ExecutionJobRepository) ListPendingIDs(limit int) ([]uint, error) {
 }
 
 // FindByID 查单条。
-func (d *ExecutionJobRepository) FindByID(id uint) (*model.ExecutionJob, error) {
-	return d.getByID(context.Background(), id)
+func (d *ExecutionJobRepository) FindByID(ctx context.Context, id uint) (*model.ExecutionJob, error) {
+	return d.getByID(ctx, id)
 }
 
 // Claim 条件认领:仅当仍是 pending 才翻为 claimed(原子,多实例单胜者)。
@@ -149,9 +149,9 @@ func (d *ExecutionJobRepository) FindByID(id uint) (*model.ExecutionJob, error) 
 //
 // lease_until 在 pending 态下复用作「最早可认领时间」(not-before,见
 // Reschedule):退避中的作业不得提前认领,防派发器对同一作业忙旋。
-func (d *ExecutionJobRepository) Claim(id uint, owner string, ttl time.Duration) (bool, error) {
+func (d *ExecutionJobRepository) Claim(ctx context.Context, id uint, owner string, ttl time.Duration) (bool, error) {
 	now := time.Now()
-	res := d.db.Model(&model.ExecutionJob{}).
+	res := d.db.WithContext(ctx).Model(&model.ExecutionJob{}).
 		Where("id = ? AND status = ? AND (lease_until IS NULL OR lease_until <= ?)",
 			id, model.JobStatusPending, now).
 		Updates(map[string]any{
@@ -173,8 +173,8 @@ func (d *ExecutionJobRepository) Claim(id uint, owner string, ttl time.Duration)
 // 持有者不得续租新纪元的作业(同 owner 字符串的先后两次认领,owner+status
 // 判据拦不住,靠 lease_version 按纪元排除,#37)。续租不换纪元。
 // 0 行命中 ⇒ 返回 ErrLeaseLost(旧属主据此立即停手),不再静默吞掉。
-func (d *ExecutionJobRepository) RenewLease(id uint, owner string, leaseVersion int64, ttl time.Duration) error {
-	res := d.db.Model(&model.ExecutionJob{}).
+func (d *ExecutionJobRepository) RenewLease(ctx context.Context, id uint, owner string, leaseVersion int64, ttl time.Duration) error {
+	res := d.db.WithContext(ctx).Model(&model.ExecutionJob{}).
 		Where("id = ? AND owner = ? AND status = ? AND lease_until > ? AND lease_version = ?",
 			id, owner, model.JobStatusClaimed, time.Now(), leaseVersion).
 		Update("lease_until", time.Now().Add(ttl))
@@ -196,8 +196,8 @@ func (d *ExecutionJobRepository) RenewLease(id uint, owner string, leaseVersion 
 // 租约已过期的属主不得退避重排(执行权存疑,随时可能被接管);
 // 重排关闭本纪元(lease_version+1)。
 // 0 行命中(作业已被接管,不再归本人)⇒ ErrLeaseLost。
-func (d *ExecutionJobRepository) Reschedule(id uint, owner string, leaseVersion int64, delay time.Duration) error {
-	res := d.db.Model(&model.ExecutionJob{}).
+func (d *ExecutionJobRepository) Reschedule(ctx context.Context, id uint, owner string, leaseVersion int64, delay time.Duration) error {
+	res := d.db.WithContext(ctx).Model(&model.ExecutionJob{}).
 		Where("id = ? AND owner = ? AND status = ? AND lease_until > ? AND lease_version = ?",
 			id, owner, model.JobStatusClaimed, time.Now(), leaseVersion).
 		Updates(map[string]any{
@@ -222,14 +222,14 @@ func (d *ExecutionJobRepository) Reschedule(id uint, owner string, leaseVersion 
 // 条件补 status=claimed AND lease_until>now AND lease_version=?(#37):
 // 毒丸终态不可被旧属主覆写(reaper 已判 failed,WHERE 不再命中),
 // 租约过期/被接管的属主不得写终态。0 行命中 ⇒ ErrLeaseLost。
-func (d *ExecutionJobRepository) Complete(id uint, owner string, leaseVersion int64, runID uint, execErr error) error {
+func (d *ExecutionJobRepository) Complete(ctx context.Context, id uint, owner string, leaseVersion int64, runID uint, execErr error) error {
 	status := model.JobStatusSucceeded
 	errMsg := ""
 	if execErr != nil {
 		status = model.JobStatusFailed
 		errMsg = execErr.Error()
 	}
-	return d.db.Transaction(func(tx *gorm.DB) error {
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		res := tx.Model(&model.ExecutionJob{}).
 			Where("id = ? AND owner = ? AND status = ? AND lease_until > ? AND lease_version = ?",
 				id, owner, model.JobStatusClaimed, time.Now(), leaseVersion).
@@ -250,7 +250,7 @@ func (d *ExecutionJobRepository) Complete(id uint, owner string, leaseVersion in
 		if err := tx.First(&job, id).Error; err != nil {
 			return err
 		}
-		return d.settleCompletedGeneration(tx, &job)
+		return d.settleCompletedGeneration(ctx, tx, &job)
 	})
 }
 
@@ -261,20 +261,20 @@ func (d *ExecutionJobRepository) Complete(id uint, owner string, leaseVersion in
 // 追赶作业 generation=最新 desired,继承 task_key 与 trigger —— 重建语义
 // 不丢;被合并的多个 webhook_event_id 无法对应到具体事件,置 nil,与
 // pending_trigger 补跑路径口径一致。
-func (d *ExecutionJobRepository) settleCompletedGeneration(tx *gorm.DB, job *model.ExecutionJob) error {
+func (d *ExecutionJobRepository) settleCompletedGeneration(ctx context.Context, tx *gorm.DB, job *model.ExecutionJob) error {
 	// 代次上推:仅当本作业携带的代次更新(CAS,幂等)。
 	if err := tx.Model(&model.ExecutionTaskState{}).
 		Where("task_key = ? AND completed_generation < ?", job.TaskKey, job.Generation).
 		Update("completed_generation", job.Generation).Error; err != nil {
 		return err
 	}
-	return d.releaseSlotAndCatchUp(tx, job)
+	return d.releaseSlotAndCatchUp(ctx, tx, job)
 }
 
 // releaseSlotAndCatchUp 释放状态行活动槽并在仍有未消费代次时补追赶作业
 // (#36,调用方必须在事务内)。毒丸路径(作业从未执行)也走这里——
 // 它**不上推 completed_generation**:代次没被消费,追赶作业必须承接。
-func (d *ExecutionJobRepository) releaseSlotAndCatchUp(tx *gorm.DB, job *model.ExecutionJob) error {
+func (d *ExecutionJobRepository) releaseSlotAndCatchUp(ctx context.Context, tx *gorm.DB, job *model.ExecutionJob) error {
 	// 释放活动槽:仅当仍指向本作业(防误伤接管方新占的槽)。
 	res := tx.Model(&model.ExecutionTaskState{}).
 		Where("task_key = ? AND active_job_id = ?", job.TaskKey, job.ID).
@@ -329,18 +329,18 @@ func (d *ExecutionJobRepository) releaseSlotAndCatchUp(tx *gorm.DB, job *model.E
 //
 // 毒丸作业从未执行完 ⇒ 它携带的代次未消费:判毒丸的**同一事务**里释放
 // 活动槽并补追赶作业(#36),否则执行中被合并的触发会随毒丸一起蒸发。
-func (d *ExecutionJobRepository) RequeueExpired(now time.Time) (requeued, poisoned int64, err error) {
+func (d *ExecutionJobRepository) RequeueExpired(ctx context.Context, now time.Time) (requeued, poisoned int64, err error) {
 	// 候选只取毒丸阈值已到的作业:重排分支是单条集合更新,不需要候选;
 	// 把全部过期作业(含 error 全文)读进内存只会在大面积故障时放大 reaper
 	// 的内存开销。一切生效仍以条件 UPDATE 为准。
 	var expired []model.ExecutionJob
-	if err := d.db.Where("status = ? AND lease_until IS NOT NULL AND lease_until < ? AND attempt >= ?",
+	if err := d.db.WithContext(ctx).Where("status = ? AND lease_until IS NOT NULL AND lease_until < ? AND attempt >= ?",
 		model.JobStatusClaimed, now, model.MaxJobAttempts).Find(&expired).Error; err != nil {
 		return 0, 0, err
 	}
 
 	// 重排分支:单语句条件更新覆盖全部「attempt 未超限」的过期作业。
-	res := d.db.Model(&model.ExecutionJob{}).
+	res := d.db.WithContext(ctx).Model(&model.ExecutionJob{}).
 		Where("status = ? AND lease_until IS NOT NULL AND lease_until < ? AND attempt < ?",
 			model.JobStatusClaimed, now, model.MaxJobAttempts).
 		Updates(map[string]any{
@@ -362,7 +362,7 @@ func (d *ExecutionJobRepository) RequeueExpired(now time.Time) (requeued, poison
 			continue // 重排分支已覆盖
 		}
 		var hit int64
-		if err := d.db.Transaction(func(tx *gorm.DB) error {
+		if err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			res := tx.Model(&model.ExecutionJob{}).
 				Where("id = ? AND status = ? AND lease_until IS NOT NULL AND lease_until < ?",
 					expired[i].ID, model.JobStatusClaimed, now).
@@ -382,7 +382,7 @@ func (d *ExecutionJobRepository) RequeueExpired(now time.Time) (requeued, poison
 				return nil
 			}
 			job := expired[i]
-			return d.releaseSlotAndCatchUp(tx, &job)
+			return d.releaseSlotAndCatchUp(ctx, tx, &job)
 		}); err != nil {
 			return requeued, poisoned, err
 		}
@@ -401,9 +401,9 @@ func (d *ExecutionJobRepository) CleanupFinished(ctx context.Context, olderThan 
 }
 
 // CountPending 观测用。
-func (d *ExecutionJobRepository) CountPending() (int64, error) {
+func (d *ExecutionJobRepository) CountPending(ctx context.Context) (int64, error) {
 	var n int64
-	err := d.db.Model(&model.ExecutionJob{}).
+	err := d.db.WithContext(ctx).Model(&model.ExecutionJob{}).
 		Where("status = ?", model.JobStatusPending).Count(&n).Error
 	return n, err
 }

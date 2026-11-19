@@ -107,7 +107,7 @@ func TestOutbox_DirectPathNoSubscriberKeepsEvent(t *testing.T) {
 	require.Equal(t, int64(1), total, "直跑路径必须同事务落一条完成事件")
 
 	// 关键断言:无订阅者时事件不得被标记已发布
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n, "直跑路径无订阅者时事件不得被标记已发布(#38)")
 
@@ -122,7 +122,7 @@ func TestOutbox_DirectPathNoSubscriberKeepsEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("直跑路径未闭环的事件,派发器应重投给订阅者")
 	}
-	n, err = svc.outbox.CountUnpublished()
+	n, err = svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "投递后事件必须闭环")
 }
@@ -145,7 +145,7 @@ func TestOutbox_DirectPathSubscriberClosesEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("有订阅者时直跑路径必须投递完成事件")
 	}
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "快速路径已投递 ⇒ 事件闭环")
 }
@@ -166,7 +166,7 @@ func TestOutbox_CompletionWritesEventInTx(t *testing.T) {
 
 	require.NoError(t, svc.tasks.CompleteRunWithTaskUpdate(run, task))
 
-	evs, err := svc.outbox.ListDue(10, time.Now())
+	evs, err := svc.outbox.ListDue(context.Background(), 10, time.Now())
 	require.NoError(t, err)
 	require.Len(t, evs, 1, "完成运行必须同事务写一条 outbox 事件")
 	ev := evs[0]
@@ -182,7 +182,7 @@ func TestOutbox_CompletionWritesEventInTx(t *testing.T) {
 		Status: model.StatusSuccess, StartTime: time.Now(), EndTime: &end}
 	require.NoError(t, svc.tasks.runRepository.Create(run2))
 	require.NoError(t, svc.tasks.CompleteRun(run2))
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n)
 }
@@ -202,7 +202,7 @@ func TestOutbox_CrashRecoveryRedelivers(t *testing.T) {
 	require.NoError(t, svc.tasks.runRepository.Create(run))
 
 	// 模拟崩溃残留:未发布、已过宽限期的事件
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Trigger: model.TriggerCron, Status: model.StatusFailed,
 		CreatedAt: time.Now().Add(-2 * time.Minute),
@@ -225,7 +225,7 @@ func TestOutbox_CrashRecoveryRedelivers(t *testing.T) {
 
 	// 重投后必须闭环:再扫不得重复投递(at-least-once 不放大成无限重复)
 	svc.publishDueOutbox(0)
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "重投后事件必须标记已发布")
 	select {
@@ -251,7 +251,7 @@ func TestOutbox_NoSubscriberNotMarkedPublished(t *testing.T) {
 		Status: model.StatusFailed, StartTime: end.Add(-time.Second), EndTime: &end}
 	require.NoError(t, svc.tasks.runRepository.Create(run))
 	// 模拟崩溃残留:未发布、已过宽限期的事件
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Trigger: model.TriggerCron, Status: model.StatusFailed,
 		CreatedAt: time.Now().Add(-2 * time.Minute),
@@ -260,7 +260,7 @@ func TestOutbox_NoSubscriberNotMarkedPublished(t *testing.T) {
 	// 关键差异:扫描时刻**没有订阅者**(= NewService 启动扫描的必然情形)
 	svc.publishDueOutbox(0)
 
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n, "无订阅者时事件不得被标记已发布(投递字节都没出去)")
 
@@ -277,7 +277,7 @@ func TestOutbox_NoSubscriberNotMarkedPublished(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("订阅者注册后,此前未投递的事件没有被重投")
 	}
-	n, err = svc.outbox.CountUnpublished()
+	n, err = svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "投递后事件必须闭环")
 }
@@ -299,7 +299,7 @@ func TestOutbox_FastPathNoSubscriberKeepsEvent(t *testing.T) {
 	// 此刻无订阅者:finishRun 语义下不得闭环
 	svc.finishRun(task.Key, model.TriggerCron, run, nil, func() {})
 
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n, "快速路径无订阅者时事件不得被标记已发布")
 
@@ -312,7 +312,7 @@ func TestOutbox_FastPathNoSubscriberKeepsEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("快速路径未闭环的事件,派发器应重投给订阅者")
 	}
-	n, err = svc.outbox.CountUnpublished()
+	n, err = svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n)
 }
@@ -328,7 +328,7 @@ func TestOutbox_GraceSkipsFreshEvents(t *testing.T) {
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerCron,
 		Status: model.StatusFailed, StartTime: time.Now()}
 	require.NoError(t, svc.tasks.runRepository.Create(run))
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Status: model.StatusFailed, CreatedAt: time.Now(), // 刚落库
 	}))
@@ -357,14 +357,14 @@ func TestOutbox_FastPathClosesEvent(t *testing.T) {
 	run := &model.SyncRun{TaskKey: task.Key, TriggerSource: model.TriggerWebhook,
 		Status: model.StatusSuccess, StartTime: end, EndTime: &end}
 	require.NoError(t, svc.tasks.runRepository.Create(run))
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: task.Key, RunID: run.ID,
 		Status: model.StatusSuccess, CreatedAt: time.Now().Add(-2 * time.Minute),
 	}))
 
 	svc.markOutboxPublishedByRun(run.ID)
 
-	due, err := svc.outbox.ListDue(10, time.Now())
+	due, err := svc.outbox.ListDue(context.Background(), 10, time.Now())
 	require.NoError(t, err)
 	assert.Empty(t, due, "快速路径闭环后派发器不得再见到该事件")
 }
@@ -374,7 +374,7 @@ func TestOutbox_FastPathClosesEvent(t *testing.T) {
 func TestOutbox_RunCleanedSkipDelivery(t *testing.T) {
 	svc := newOutboxTestService(t)
 
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic: model.OutboxTopicRunCompleted, TaskKey: "gone", RunID: 999,
 		Status: model.StatusSuccess, CreatedAt: time.Now().Add(-time.Hour),
 	}))
@@ -384,7 +384,7 @@ func TestOutbox_RunCleanedSkipDelivery(t *testing.T) {
 
 	assert.NotPanics(t, func() { svc.publishDueOutbox(0) })
 
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "run 缺失的事件也要闭环标记,否则会每轮重试")
 	select {
@@ -400,7 +400,7 @@ func TestOutbox_DriftTopicRouting(t *testing.T) {
 	svc := newOutboxTestService(t)
 
 	// 落一条 drift 事件(与 recordReconcile 同形态)
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: "t-drift",
 		Status:  model.ReconcileDrift,
@@ -423,7 +423,7 @@ func TestOutbox_DriftTopicRouting(t *testing.T) {
 		t.Fatal("drift 事件未投递给订阅者")
 	}
 	// 已投递 ⇒ 闭环
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n)
 }
@@ -432,7 +432,7 @@ func TestOutbox_DriftTopicRouting(t *testing.T) {
 // (留待壳层注册订阅后重投——与 run 事件同语义)。
 func TestOutbox_DriftNoSubscriberNotMarked(t *testing.T) {
 	svc := newOutboxTestService(t)
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: "t-x",
 		Status:  model.ReconcileDrift,
@@ -441,7 +441,7 @@ func TestOutbox_DriftNoSubscriberNotMarked(t *testing.T) {
 
 	svc.publishDueOutbox(0)
 
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n, "无订阅者不得标记已发布(否则订阅者注册后永远收不到)")
 }
@@ -449,7 +449,7 @@ func TestOutbox_DriftNoSubscriberNotMarked(t *testing.T) {
 // TestOutbox_DriftBadPayloadCloses 坏 payload 跳过并闭环(不无限重试)。
 func TestOutbox_DriftBadPayloadCloses(t *testing.T) {
 	svc := newOutboxTestService(t)
-	require.NoError(t, svc.outbox.CreateInTx(svc.tasks.runRepository.DB(), &model.OutboxEvent{
+	require.NoError(t, svc.outbox.CreateInTx(context.Background(), svc.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   model.OutboxTopicReconcileDrift,
 		TaskKey: "t-bad",
 		Payload: `{not json`,
@@ -459,7 +459,7 @@ func TestOutbox_DriftBadPayloadCloses(t *testing.T) {
 
 	svc.publishDueOutbox(0)
 
-	n, err := svc.outbox.CountUnpublished()
+	n, err := svc.outbox.CountUnpublished(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "坏 payload 应闭环(不无限重试)")
 	select {

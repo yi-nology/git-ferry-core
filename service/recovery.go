@@ -1,9 +1,10 @@
 package service
 
 import (
-	"github.com/oekit/logx"
 	"os"
 	"path/filepath"
+
+	"github.com/oekit/logx"
 
 	"github.com/yi-nology/git-ferry-core/model"
 )
@@ -16,7 +17,7 @@ func (s *Service) RecordRecoveryPoint(taskKey, fileName, format, sourceSHA strin
 	if s.recovery == nil {
 		return nil // 未接线:静默跳过(裸构造测试路径)
 	}
-	return s.recovery.Create(&model.RecoveryPoint{
+	return s.recovery.Create(s.bgCtx, &model.RecoveryPoint{
 		TaskKey:   taskKey,
 		FileName:  fileName,
 		Format:    format,
@@ -34,7 +35,7 @@ func (s *Service) ListRecoveryPoints(taskKey string, limit int) ([]model.Recover
 	if limit <= 0 {
 		limit = 50
 	}
-	rps, err := s.recovery.ListByTask(taskKey, limit)
+	rps, err := s.recovery.ListByTask(s.bgCtx, taskKey, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +59,7 @@ func (s *Service) ListRecoveryPoints(taskKey string, limit int) ([]model.Recover
 		alive = append(alive, rp)
 	}
 	if len(stale) > 0 {
-		if _, err := s.recovery.DeleteByIDs(stale); err != nil {
+		if _, err := s.recovery.DeleteByIDs(s.bgCtx, stale); err != nil {
 			logx.Warn("recovery: 惰性清理失败", "stale", len(stale), "error", err)
 		}
 	}
@@ -70,14 +71,14 @@ func (s *Service) LatestRecoveryPoint(taskKey string) (*model.RecoveryPoint, err
 	if s.recovery == nil {
 		return nil, nil
 	}
-	rp, err := s.recovery.GetLatest(taskKey)
+	rp, err := s.recovery.GetLatest(s.bgCtx, taskKey)
 	if err != nil || rp == nil {
 		return nil, err
 	}
 	if s.config != nil && s.config.Sync.BackupDir != "" {
 		if _, serr := os.Stat(filepath.Join(s.config.Sync.BackupDir, rp.FileName)); serr != nil {
 			// 文件已轮转删除:清理并返回 nil(没有可用恢复点)。
-			if _, derr := s.recovery.DeleteByFileName(rp.FileName); derr != nil {
+			if _, derr := s.recovery.DeleteByFileName(s.bgCtx, rp.FileName); derr != nil {
 				return nil, derr
 			}
 			return nil, nil

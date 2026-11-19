@@ -45,7 +45,7 @@ func newQueueTestService(t *testing.T, key string, cfg *model.Config) *Service {
 // jobVersion 读作业当前租约纪元(fencing token,#37 测试用)。
 func jobVersion(t *testing.T, d *repository.ExecutionJobRepository, id uint) int64 {
 	t.Helper()
-	job, err := d.FindByID(id)
+	job, err := d.FindByID(context.Background(), id)
 	require.NoError(t, err)
 	return job.LeaseVersion
 }
@@ -77,10 +77,10 @@ func TestRunTaskWithTrigger_QueueMode_Enqueues(t *testing.T) {
 
 	err := svc.RunTaskWithTrigger(context.Background(), "q-task", model.TriggerWebhook, nil)
 	require.NoError(t, err, "队列模式下触发=入队,受理即 nil")
-	ids, err := svc.jobs.ListPendingIDs(10)
+	ids, err := svc.jobs.ListPendingIDs(context.Background(), 10)
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
-	job, err := svc.jobs.FindByID(ids[0])
+	job, err := svc.jobs.FindByID(context.Background(), ids[0])
 	require.NoError(t, err)
 	assert.Equal(t, "q-task", job.TaskKey)
 	assert.Equal(t, model.TriggerWebhook, job.Trigger)
@@ -88,7 +88,7 @@ func TestRunTaskWithTrigger_QueueMode_Enqueues(t *testing.T) {
 	// 重复触发 ⇒ 合并,不新增作业
 	err = svc.RunTaskWithTrigger(context.Background(), "q-task", model.TriggerWebhook, nil)
 	require.NoError(t, err)
-	ids, err = svc.jobs.ListPendingIDs(10)
+	ids, err = svc.jobs.ListPendingIDs(context.Background(), 10)
 	require.NoError(t, err)
 	assert.Len(t, ids, 1, "并发/重复触发必须合并,不得重复入队")
 }
@@ -99,7 +99,7 @@ func TestRunTaskAsync_QueueMode_Enqueues(t *testing.T) {
 		Sync: model.SyncConfig{DurableQueue: true},
 	})
 	require.NoError(t, svc.RunTaskAsync("q-async", model.TriggerManual, nil))
-	ids, err := svc.jobs.ListPendingIDs(10)
+	ids, err := svc.jobs.ListPendingIDs(context.Background(), 10)
 	require.NoError(t, err)
 	assert.Len(t, ids, 1)
 }
@@ -132,7 +132,7 @@ func TestDurableQueue_BenignBusyDoesNotPoison(t *testing.T) {
 				Where("status = ?", model.JobStatusPending).Pluck("id", &ids).Error
 			require.NoError(t, err)
 			if len(ids) == 1 {
-				job, err := svc.jobs.FindByID(ids[0])
+				job, err := svc.jobs.FindByID(context.Background(), ids[0])
 				require.NoError(t, err)
 				if job.Status == model.JobStatusPending && job.DeferCount >= round {
 					return job
@@ -161,7 +161,7 @@ func TestDurableQueue_BenignBusyDoesNotPoison(t *testing.T) {
 
 	// reaper 跑一遍也不得把退避中的作业毒丸化
 	svc.reapExpiredJobs()
-	job, err := svc.jobs.FindByID(jobID)
+	job, err := svc.jobs.FindByID(context.Background(), jobID)
 	require.NoError(t, err)
 	assert.NotEqual(t, model.JobStatusFailed, job.Status,
 		"连续 6 次执行权被占后作业必须还活着,不得被判 failed(触发永久丢失)")
@@ -176,23 +176,23 @@ func TestDurableQueue_RescheduleSkipsDeferredClaim(t *testing.T) {
 	require.NoError(t, svc.RunTaskWithTrigger(context.Background(), "q-defer", model.TriggerWebhook, nil))
 
 	// 手工认领再退避(模拟一次「执行权被占」)
-	ids, err := svc.jobs.ListPendingIDs(10)
+	ids, err := svc.jobs.ListPendingIDs(context.Background(), 10)
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
-	ok, err := svc.jobs.Claim(ids[0], svc.instanceID, time.Minute)
+	ok, err := svc.jobs.Claim(context.Background(), ids[0], svc.instanceID, time.Minute)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, svc.jobs.Reschedule(ids[0], svc.instanceID, jobVersion(t, svc.jobs, ids[0]), 30*time.Second))
+	require.NoError(t, svc.jobs.Reschedule(context.Background(), ids[0], svc.instanceID, jobVersion(t, svc.jobs, ids[0]), 30*time.Second))
 
 	// 退避窗口内:派发器认领必须被 not-before 挡住
-	ok, err = svc.jobs.Claim(ids[0], svc.instanceID, time.Minute)
+	ok, err = svc.jobs.Claim(context.Background(), ids[0], svc.instanceID, time.Minute)
 	require.NoError(t, err)
 	assert.False(t, ok, "退避窗口内不得提前认领")
 
 	// 窗口过后可正常认领
 	require.NoError(t, svc.jobs.DB().Model(&model.ExecutionJob{}).Where("id = ?", ids[0]).
 		Update("lease_until", time.Now().Add(-time.Second)).Error)
-	ok, err = svc.jobs.Claim(ids[0], svc.instanceID, time.Minute)
+	ok, err = svc.jobs.Claim(context.Background(), ids[0], svc.instanceID, time.Minute)
 	require.NoError(t, err)
 	assert.True(t, ok)
 }
@@ -202,14 +202,14 @@ func TestDurableQueue_RescheduleSkipsDeferredClaim(t *testing.T) {
 // 而不是静默返回成功让旧 worker 继续推送(脑裂)。
 func TestRenewLeaseTick_LostLeaseCancelsExecution(t *testing.T) {
 	svc := newQueueTestService(t, "q-lease", &model.Config{})
-	_, err := svc.jobs.Enqueue("q-lease", model.TriggerManual, nil)
+	_, err := svc.jobs.Enqueue(context.Background(), "q-lease", model.TriggerManual, nil)
 	require.NoError(t, err)
-	ids, err := svc.jobs.ListPendingIDs(10)
+	ids, err := svc.jobs.ListPendingIDs(context.Background(), 10)
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
 	// 对照:仍是属主 ⇒ 继续续租
-	ok, err := svc.jobs.Claim(ids[0], svc.instanceID, time.Minute)
+	ok, err := svc.jobs.Claim(context.Background(), ids[0], svc.instanceID, time.Minute)
 	require.NoError(t, err)
 	require.True(t, ok)
 	cancelled := false
@@ -217,9 +217,9 @@ func TestRenewLeaseTick_LostLeaseCancelsExecution(t *testing.T) {
 	assert.False(t, cancelled, "仍持有租约时不得触发取消")
 
 	// 失锁:reaper 回收 → 其它实例认领 ⇒ 旧属主续租必须报停
-	_, _, err = svc.jobs.RequeueExpired(time.Now().Add(time.Hour))
+	_, _, err = svc.jobs.RequeueExpired(context.Background(), time.Now().Add(time.Hour))
 	require.NoError(t, err)
-	ok, err = svc.jobs.Claim(ids[0], "other-instance", time.Minute)
+	ok, err = svc.jobs.Claim(context.Background(), ids[0], "other-instance", time.Minute)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -235,7 +235,7 @@ func TestRunTask_DirectMode_Unchanged(t *testing.T) {
 
 	err := svc.RunTaskWithTrigger(context.Background(), "q-direct", model.TriggerWebhook, nil)
 	require.ErrorIs(t, err, ErrTaskRunning, "队列关闭时直跑路径不变")
-	n, err := svc.jobs.CountPending()
+	n, err := svc.jobs.CountPending(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, n, "直跑模式不得入队")
 }

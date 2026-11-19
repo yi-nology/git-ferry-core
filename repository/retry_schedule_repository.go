@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -32,11 +33,11 @@ func NewRetryScheduleRepository(db *gorm.DB) *RetryScheduleRepository {
 }
 
 // Create 幂等登记一条排程;同一 RunID 已存在时返回 created=false。
-func (d *RetryScheduleRepository) Create(s *model.RetrySchedule) (bool, error) {
+func (d *RetryScheduleRepository) Create(ctx context.Context, s *model.RetrySchedule) (bool, error) {
 	if s.Status == "" {
 		s.Status = model.RetrySchedulePending
 	}
-	res := d.db.Clauses(clause.OnConflict{
+	res := d.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "run_id"}},
 		DoNothing: true,
 	}).Create(s)
@@ -49,7 +50,7 @@ func (d *RetryScheduleRepository) Create(s *model.RetrySchedule) (bool, error) {
 // ClaimDue 认领一组到点排程(单条条件更新,多实例单胜者)。
 // 认领即把 next_attempt_at 推后 lease,避免同一排程被并发重复触发;
 // 触发成功后由 MarkDispatched 关闭,失败则 Reschedule 明确下一次时间。
-func (d *RetryScheduleRepository) ClaimDue(now time.Time, limit int, lease time.Duration) ([]model.RetrySchedule, error) {
+func (d *RetryScheduleRepository) ClaimDue(ctx context.Context, now time.Time, limit int, lease time.Duration) ([]model.RetrySchedule, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -57,13 +58,13 @@ func (d *RetryScheduleRepository) ClaimDue(now time.Time, limit int, lease time.
 		lease = 30 * time.Second
 	}
 	var candidates []model.RetrySchedule
-	if err := d.db.Where("status = ? AND next_attempt_at <= ?", model.RetrySchedulePending, now).
+	if err := d.db.WithContext(ctx).Where("status = ? AND next_attempt_at <= ?", model.RetrySchedulePending, now).
 		Order("next_attempt_at").Order("id").Limit(limit).Find(&candidates).Error; err != nil {
 		return nil, err
 	}
 	claimed := make([]model.RetrySchedule, 0, len(candidates))
 	for i := range candidates {
-		res := d.db.Model(&model.RetrySchedule{}).
+		res := d.db.WithContext(ctx).Model(&model.RetrySchedule{}).
 			Where("id = ? AND status = ? AND next_attempt_at <= ?",
 				candidates[i].ID, model.RetrySchedulePending, now).
 			Update("next_attempt_at", now.Add(lease))
@@ -79,8 +80,8 @@ func (d *RetryScheduleRepository) ClaimDue(now time.Time, limit int, lease time.
 
 // MarkDispatched 排程已成功发起重跑,关闭为终态。
 // 0 行命中 ⇒ ErrScheduleLost(已被其它实例取消/关闭)。
-func (d *RetryScheduleRepository) MarkDispatched(id uint) error {
-	res := d.db.Model(&model.RetrySchedule{}).
+func (d *RetryScheduleRepository) MarkDispatched(ctx context.Context, id uint) error {
+	res := d.db.WithContext(ctx).Model(&model.RetrySchedule{}).
 		Where("id = ? AND status = ?", id, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"status":     model.RetryScheduleDispatched,
@@ -97,12 +98,12 @@ func (d *RetryScheduleRepository) MarkDispatched(id uint) error {
 
 // Reschedule 触发失败:保留 pending,指定下一次最早时间并记录原因。
 // 0 行命中 ⇒ ErrScheduleLost。
-func (d *RetryScheduleRepository) Reschedule(id uint, next time.Time, cause error) error {
+func (d *RetryScheduleRepository) Reschedule(ctx context.Context, id uint, next time.Time, cause error) error {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
-	res := d.db.Model(&model.RetrySchedule{}).
+	res := d.db.WithContext(ctx).Model(&model.RetrySchedule{}).
 		Where("id = ? AND status = ?", id, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"next_attempt_at": next,
@@ -119,12 +120,12 @@ func (d *RetryScheduleRepository) Reschedule(id uint, next time.Time, cause erro
 
 // Cancel 取消排程(任务删除/禁用等重试无意义的情形)。
 // 0 行命中 ⇒ ErrScheduleLost。
-func (d *RetryScheduleRepository) Cancel(id uint, cause error) error {
+func (d *RetryScheduleRepository) Cancel(ctx context.Context, id uint, cause error) error {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
-	res := d.db.Model(&model.RetrySchedule{}).
+	res := d.db.WithContext(ctx).Model(&model.RetrySchedule{}).
 		Where("id = ? AND status = ?", id, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"status":     model.RetryScheduleCancelled,
@@ -141,12 +142,12 @@ func (d *RetryScheduleRepository) Cancel(id uint, cause error) error {
 
 // CancelForTask 取消某任务的全部待触发排程(任务被删除/禁用时调用),
 // 返回取消条数。删除是物理删除,残留排程不应再把已删任务反复拉起。
-func (d *RetryScheduleRepository) CancelForTask(taskKey string, cause error) (int64, error) {
+func (d *RetryScheduleRepository) CancelForTask(ctx context.Context, taskKey string, cause error) (int64, error) {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
-	res := d.db.Model(&model.RetrySchedule{}).
+	res := d.db.WithContext(ctx).Model(&model.RetrySchedule{}).
 		Where("task_key = ? AND status = ?", taskKey, model.RetrySchedulePending).
 		Updates(map[string]any{
 			"status":     model.RetryScheduleCancelled,
@@ -156,8 +157,8 @@ func (d *RetryScheduleRepository) CancelForTask(taskKey string, cause error) (in
 }
 
 // CleanupTerminal 清理超过保留期的终态排程(观测表有限增长)。
-func (d *RetryScheduleRepository) CleanupTerminal(olderThan time.Time) (int64, error) {
-	res := d.db.Where("status IN ? AND updated_at < ?",
+func (d *RetryScheduleRepository) CleanupTerminal(ctx context.Context, olderThan time.Time) (int64, error) {
+	res := d.db.WithContext(ctx).Where("status IN ? AND updated_at < ?",
 		[]string{model.RetryScheduleDispatched, model.RetryScheduleCancelled}, olderThan).
 		Limit(1000).Delete(&model.RetrySchedule{})
 	return res.RowsAffected, res.Error

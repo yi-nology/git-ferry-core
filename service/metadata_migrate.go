@@ -5,10 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/oekit/logx"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"

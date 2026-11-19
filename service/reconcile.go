@@ -3,8 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"github.com/oekit/logx"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/pkg/timex"
@@ -217,7 +218,7 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 		Message:     res.Message,
 		CheckedAt:   res.CheckedAt,
 	}
-	if err := s.reconciles.Upsert(rec); err != nil {
+	if err := s.reconciles.Upsert(s.bgCtx, rec); err != nil {
 		return err
 	}
 	if res.Status == model.ReconcileInSync {
@@ -246,7 +247,7 @@ func (s *Service) recordReconcile(res *model.ReconcileResult) error {
 		"checked_at":   res.CheckedAt,
 	})
 	// 对账事件直接落 outbox(独立事实,无需事务);投递沿用既有派发器。
-	return s.outbox.CreateInTx(s.tasks.runRepository.DB(), &model.OutboxEvent{
+	return s.outbox.CreateInTx(s.bgCtx, s.tasks.runRepository.DB(), &model.OutboxEvent{
 		Topic:   topic,
 		TaskKey: res.TaskKey,
 		Status:  res.Status,
@@ -260,7 +261,7 @@ func (s *Service) ListReconcileDrift(_ context.Context) ([]model.ReconcileRecord
 	if s.reconciles == nil {
 		return nil, nil
 	}
-	return s.reconciles.ListDrift()
+	return s.reconciles.ListDrift(s.bgCtx)
 }
 
 // ListReconcileUnknown 无法判断(unknown/unsupported)的对账结果:
@@ -269,7 +270,7 @@ func (s *Service) ListReconcileUnknown(_ context.Context) ([]model.ReconcileReco
 	if s.reconciles == nil {
 		return nil, nil
 	}
-	return s.reconciles.ListUnknown()
+	return s.reconciles.ListUnknown(s.bgCtx)
 }
 
 // ListReconcileAll 全部对账结果(观测面)。
@@ -277,5 +278,5 @@ func (s *Service) ListReconcileAll(_ context.Context) ([]model.ReconcileRecord, 
 	if s.reconciles == nil {
 		return nil, nil
 	}
-	return s.reconciles.ListAll()
+	return s.reconciles.ListAll(s.bgCtx)
 }

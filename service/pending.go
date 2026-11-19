@@ -31,7 +31,7 @@ func (s *Service) markPendingWebhook(taskKey string) {
 	if s.pending == nil {
 		return
 	}
-	if err := s.pending.Upsert(taskKey); err != nil {
+	if err := s.pending.Upsert(s.bgCtx, taskKey); err != nil {
 		logx.Error("待补跑触发落库失败", "taskKey", taskKey, "error", err)
 		return
 	}
@@ -45,7 +45,7 @@ func (s *Service) runPendingWebhook(taskKey string) {
 	if s.pending == nil {
 		return
 	}
-	claimed, err := s.pending.Claim(taskKey)
+	claimed, err := s.pending.Claim(s.bgCtx, taskKey)
 	if err != nil {
 		logx.Error("待补跑认领失败", "taskKey", taskKey, "error", err)
 		return
@@ -62,7 +62,7 @@ func (s *Service) sweepPendingTriggersOnStartup() {
 	if s.pending == nil {
 		return
 	}
-	keys, err := s.pending.ClaimAll()
+	keys, err := s.pending.ClaimAll(s.bgCtx)
 	if err != nil {
 		logx.Warn("启动扫描待补跑触发失败", "error", err)
 		return

@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/oekit/logx"
 	"sync"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
@@ -155,7 +156,7 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 	if s.outbox == nil {
 		return
 	}
-	evs, err := s.outbox.ListDue(100, time.Now().Add(-grace))
+	evs, err := s.outbox.ListDue(s.bgCtx, 100, time.Now().Add(-grace))
 	if err != nil {
 		logx.Error("outbox: 查询待派发事件失败", "error", err)
 		return
@@ -184,7 +185,7 @@ func (s *Service) publishDueOutbox(grace time.Duration) {
 	if queryFailed > 0 {
 		logx.Warn("outbox: 本轮有事件因查询失败未投递,保留待重试", "count", queryFailed)
 	}
-	if err := s.outbox.MarkPublished(published); err != nil {
+	if err := s.outbox.MarkPublished(s.bgCtx, published); err != nil {
 		logx.Error("outbox: 标记已发布失败(下轮可能重复投递,订阅方需幂等)", "error", err)
 	}
 	if _, err := s.outbox.CleanupPublished(context.Background(), outboxRetention); err != nil {
@@ -218,7 +219,7 @@ func (s *Service) markOutboxPublishedByRun(runID uint) {
 	if s.outbox == nil || runID == 0 {
 		return
 	}
-	if err := s.outbox.MarkPublishedByRun(runID); err != nil {
+	if err := s.outbox.MarkPublishedByRun(s.bgCtx, runID); err != nil {
 		logx.Warn("outbox: 标记已发布失败(派发器宽限后会重投一次)", "run_id", runID, "error", err)
 	}
 }

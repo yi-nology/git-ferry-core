@@ -188,11 +188,11 @@ func TestRecordReconcile_DriftWritesOutbox(t *testing.T) {
 		TaskKey: "t-ok", Status: model.ReconcileInSync, SourceSHA: "s", TargetSHA: "s",
 		CheckedAt: time.Now(),
 	}))
-	evs, err := svc.outbox.ListDue(10, time.Now().Add(time.Hour))
+	evs, err := svc.outbox.ListDue(context.Background(), 10, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, evs, "in_sync 不得写漂移事件")
 
-	rec, err := svc.reconciles.Get("t-ok")
+	rec, err := svc.reconciles.Get(context.Background(), "t-ok")
 	require.NoError(t, err)
 	assert.Equal(t, model.ReconcileInSync, rec.Status)
 
@@ -201,14 +201,14 @@ func TestRecordReconcile_DriftWritesOutbox(t *testing.T) {
 		TaskKey: "t-drift", Status: model.ReconcileDrift, SourceSHA: "s1", TargetSHA: "s2",
 		SourceAhead: 3, Message: "两端漂移", CheckedAt: time.Now(),
 	}))
-	evs, err = svc.outbox.ListDue(10, time.Now().Add(time.Hour))
+	evs, err = svc.outbox.ListDue(context.Background(), 10, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	require.Len(t, evs, 1, "漂移必须写 reconcile.drift 事件")
 	assert.Equal(t, model.OutboxTopicReconcileDrift, evs[0].Topic)
 	assert.Equal(t, "t-drift", evs[0].TaskKey)
 	assert.Contains(t, evs[0].Payload, "\"source_ahead\":3")
 
-	rec, err = svc.reconciles.Get("t-drift")
+	rec, err = svc.reconciles.Get(context.Background(), "t-drift")
 	require.NoError(t, err)
 	assert.Equal(t, 3, rec.SourceAhead)
 }
@@ -228,7 +228,7 @@ func TestRecordReconcile_UnknownSeparateTopic(t *testing.T) {
 	require.NoError(t, svc.recordReconcile(&model.ReconcileResult{
 		TaskKey: "t-unknown", Status: model.ReconcileUnknown, Message: "403 from api", CheckedAt: time.Now(),
 	}))
-	evs, err := svc.outbox.ListDue(10, time.Now().Add(time.Hour))
+	evs, err := svc.outbox.ListDue(context.Background(), 10, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	require.Len(t, evs, 1)
 	assert.Equal(t, model.OutboxTopicReconcileUnknown, evs[0].Topic, "unknown 不得进 drift 主题")

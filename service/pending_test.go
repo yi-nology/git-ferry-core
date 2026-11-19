@@ -67,7 +67,7 @@ func TestRunTaskWithTrigger_BusyTask_RecordsPendingWebhook(t *testing.T) {
 
 	err := svc.RunTaskWithTrigger(context.Background(), key, model.TriggerWebhook, nil)
 	require.ErrorIs(t, err, ErrTaskRunning)
-	pts, lerr := svc.pending.List()
+	pts, lerr := svc.pending.List(context.Background())
 	require.NoError(t, lerr)
 	require.Len(t, pts, 1, "webhook 触发被拒时必须记一笔待补跑(否则这次推送的提交被丢掉)")
 	assert.Equal(t, key, pts[0].TaskKey)
@@ -84,7 +84,7 @@ func TestRunTaskWithTrigger_BusyTask_NonWebhookTriggerNotPending(t *testing.T) {
 
 	err := svc.RunTaskWithTrigger(context.Background(), key, model.TriggerManual, nil)
 	require.ErrorIs(t, err, ErrTaskRunning)
-	pts, lerr := svc.pending.List()
+	pts, lerr := svc.pending.List(context.Background())
 	require.NoError(t, lerr)
 	assert.Empty(t, pts, "手动触发被拒不记待补跑(它的语义就是立刻失败)")
 }
@@ -98,7 +98,7 @@ func TestPendingTrigger_Coalesces(t *testing.T) {
 	svc.markPendingWebhook("pending-coalesce")
 	svc.markPendingWebhook("other-task")
 
-	pts, err := svc.pending.List()
+	pts, err := svc.pending.List(context.Background())
 	require.NoError(t, err)
 	require.Len(t, pts, 2, "两个任务各算一笔")
 	for _, pt := range pts {
@@ -107,10 +107,10 @@ func TestPendingTrigger_Coalesces(t *testing.T) {
 		}
 	}
 
-	claimed, err := svc.pending.Claim("pending-coalesce")
+	claimed, err := svc.pending.Claim(context.Background(), "pending-coalesce")
 	require.NoError(t, err)
 	assert.True(t, claimed, "认领应命中")
-	claimed, err = svc.pending.Claim("pending-coalesce")
+	claimed, err = svc.pending.Claim(context.Background(), "pending-coalesce")
 	require.NoError(t, err)
 	assert.False(t, claimed, "认领只能一次(原子 DELETE,跨实例只有一个消费者)")
 }
@@ -132,7 +132,7 @@ func TestFinishRun_ConsumesPending(t *testing.T) {
 
 	// 补跑在 goroutine 里异步发生:撞忙(执行权还被测试占着)⇒ 重新记账。
 	require.Eventually(t, func() bool {
-		pts, err := svc.pending.List()
+		pts, err := svc.pending.List(context.Background())
 		return err == nil && len(pts) == 1
 	}, 2*time.Second, 10*time.Millisecond,
 		"finishRun 必须消费待补跑并发起补跑;撞忙时应重新记账,触发不丢")

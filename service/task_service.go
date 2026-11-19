@@ -331,7 +331,7 @@ func (ts *TaskService) CompleteRun(run *model.SyncRun) error {
 		if err := ts.runRepository.UpdateInTx(tx, run); err != nil {
 			return err
 		}
-		return ts.outbox.CreateInTx(tx, runCompletedOutbox(run))
+		return ts.outbox.CreateInTx(context.Background(), tx, runCompletedOutbox(run))
 	})
 }
 
@@ -364,7 +364,7 @@ func (ts *TaskService) CompleteRunWithTaskUpdate(run *model.SyncRun, task *model
 		}
 		// outbox 与完成状态同事务落库:派发器/重启扫描保证通知至少送达一次。
 		if ts.outbox != nil {
-			return ts.outbox.CreateInTx(tx, runCompletedOutbox(run))
+			return ts.outbox.CreateInTx(context.Background(), tx, runCompletedOutbox(run))
 		}
 		return nil
 	})

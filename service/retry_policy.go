@@ -1,10 +1,11 @@
 package service
 
 import (
-	"github.com/oekit/logx"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/yi-nology/git-ferry-core/model"
 )

@@ -2,9 +2,10 @@ package service
 
 import (
 	"fmt"
-	"github.com/oekit/logx"
 	"sync"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"

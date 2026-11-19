@@ -19,8 +19,8 @@ func NewReconcileRepository(db *gorm.DB) *ReconcileRepository {
 }
 
 // Upsert 记录一次对账结果(task_key 主键,重复对账覆盖最新)。
-func (d *ReconcileRepository) Upsert(r *model.ReconcileRecord) error {
-	return d.db.Clauses(clause.OnConflict{
+func (d *ReconcileRepository) Upsert(ctx context.Context, r *model.ReconcileRecord) error {
+	return d.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "task_key"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"status", "source_sha", "target_sha", "source_ahead", "target_ahead",
@@ -30,16 +30,16 @@ func (d *ReconcileRepository) Upsert(r *model.ReconcileRecord) error {
 }
 
 // Get 查某任务最新对账结果(查无此条返回 ErrNotFound)。
-func (d *ReconcileRepository) Get(taskKey string) (*model.ReconcileRecord, error) {
-	return d.getByID(context.Background(), taskKey)
+func (d *ReconcileRepository) Get(ctx context.Context, taskKey string) (*model.ReconcileRecord, error) {
+	return d.getByID(ctx, taskKey)
 }
 
 // ListDrift 漂移/分支缺失记录(漂移告警/看板用)。
 // unknown/unsupported **不在此列**(#44):那是「无法判断」,走
 // ListUnknown 的运维告警,不污染 drift 率。
-func (d *ReconcileRepository) ListDrift() ([]model.ReconcileRecord, error) {
+func (d *ReconcileRepository) ListDrift(ctx context.Context) ([]model.ReconcileRecord, error) {
 	var rs []model.ReconcileRecord
-	err := d.db.Where("status IN ?", []string{
+	err := d.db.WithContext(ctx).Where("status IN ?", []string{
 		model.ReconcileDrift, model.ReconcileSourceMissing, model.ReconcileTargetMissing,
 	}).Order("checked_at DESC").Find(&rs).Error
 	return rs, err
@@ -47,18 +47,18 @@ func (d *ReconcileRepository) ListDrift() ([]model.ReconcileRecord, error) {
 
 // ListUnknown 无法判断的记录(unknown/unsupported):凭据/限流/平台能力
 // 问题,单独计数与告警(#44)。
-func (d *ReconcileRepository) ListUnknown() ([]model.ReconcileRecord, error) {
+func (d *ReconcileRepository) ListUnknown(ctx context.Context) ([]model.ReconcileRecord, error) {
 	var rs []model.ReconcileRecord
-	err := d.db.Where("status IN ?", []string{
+	err := d.db.WithContext(ctx).Where("status IN ?", []string{
 		model.ReconcileUnknown, model.ReconcileUnsupported,
 	}).Order("checked_at DESC").Find(&rs).Error
 	return rs, err
 }
 
 // ListAll 全部记录(观测用)。
-func (d *ReconcileRepository) ListAll() ([]model.ReconcileRecord, error) {
+func (d *ReconcileRepository) ListAll(ctx context.Context) ([]model.ReconcileRecord, error) {
 	var rs []model.ReconcileRecord
-	err := d.db.Order("task_key").Find(&rs).Error
+	err := d.db.WithContext(ctx).Order("task_key").Find(&rs).Error
 	return rs, err
 }
 

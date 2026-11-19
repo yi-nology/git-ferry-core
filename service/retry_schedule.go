@@ -2,8 +2,9 @@ package service
 
 import (
 	"context"
-	"github.com/oekit/logx"
 	"time"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
@@ -55,7 +56,7 @@ func (s *Service) scheduleDeferredRetry(run *model.SyncRun, d Decision) error {
 	if d.RetryAfter <= 0 {
 		next = time.Now()
 	}
-	created, err := s.retrySchedules.Create(&model.RetrySchedule{
+	created, err := s.retrySchedules.Create(s.bgCtx, &model.RetrySchedule{
 		RunID:         run.ID,
 		TaskKey:       run.TaskKey,
 		RootRunID:     root,
@@ -89,12 +90,12 @@ func (s *Service) dispatchRetrySynchronously(sch model.RetrySchedule) {
 	case err == nil:
 		s.markRetryScheduleDispatched(sch)
 	case oekiterrors.Is(err, ErrTaskNotFound), oekiterrors.Is(err, ErrTaskDisabled):
-		if cerr := s.retrySchedules.Cancel(sch.ID, err); cerr != nil &&
+		if cerr := s.retrySchedules.Cancel(s.bgCtx, sch.ID, err); cerr != nil &&
 			!oekiterrors.Is(cerr, repository.ErrScheduleLost) {
 			logx.Error("auto retry: cancel schedule failed", "schedule_id", sch.ID, "error", cerr)
 		}
 	case oekiterrors.Is(err, ErrTaskRunning), oekiterrors.Is(err, ErrTooManyConcurrent):
-		if rerr := s.retrySchedules.Reschedule(sch.ID, time.Now().Add(retryDispatchBackoff), err); rerr != nil &&
+		if rerr := s.retrySchedules.Reschedule(s.bgCtx, sch.ID, time.Now().Add(retryDispatchBackoff), err); rerr != nil &&
 			!oekiterrors.Is(rerr, repository.ErrScheduleLost) {
 			logx.Error("auto retry: reschedule failed", "schedule_id", sch.ID, "error", rerr)
 		}
@@ -105,7 +106,7 @@ func (s *Service) dispatchRetrySynchronously(sch model.RetrySchedule) {
 }
 
 func (s *Service) markRetryScheduleDispatched(sch model.RetrySchedule) {
-	if merr := s.retrySchedules.MarkDispatched(sch.ID); merr != nil {
+	if merr := s.retrySchedules.MarkDispatched(s.bgCtx, sch.ID); merr != nil {
 		if oekiterrors.Is(merr, repository.ErrScheduleLost) {
 			logx.Debug("auto retry: schedule already closed by another actor", "schedule_id", sch.ID)
 			return
@@ -133,7 +134,7 @@ func (s *Service) retryDispatchOnce() {
 	if s.retrySchedules == nil {
 		return
 	}
-	due, err := s.retrySchedules.ClaimDue(time.Now(), retryDispatchBatch, retryDispatchLease)
+	due, err := s.retrySchedules.ClaimDue(s.bgCtx, time.Now(), retryDispatchBatch, retryDispatchLease)
 	if err != nil {
 		logx.Error("auto retry: claim due schedules failed", "error", err)
 		return
@@ -152,7 +153,7 @@ func (s *Service) retryDispatchOnce() {
 		err := s.RunTaskAsync(sch.TaskKey, model.TriggerAutoRetry, nil)
 		switch {
 		case err == nil:
-			if merr := s.retrySchedules.MarkDispatched(sch.ID); merr != nil {
+			if merr := s.retrySchedules.MarkDispatched(s.bgCtx, sch.ID); merr != nil {
 				if oekiterrors.Is(merr, repository.ErrScheduleLost) {
 					logx.Debug("auto retry: schedule already closed by another actor",
 						"schedule_id", sch.ID)
@@ -165,13 +166,13 @@ func (s *Service) retryDispatchOnce() {
 				"task", sch.TaskKey, "run_id", sch.RunID, "attempt", sch.Attempt)
 		case oekiterrors.Is(err, ErrTaskNotFound), oekiterrors.Is(err, ErrTaskDisabled):
 			// 任务已删除/禁用 ⇒ 重试无意义,关掉排程防止反复拉起。
-			if cerr := s.retrySchedules.Cancel(sch.ID, err); cerr != nil &&
+			if cerr := s.retrySchedules.Cancel(s.bgCtx, sch.ID, err); cerr != nil &&
 				!oekiterrors.Is(cerr, repository.ErrScheduleLost) {
 				logx.Error("auto retry: cancel schedule failed", "schedule_id", sch.ID, "error", cerr)
 			}
 		default:
 			// 任务忙/队列暂不可用等可恢复原因:保留 pending,稍后再来。
-			if rerr := s.retrySchedules.Reschedule(sch.ID, time.Now().Add(retryDispatchBackoff), err); rerr != nil {
+			if rerr := s.retrySchedules.Reschedule(s.bgCtx, sch.ID, time.Now().Add(retryDispatchBackoff), err); rerr != nil {
 				if oekiterrors.Is(rerr, repository.ErrScheduleLost) {
 					logx.Debug("auto retry: schedule already closed, skip reschedule",
 						"schedule_id", sch.ID)

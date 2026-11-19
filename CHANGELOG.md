@@ -2,6 +2,32 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.62.0] - 2026-11-19
+
+### Changed（Repository ctx 传播，第二轮：后台域）
+
+- **队列/outbox/待补跑/延迟重试/对账/恢复点 Repository 全部接收
+  `context.Context`**：
+  - `ExecutionJobRepository`：Enqueue/ListPendingIDs/FindByID/Claim/
+    RenewLease/Reschedule/Complete/RequeueExpired/CountPending 及内部
+    代次结算/追赶作业 helper。
+  - `OutboxEventRepository`：CreateInTx/ListDue/MarkPublished/
+    MarkPublishedByRun/CountUnpublished。
+  - `PendingTriggerRepository`：Upsert/Claim/ClaimAll/List。
+  - `RetryScheduleRepository`：Create/ClaimDue/MarkDispatched/Reschedule/
+    Cancel/CancelForTask。
+  - `ReconcileRepository`：Upsert/Get/ListDrift/ListUnknown/ListAll。
+  - `RecoveryPointRepository`：Create/ListByTask/GetLatest/DeleteByIDs/
+    DeleteByFileName/CleanupOlderThan。
+- **服务层统一传 `s.bgCtx`**：后台循环/队列/outbox 在进程关停时（bgCtx
+  取消）会真正中断进行中的 DB 操作，不再等语句自然结束。
+- **破坏性变更（v0.x 允许）**：上述 repository 方法新增首参
+  `context.Context`；外部直接调用方需同步。
+
+### Migration
+
+- 无 schema 变更。
+
 ## [v0.61.0] - 2026-11-19
 
 ### Fixed

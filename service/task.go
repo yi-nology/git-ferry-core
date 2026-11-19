@@ -3,8 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/oekit/logx"
 	"os"
+
+	"github.com/oekit/logx"
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/errors"
@@ -76,7 +77,7 @@ func (s *Service) UpdateTask(ctx context.Context, req *model.UpdateTaskRequest) 
 		s.removeCronJob(task.Key)
 		if !task.Enabled && s.retrySchedules != nil {
 			// 禁用期间不应继续自动重跑(cron/手动都会拒绝执行)。
-			if _, cerr := s.retrySchedules.CancelForTask(task.Key, ErrTaskDisabled); cerr != nil {
+			if _, cerr := s.retrySchedules.CancelForTask(s.bgCtx, task.Key, ErrTaskDisabled); cerr != nil {
 				logx.Warn("update task: cancel retry schedules failed", "taskKey", task.Key, "error", cerr)
 			}
 		}
@@ -90,7 +91,7 @@ func (s *Service) DeleteTask(ctx context.Context, key string) error {
 	// 任务删除后,已排程的延迟重跑没有意义:关闭待触发排程,
 	// 防止调度器把已删任务反复拉起(#39)。
 	if s.retrySchedules != nil {
-		if n, err := s.retrySchedules.CancelForTask(key, ErrTaskNotFound); err != nil {
+		if n, err := s.retrySchedules.CancelForTask(s.bgCtx, key, ErrTaskNotFound); err != nil {
 			logx.Warn("delete task: cancel retry schedules failed", "taskKey", key, "error", err)
 		} else if n > 0 {
 			logx.Info("delete task: cancelled pending retry schedules", "taskKey", key, "count", n)

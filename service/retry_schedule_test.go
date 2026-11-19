@@ -161,17 +161,17 @@ func TestRetryScheduleClaimDue_SingleWinner(t *testing.T) {
 	db := setupRetryTestDB(t)
 	d := repository.NewRetryScheduleRepository(db)
 	require.NoError(t, db.AutoMigrate(&model.RetrySchedule{}))
-	_, err := d.Create(&model.RetrySchedule{
+	_, err := d.Create(context.Background(), &model.RetrySchedule{
 		RunID: 1, TaskKey: "t", Attempt: 1, AttemptLimit: 1,
 		NextAttemptAt: time.Now().Add(-time.Second), Status: model.RetrySchedulePending,
 	})
 	require.NoError(t, err)
 
 	now := time.Now()
-	first, err := d.ClaimDue(now, 10, time.Minute)
+	first, err := d.ClaimDue(context.Background(), now, 10, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, first, 1)
-	second, err := d.ClaimDue(now, 10, time.Minute)
+	second, err := d.ClaimDue(context.Background(), now, 10, time.Minute)
 	require.NoError(t, err)
 	assert.Empty(t, second, "同一排程在认领租约内不得被第二个实例重复认领")
 }
