@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -404,4 +405,29 @@ func TestRepoRepo_ListWithFilter_Status(t *testing.T) {
 
 	require.Equal(t, int64(2), total, "expected 2 repos")
 	require.Len(t, got, 2, "expected 2 repos")
+}
+
+// TestRepoRepo_ListWithFilter_PagesNoDupNoLoss 钉住分页全序:
+// 主排序列(status)值全相同时,跨页不得重复或丢行——依赖 id tiebreaker,
+// 否则非唯一列排序下 offset 分页会因行漂移吞行/重行(gormx#269 同题)。
+func TestRepoRepo_ListWithFilter_PagesNoDupNoLoss(t *testing.T) {
+	_, d := setupRepoTestDB(t)
+
+	for i := 1; i <= 5; i++ {
+		err := d.Create(&model.Repo{Key: "repo" + strconv.Itoa(i), Name: "Repo " + strconv.Itoa(i), Platform: "github", Status: "active"})
+		require.NoError(t, err, "create failed")
+	}
+
+	seen := map[uint]string{}
+	for offset := 0; offset < 5; offset += 2 {
+		got, total, err := d.ListWithFilter(context.Background(), DefaultPagination(offset, 2), &RepoFilter{SortBy: "status"})
+		require.NoError(t, err, "list page offset=%d", offset)
+		require.Equal(t, int64(5), total, "total must stay 5")
+		for _, r := range got {
+			prev, dup := seen[r.ID]
+			require.False(t, dup, "row %d (key=%s) duplicated across pages (first seen as %s)", r.ID, r.Key, prev)
+			seen[r.ID] = r.Key
+		}
+	}
+	require.Len(t, seen, 5, "pages must cover all 5 rows exactly once")
 }

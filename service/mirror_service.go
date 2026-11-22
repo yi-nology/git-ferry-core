@@ -149,8 +149,9 @@ func (m *MirrorService) tryLockRemote(ctx context.Context, chID uint) (release f
 	switch {
 	case lerr == nil:
 		return func() {
-			// 解锁不能挂在请求 ctx 上:请求早已取消 ⇒ 解锁必失败 ⇒ 锁要等 TTL。
-			if uerr := m.locker.Unlock(context.WithoutCancel(ctx), key, id); uerr != nil {
+			// distlock ≥ redisx v0.16.7:解锁内部自解耦取消 ctx(WithoutCancel+3s 有界),
+			// 请求已取消也能把 DEL 发出去,直接透传 ctx 即可,不必再包 WithoutCancel。
+			if uerr := m.locker.Unlock(ctx, key, id); uerr != nil {
 				// 已过期易主或 redis 抖动：仅告警，TTL 会兜底
 				logx.Debug("mirror: 释放跨实例锁", "channel", chID, "error", uerr)
 			}

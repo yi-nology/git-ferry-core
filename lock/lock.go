@@ -3,6 +3,10 @@
 //     本包只负责固定 key 前缀与客户端构造;
 //   - Semaphore:基于 redis ZSET 的分布式信号量,限制全局并发上限,
 //     实现复用 oekit redisx/distlock.Semaphore。
+//
+// 依赖口径:redisx ≥ v0.16.7 —— Unlock/Release 内部自解耦取消 ctx
+// (WithoutCancel + 3s 有界),调用方直接透传请求 ctx 即可,
+// 勿再外包 WithoutCancel/超时(旧 workaround 已随升级删除)。
 package lock
 
 import (
@@ -130,11 +134,13 @@ type Semaphore struct {
 }
 
 // NewSemaphore 构造分布式信号量,Redis key 为 "<SemaphoreKeyPrefix><key>"。
-// slotTTL 为单个槽的存活时长:持有者需周期性 Renew,进程崩溃后槽在 slotTTL 后自动释放。
-func NewSemaphore(client redis.UniversalClient, key string, max int, slotTTL time.Duration) *Semaphore {
+// slotTTL 为单个槽的存活时长:进程崩溃后槽在 slotTTL 后自动释放。
+// 槽位续期可显式 Renew,或开 distlock.WithSemaphoreAutoRenew 交 watchdog
+// 自动续期(opts 透传,含 RenewInterval/MaxAutoRenew/OnLockLost 家族)。
+func NewSemaphore(client redis.UniversalClient, key string, max int, slotTTL time.Duration, opts ...distlock.SemaphoreOption) *Semaphore {
 	fullKey := SemaphoreKeyPrefix + key
 	return &Semaphore{
-		Semaphore: distlock.NewSemaphore(client, fullKey, max, slotTTL),
+		Semaphore: distlock.NewSemaphore(client, fullKey, max, slotTTL, opts...),
 		key:       fullKey,
 	}
 }

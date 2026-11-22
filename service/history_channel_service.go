@@ -155,12 +155,9 @@ func (h *HistoryService) lockChannel(ctx context.Context, chID uint) (func(), er
 			// 反过来的话,两者之间另一个 goroutine 拿到本地闸门,
 			// 却又因为 redis 锁还在而被误报成「正在其它实例执行」。
 			if h.locker != nil && ownerID != "" {
-				// 用**不受请求取消影响**的 ctx:请求 ctx 可能已取消,
-				// 那时解锁会直接失败 → redis 锁残留到 TTL(最长 30 分钟),
-				// 期间该通道对其它实例一律报忙。
-				uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-				defer cancel()
-				if uerr := h.locker.Unlock(uctx, key, ownerID); uerr != nil {
+				// distlock ≥ redisx v0.16.7:解锁内部自解耦取消 ctx(WithoutCancel+3s 有界),
+				// 请求已取消也能把 DEL 发出去,锁不再残留到 TTL——直接透传 ctx。
+				if uerr := h.locker.Unlock(ctx, key, ownerID); uerr != nil {
 					logx.Debug("history: 释放跨实例锁", "channel", chID, "error", uerr)
 				}
 			}

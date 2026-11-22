@@ -101,6 +101,33 @@ func TestSemaphore_RenewKeepsSlot_miniredis(t *testing.T) {
 	require.True(t, ok, "b should acquire after a's slot expired")
 }
 
+// TestSemaphore_AutoRenewKeepsSlot_miniredis 钉住 NewSemaphore 的
+// SemaphoreOption 透传:开 WithSemaphoreAutoRenew 后,持有者不手动 Renew
+// 槽位也能活过原始 TTL(上游 watchdog 续期);Release 后 b 可拿。
+func TestSemaphore_AutoRenewKeepsSlot_miniredis(t *testing.T) {
+	client := newMiniredis(t)
+	defer func() { _ = client.Close() }()
+	ctx := context.Background()
+	sem := NewSemaphore(client, "sem-autorenew", 1, 300*time.Millisecond,
+		distlock.WithSemaphoreAutoRenew(),
+		distlock.WithSemaphoreRenewInterval(50*time.Millisecond),
+	)
+
+	ok, _ := sem.Acquire(ctx, "a")
+	require.True(t, ok, "a should acquire")
+
+	// 手动不 Renew,纯靠 watchdog:睡过原始 TTL 后 a 的槽仍应存活
+	time.Sleep(700 * time.Millisecond)
+	ok, _ = sem.Acquire(ctx, "b")
+	require.False(t, ok, "b should fail: auto-renew keeps a's slot alive")
+
+	require.NoError(t, sem.Release(ctx, "a"), "release a")
+	ok, _ = sem.Acquire(ctx, "b")
+	require.True(t, ok, "b should acquire after a released")
+	// 收尾释放,停掉 b 的 watchdog,不给后续用例刷 "client is closed" 告警。
+	require.NoError(t, sem.Release(ctx, "b"), "release b")
+}
+
 // TestSemaphore_KeyLayout_miniredis 钉住信号量的 Redis key 布局:
 // 必须落在 "git-sync:semaphore:<key>" 下,与迁移前自写实现一致,
 // 否则滚动升级期间新老实例各看各的信号量,全局并发上限翻倍。

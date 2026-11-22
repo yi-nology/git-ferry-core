@@ -265,8 +265,11 @@ func (d *RepoRepository) ListWithFilter(ctx context.Context, page Pagination, fi
 		order = "ASC"
 	}
 
-	// Apply pagination and sorting
-	if err := query.Offset(page.Offset).Limit(page.Limit).Order(sortBy + " " + order).Find(&repos).Error; err != nil {
+	// Apply pagination and sorting.
+	// 主排序列(name/status/updated_at 等)非唯一,跨页可能重复/丢行——
+	// 追加主键 tiebreaker 凑满全序(对齐 gormx#269 对 gormrepo.List 的修法)。
+	if err := query.Offset(page.Offset).Limit(page.Limit).
+		Order(sortBy + " " + order).Order("id " + order).Find(&repos).Error; err != nil {
 		return nil, 0, err
 	}
 

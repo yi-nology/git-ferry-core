@@ -6,7 +6,6 @@ import (
 
 	"github.com/oekit/logx"
 
-	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/syncx"
 	"github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/stringx"
@@ -132,7 +131,14 @@ func newRedisGuard(addr, password string, db, maxConcurrent int, poolOpts lock.R
 		distlock.WithRenewInterval(renewInterval),
 		distlock.WithMaxAutoRenew(-1),
 	)
-	sem := lock.NewSemaphore(client.Client(), semSlotKey, maxConcurrent, semSlotTTL)
+	// 信号量槽同任务锁口径:WithSemaphoreAutoRenew 由上游 watchdog 续期
+	// (瞬时错误重试、槽丢即退,并经 logx 告警),MaxAutoRenew(-1) 不设上限
+	// ——长任务的槽不得在任务中途因安全网到期被放弃;生命周期由 release 终止。
+	sem := lock.NewSemaphore(client.Client(), semSlotKey, maxConcurrent, semSlotTTL,
+		distlock.WithSemaphoreAutoRenew(),
+		distlock.WithSemaphoreRenewInterval(renewInterval),
+		distlock.WithSemaphoreMaxAutoRenew(-1),
+	)
 	return &redisGuard{client: client, locker: locker, sem: sem}, nil
 }
 
@@ -158,37 +164,15 @@ func (g *redisGuard) Acquire(ctx context.Context, taskKey string) (releaseFunc, 
 		return nil, err
 	}
 
-	// 3) watchdog 续期信号量槽,避免长任务期间槽过期被回收(任务锁由 distlock 自动续期)
-	//    续期循环用 oekit concurrency/loop:自带 panic 隔离与 ctx 取消,
-	//    生命周期由 cancelWatch 收敛(不再自维护 ticker + stop channel)。
-	watchCtx, cancelWatch := context.WithCancel(context.Background()) //nolint:gosec // watchdog 独立于请求上下文运行,直到 release 取消
-	failures := 0
-	loop.Run(watchCtx, loop.Config{Interval: renewInterval, FirstDelay: renewInterval, Name: "semaphore-watchdog"}, func(ctx context.Context) {
-		renewed, err := g.sem.Renew(ctx, semID)
-		switch {
-		case err != nil:
-			failures++
-			if failures%3 == 1 { // 每 3 次失败记一条日志,避免刷屏
-				logx.Warn("watchdog: failed to renew semaphore slot", "semID", semID, "error", err, "consecutive_failures", failures)
-			}
-		case !renewed:
-			// 槽已丢失(过期回收或已被释放):配额可能已被其他 Acquire 接管,
-			// 此时续期无意义——上游只允许续期未过期的槽,复活即超限。
-			logx.Warn("watchdog: semaphore slot lost", "semID", semID)
-		default:
-			failures = 0
-		}
-	})
-
+	// 3) 槽位续期由 Acquire 启动的上游 watchdog 承担(见 newRedisGuard 的
+	//    WithSemaphoreAutoRenew);Release 会先停 watchdog,对称收口。
 	return func() {
-		cancelWatch()
-		// 用带超时的独立 context 释放,避免 Redis 不可响应时 goroutine 永久挂死
-		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer releaseCancel()
-		if err := g.locker.Unlock(releaseCtx, lockKey, ownerID); err != nil {
+		// distlock ≥ redisx v0.16.7:Unlock/Release 内部自解耦取消 ctx 并带
+		// 3s 硬上界,不会因 ctx 取消漏发 DEL,也不会因 Redis 无响应永久挂死。
+		if err := g.locker.Unlock(context.Background(), lockKey, ownerID); err != nil {
 			logx.Warn("release: failed to unlock", "lockKey", lockKey, "error", err)
 		}
-		if err := g.sem.Release(releaseCtx, semID); err != nil {
+		if err := g.sem.Release(context.Background(), semID); err != nil {
 			logx.Warn("release: failed to release semaphore slot", "semID", semID, "error", err)
 		}
 	}, nil
@@ -213,9 +197,8 @@ func (g *redisGuard) TryCronLock(ctx context.Context, taskKey string, ttl time.D
 		return func() {}, false, err
 	}
 	release := func() {
-		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := g.locker.Unlock(releaseCtx, key, ownerID); err != nil {
+		// distlock ≥ redisx v0.16.7:Unlock 内部自解耦取消 ctx 并带 3s 硬上界。
+		if err := g.locker.Unlock(context.Background(), key, ownerID); err != nil {
 			logx.Warn("cron lock release failed", "key", key, "error", err)
 		}
 	}

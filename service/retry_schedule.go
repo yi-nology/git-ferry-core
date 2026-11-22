@@ -8,6 +8,7 @@ import (
 
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
+	"github.com/oekit/pkg/contextx"
 	oekiterrors "github.com/oekit/pkg/errors"
 	"github.com/yi-nology/git-ferry-core/model"
 	"github.com/yi-nology/git-ferry-core/repository"
@@ -81,10 +82,7 @@ func (s *Service) scheduleDeferredRetry(run *model.SyncRun, d Decision) error {
 // 预检失败(任务不存在/禁用/忙)按原语义取消或退避;真正的执行失败说明
 // 重试已发生(run 已落库),关闭排程,后续预算由 runwatch 按 run 链继续。
 func (s *Service) dispatchRetrySynchronously(sch model.RetrySchedule) {
-	ctx := s.bgCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := contextx.OrBackground(s.bgCtx)
 	err := s.RunTaskWithTrigger(ctx, sch.TaskKey, model.TriggerAutoRetry, nil)
 	switch {
 	case err == nil:

@@ -6,6 +6,7 @@ import (
 	"github.com/oekit/gormx"
 	"github.com/oekit/gormx/crud"
 	"github.com/oekit/gormx/gormrepo"
+	"github.com/oekit/pkg/contextx"
 	"gorm.io/gorm"
 )
 
@@ -76,37 +77,30 @@ func writableColumns[T any](db *gorm.DB, exclude ...string) []string {
 // errors.Is(err, repository.ErrNotFound) 判断(不再有 (nil, nil) 双形态)。
 var ErrNotFound = crud.ErrNotFound
 
-func normalizeCtx(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return ctx
-}
-
 func (b *base[T, ID]) create(ctx context.Context, e *T) error {
-	return b.g.Create(normalizeCtx(ctx), e)
+	return b.g.Create(contextx.OrBackground(ctx), e)
 }
 
 func (b *base[T, ID]) batchCreate(ctx context.Context, entities []*T, batchSize int) error {
-	return b.g.BatchCreate(normalizeCtx(ctx), entities, batchSize)
+	return b.g.BatchCreate(contextx.OrBackground(ctx), entities, batchSize)
 }
 
 func (b *base[T, ID]) getByID(ctx context.Context, id ID) (*T, error) {
-	return b.g.GetByID(normalizeCtx(ctx), id)
+	return b.g.GetByID(contextx.OrBackground(ctx), id)
 }
 
 func (b *base[T, ID]) getByCondition(ctx context.Context, query any, args ...any) (*T, error) {
-	return b.g.GetByCondition(normalizeCtx(ctx), query, args...)
+	return b.g.GetByCondition(contextx.OrBackground(ctx), query, args...)
 }
 
 func (b *base[T, ID]) update(ctx context.Context, e *T) error {
-	_, err := b.g.Update(normalizeCtx(ctx), e, crud.UpdateOption{Columns: b.updateCols})
+	_, err := b.g.Update(contextx.OrBackground(ctx), e, crud.UpdateOption{Columns: b.updateCols})
 	return err
 }
 
 // updateInTx 同 update,但在调用方事务内执行(同一列白名单口径)。
 func (b *base[T, ID]) updateInTx(ctx context.Context, tx *gorm.DB, e *T) error {
-	ctx = normalizeCtx(ctx)
+	ctx = contextx.OrBackground(ctx)
 	_, err := gormrepo.NewGormRepository[T, ID](tx.WithContext(ctx)).
 		Update(ctx, e, crud.UpdateOption{Columns: b.updateCols})
 	return err
@@ -114,10 +108,10 @@ func (b *base[T, ID]) updateInTx(ctx context.Context, tx *gorm.DB, e *T) error {
 
 // updateFields 按字段更新(天然列白名单),返回受影响行数。
 func (b *base[T, ID]) updateFields(ctx context.Context, id ID, fields map[string]any) (int64, error) {
-	return b.g.UpdateFields(normalizeCtx(ctx), id, fields)
+	return b.g.UpdateFields(contextx.OrBackground(ctx), id, fields)
 }
 
 func (b *base[T, ID]) deleteByID(ctx context.Context, id ID) error {
-	_, err := b.g.Delete(normalizeCtx(ctx), id)
+	_, err := b.g.Delete(contextx.OrBackground(ctx), id)
 	return err
 }

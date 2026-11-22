@@ -6,19 +6,19 @@ require (
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.3
-	github.com/oekit/concurrency v0.39.1
-	github.com/oekit/core v0.17.0
-	github.com/oekit/gormx v0.13.1
-	github.com/oekit/logx v0.12.0
-	github.com/oekit/metrics v0.4.2
+	github.com/oekit/concurrency v0.40.0
+	github.com/oekit/core v0.18.0
+	github.com/oekit/gormx v0.14.1
+	github.com/oekit/logx v0.12.1
+	github.com/oekit/metrics v0.4.3
 	github.com/oekit/pkg v0.61.5
-	github.com/oekit/redisx v0.16.4
+	github.com/oekit/redisx v0.16.7
 	github.com/oekit/tracing v0.4.8
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/sergi/go-diff v1.4.5
 	github.com/stretchr/testify v1.12.1
-	github.com/yi-nology/go-git-platform v1.0.3
+	github.com/yi-nology/go-git-platform v1.2.0
 	golang.org/x/tools v0.53.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/sqlite v1.6.0
@@ -29,7 +29,7 @@ require (
 	codeberg.org/mvdkleijn/forgejo-sdk/forgejo/v3 v3.0.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	gitea.dev/sdk v1.5.1 // indirect
+	gitea.dev/sdk v1.5.2 // indirect
 	github.com/42wim/httpsig v1.3.0 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
 	github.com/ProtonMail/go-crypto v1.5.2 // indirect
@@ -93,8 +93,8 @@ require (
 	github.com/yi-nology/go-gitcode v0.18.0 // indirect
 	github.com/yi-nology/go-gongfeng v0.6.0 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
-	gitlab.com/gitlab-org/api/client-go/v3 v3.48.0 // indirect
-	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	gitlab.com/gitlab-org/api/client-go/v3 v3.55.0 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.2 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
@@ -112,7 +112,7 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	modernc.org/libc v1.81.2 // indirect
+	modernc.org/libc v1.82.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.13.0 // indirect
 	modernc.org/sqlite v1.62.0 // indirect
