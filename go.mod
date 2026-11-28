@@ -8,7 +8,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/oekit/concurrency v0.40.0
 	github.com/oekit/core v0.18.0
-	github.com/oekit/gormx v0.14.1
+	github.com/oekit/gormx v0.15.3
 	github.com/oekit/logx v0.12.1
 	github.com/oekit/metrics v0.4.3
 	github.com/oekit/pkg v0.61.5
