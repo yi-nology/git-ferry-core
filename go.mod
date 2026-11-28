@@ -15,7 +15,7 @@ require (
 	github.com/oekit/redisx v0.16.7
 	github.com/oekit/tracing v0.4.8
 	github.com/prometheus/client_golang v1.25.0
-	github.com/redis/go-redis/v9 v9.23.0
+	github.com/redis/go-redis/v9 v9.24.0
 	github.com/sergi/go-diff v1.4.5
 	github.com/stretchr/testify v1.12.1
 	github.com/yi-nology/go-git-platform v1.2.0
