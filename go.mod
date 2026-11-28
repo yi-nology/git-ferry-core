@@ -13,7 +13,7 @@ require (
 	github.com/oekit/metrics v0.4.3
 	github.com/oekit/pkg v0.61.5
 	github.com/oekit/redisx v0.16.7
-	github.com/oekit/tracing v0.4.8
+	github.com/oekit/tracing v0.4.9
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/sergi/go-diff v1.4.5
