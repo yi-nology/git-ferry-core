@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [v0.64.0] - 2026-11-28
+
+### Changed（第三轮升级红利收编）
+
+- **semaphore watchdog 收编 distlock 单源**：并发闸的槽位续期改由上游
+  `distlock.WithSemaphoreAutoRenew` 承担（瞬时错误重试、槽丢即退并告警），
+  删掉仓内自写的续期循环；`MaxAutoRenew(-1)` 不设上限——长任务的槽不得
+  在任务中途因安全网到期被放弃，生命周期由 release 对称收口。
+- **锁/槽收尾的 ctx 解耦解锁**：依赖 redisx ≥ v0.16.7 的 Unlock/Release
+  内部自解耦取消 ctx（WithoutCancel + 3s 有界），调用方直接透传请求 ctx
+  即可，删掉仓内 `normalizeCtx` 等 WithoutCancel/超时外包 workaround。
+- **后台域裸 goroutine 收编 `async.OrBackground`**：与 oekit/concurrency
+  的 panic 收编口径对齐，自写 recover 模板删除。
+- **分页查询 tiebreaker**：仓库分页加稳定次序键，深翻页不再受并发写入
+  扰动（同 offset 重复/漏行）。
+
 ## [v0.63.0] - 2026-11-19
 
 ### Changed（查询窗口与批量化）
